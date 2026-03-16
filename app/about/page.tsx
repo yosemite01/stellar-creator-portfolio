@@ -1,10 +1,13 @@
-import Link from 'next/link';
+'use client';
+
+import { useRouter } from 'next/navigation';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { Button } from '@/components/ui/button';
 import { ArrowRight, Heart, Globe, Zap } from 'lucide-react';
 
 export default function AboutPage() {
+  const router = useRouter();
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Header />
@@ -164,12 +167,10 @@ export default function AboutPage() {
             <p className="text-lg text-muted-foreground mb-8">
               Explore our community of world-class creators and find your next collaborator or opportunity.
             </p>
-            <Link href="/creators">
-              <Button size="lg" className="group">
-                Explore Creators
-                <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
-              </Button>
-            </Link>
+            <Button size="lg" className="group" onClick={() => router.push('/creators')}>
+              Explore Creators
+              <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
+            </Button>
           </div>
         </section>
 

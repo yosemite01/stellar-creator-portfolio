@@ -1,0 +1,20 @@
+[package]
+name = "stellar-escrow-contract"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk.workspace = true
+thiserror.workspace = true
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
+codegen-units = 1

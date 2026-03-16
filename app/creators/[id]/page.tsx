@@ -1,7 +1,7 @@
 'use client';
 
 import { notFound } from 'next/navigation';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { ProjectCard } from '@/components/project-card';
@@ -16,6 +16,7 @@ interface CreatorProfilePageProps {
 }
 
 export default function CreatorProfilePage({ params }: CreatorProfilePageProps) {
+  const router = useRouter();
   const creator = creators.find((c) => c.id === params.id);
 
   if (!creator) {
@@ -40,11 +41,14 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
 
           {/* Back Button */}
           <div className="absolute top-6 left-4 sm:left-6 lg:left-8">
-            <Link href="/creators">
-              <Button variant="ghost" size="icon" className="bg-background/80 backdrop-blur-sm hover:bg-background/90">
-                <ArrowLeft size={20} />
-              </Button>
-            </Link>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="bg-background/80 backdrop-blur-sm hover:bg-background/90"
+              onClick={() => router.back()}
+            >
+              <ArrowLeft size={20} />
+            </Button>
           </div>
         </section>
 
@@ -217,11 +221,13 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
                   Connect on LinkedIn
                 </a>
               )}
-              <Link href="/creators">
-                <Button variant="outline" size="lg">
-                  Back to Directory
-                </Button>
-              </Link>
+              <Button 
+                variant="outline" 
+                size="lg"
+                onClick={() => router.push('/creators')}
+              >
+                Back to Directory
+              </Button>
             </div>
           </div>
         </section>

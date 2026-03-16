@@ -9,6 +9,17 @@ export interface Project {
   year: number;
 }
 
+export interface Service {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  basePrice: number;
+  deliveryTime: number; // in days
+  rating: number;
+  reviewCount: number;
+}
+
 export interface Creator {
   id: string;
   name: string;
@@ -28,6 +39,12 @@ export interface Creator {
     clients: number;
     experience: number;
   };
+  services?: Service[];
+  hourlyRate?: number;
+  responseTime?: string; // e.g., "2 hours"
+  availability?: 'available' | 'limited' | 'unavailable';
+  rating?: number;
+  reviewCount?: number;
 }
 
 export const creators: Creator[] = [
@@ -227,7 +244,22 @@ export const creators: Creator[] = [
   },
 ];
 
-export const disciplines = ['All', 'UI/UX Design', 'Writing', 'Content Creation'];
+export const disciplines = [
+  'All',
+  'UI/UX Design',
+  'Writing',
+  'Content Creation',
+  'Product Management',
+  'Marketing',
+  'Community Management',
+  'Project Management',
+  'Business Development',
+  'Brand Strategy',
+  'Sales',
+  'Customer Success',
+  'HR & Recruiting',
+  'Legal & Compliance',
+];
 
 export const getDisciplineColor = (discipline: string): string => {
   const colors: Record<string, string> = {
@@ -238,7 +270,119 @@ export const getDisciplineColor = (discipline: string): string => {
   return colors[discipline] || 'from-gray-500 to-slate-500';
 };
 
+// Bounty Platform Types
+export interface Bounty {
+  id: string;
+  title: string;
+  description: string;
+  budget: number;
+  currency: string;
+  deadline: Date;
+  difficulty: 'beginner' | 'intermediate' | 'advanced' | 'expert';
+  category: string;
+  tags: string[];
+  applicants: number;
+  status: 'open' | 'in-progress' | 'completed' | 'cancelled';
+  postedBy: string;
+  postedDate: Date;
+  requiredSkills: string[];
+  deliverables: string;
+}
+
+export interface BountyApplication {
+  id: string;
+  bountyId: string;
+  creatorId: string;
+  proposedBudget: number;
+  timeline: number; // in days
+  proposal: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  appliedDate: Date;
+}
+
+// Sample bounties
+export const bounties: Bounty[] = [
+  {
+    id: 'bounty-1',
+    title: 'Brand Identity Design for Web3 Startup',
+    description: 'Create a comprehensive brand identity including logo, color palette, and brand guidelines for an emerging Web3 company.',
+    budget: 3000,
+    currency: 'USD',
+    deadline: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    difficulty: 'advanced',
+    category: 'Brand Strategy',
+    tags: ['Branding', 'Design', 'Web3', 'Logo Design'],
+    applicants: 12,
+    status: 'open',
+    postedBy: 'company-1',
+    postedDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    requiredSkills: ['Brand Design', 'Logo Design', 'Typography', 'Figma'],
+    deliverables: 'Logo files, brand guide PDF, color palette, typography system',
+  },
+  {
+    id: 'bounty-2',
+    title: 'Technical Documentation for API',
+    description: 'Write comprehensive technical documentation for a REST API including examples, authentication, and error handling.',
+    budget: 1500,
+    currency: 'USD',
+    deadline: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
+    difficulty: 'intermediate',
+    category: 'Technical Writing',
+    tags: ['API Docs', 'Technical Writing', 'Documentation'],
+    applicants: 8,
+    status: 'open',
+    postedBy: 'company-2',
+    postedDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+    requiredSkills: ['Technical Writing', 'API Knowledge', 'Markdown'],
+    deliverables: 'Complete API documentation, guides, and examples',
+  },
+  {
+    id: 'bounty-3',
+    title: 'Social Media Campaign Content Creation',
+    description: 'Create a 30-day social media content calendar and produce 60 pieces of content (videos, graphics, copy) for a SaaS company.',
+    budget: 2500,
+    currency: 'USD',
+    deadline: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000),
+    difficulty: 'intermediate',
+    category: 'Content Creation',
+    tags: ['Social Media', 'Content', 'Video', 'Graphics'],
+    applicants: 15,
+    status: 'open',
+    postedBy: 'company-3',
+    postedDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
+    requiredSkills: ['Video Production', 'Graphic Design', 'Copywriting', 'Social Media'],
+    deliverables: 'Content calendar, 60 pieces of content, performance tracking',
+  },
+  {
+    id: 'bounty-4',
+    title: 'UX Research & Usability Testing',
+    description: 'Conduct user research and usability testing for a mobile app. Include user interviews, testing sessions, and comprehensive report.',
+    budget: 4000,
+    currency: 'USD',
+    deadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    difficulty: 'expert',
+    category: 'UX Research',
+    tags: ['UX Research', 'User Testing', 'Mobile App', 'Analytics'],
+    applicants: 6,
+    status: 'open',
+    postedBy: 'company-4',
+    postedDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+    requiredSkills: ['UX Research', 'User Testing', 'Analysis', 'Reporting'],
+    deliverables: 'Research report, testing videos, recommendations, analysis',
+  },
+];
+
 export const getCreatorsByDiscipline = (discipline: string): Creator[] => {
   if (discipline === 'All') return creators;
   return creators.filter(creator => creator.discipline === discipline);
+};
+
+export const getBountiesByCategory = (category: string): Bounty[] => {
+  if (category === 'All') return bounties;
+  return bounties.filter(bounty => bounty.category === category);
+};
+
+export const getBountiesByDifficulty = (difficulty: string): Bounty[] => {
+  if (difficulty === 'All') return bounties;
+  return bounties.filter(bounty => bounty.difficulty === difficulty);
 };
