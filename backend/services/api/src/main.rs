@@ -1,29 +1,43 @@
 use actix_web::{middleware, web, App, HttpResponse, HttpServer};
 use serde::{Deserialize, Serialize};
 use tracing_subscriber;
+use validator::Validate;
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, Validate)]
 pub struct BountyRequest {
+    #[validate(length(min = 1, max = 200, message = "Title must be between 1 and 200 characters"))]
     pub creator: String,
+    #[validate(length(min = 1, max = 200, message = "Title must be between 1 and 200 characters"))]
     pub title: String,
+    #[validate(length(min = 1, max = 5000, message = "Description must be between 1 and 5000 characters"))]
     pub description: String,
+    #[validate(range(min = 1, message = "Budget must be positive"))]
     pub budget: i128,
+    #[validate(range(min = 1, message = "Deadline must be a future timestamp"))]
     pub deadline: u64,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, Validate)]
 pub struct BountyApplication {
+    #[validate(range(min = 1, message = "Bounty ID must be positive"))]
     pub bounty_id: u64,
+    #[validate(length(min = 1, message = "Freelancer address is required"))]
     pub freelancer: String,
+    #[validate(length(min = 1, max = 2000, message = "Proposal must be between 1 and 2000 characters"))]
     pub proposal: String,
+    #[validate(range(min = 1, message = "Proposed budget must be positive"))]
     pub proposed_budget: i128,
+    #[validate(range(min = 1, message = "Timeline must be at least 1 hour"))]
     pub timeline: u64,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, Validate)]
 pub struct FreelancerRegistration {
+    #[validate(length(min = 1, max = 100, message = "Name must be between 1 and 100 characters"))]
     pub name: String,
+    #[validate(length(min = 1, max = 100, message = "Discipline must be between 1 and 100 characters"))]
     pub discipline: String,
+    #[validate(length(max = 2000, message = "Bio must be at most 2000 characters"))]
     pub bio: String,
 }
 
@@ -67,7 +81,32 @@ async fn health() -> HttpResponse {
     }))
 }
 
+fn validate_request<T: Validate>(req: &T) -> Option<String> {
+    if let Err(errors) = req.validate() {
+        let error_messages: Vec<String> = errors
+            .field_errors()
+            .iter()
+            .flat_map(|(field, errors)| {
+                errors.iter().map(move |e| {
+                    e.message
+                        .clone()
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| format!("Invalid value for {}", field))
+                })
+            })
+            .collect();
+        Some(error_messages.join("; "))
+    } else {
+        None
+    }
+}
+
 async fn create_bounty(body: web::Json<BountyRequest>) -> HttpResponse {
+    if let Some(err_msg) = validate_request(&body) {
+        tracing::warn!("Invalid bounty request: {}", err_msg);
+        return HttpResponse::BadRequest().json(ApiResponse::<()>::err(err_msg));
+    }
+
     tracing::info!("Creating bounty: {:?}", body.title);
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
@@ -103,6 +142,11 @@ async fn apply_for_bounty(
     path: web::Path<u64>,
     body: web::Json<BountyApplication>,
 ) -> HttpResponse {
+    if let Some(err_msg) = validate_request(&body) {
+        tracing::warn!("Invalid application request: {}", err_msg);
+        return HttpResponse::BadRequest().json(ApiResponse::<()>::err(err_msg));
+    }
+
     let bounty_id = path.into_inner();
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
@@ -117,6 +161,11 @@ async fn apply_for_bounty(
 }
 
 async fn register_freelancer(body: web::Json<FreelancerRegistration>) -> HttpResponse {
+    if let Some(err_msg) = validate_request(&body) {
+        tracing::warn!("Invalid freelancer registration: {}", err_msg);
+        return HttpResponse::BadRequest().json(ApiResponse::<()>::err(err_msg));
+    }
+
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "name": body.name,
@@ -145,6 +194,11 @@ async fn list_freelancers(
 
 async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
     let address = path.into_inner();
+    if address.is_empty() {
+        return HttpResponse::BadRequest().json(
+            ApiResponse::<()>::err("Address cannot be empty".to_string()),
+        );
+    }
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "address": address,
@@ -230,5 +284,61 @@ mod tests {
         let response: ApiResponse<String> = ApiResponse::err("error".to_string());
         assert!(!response.success);
         assert_eq!(response.error, Some("error".to_string()));
+    }
+
+    #[test]
+    fn test_bounty_request_validation_empty_title() {
+        let req = BountyRequest {
+            creator: "creator1".to_string(),
+            title: "".to_string(),
+            description: "desc".to_string(),
+            budget: 100,
+            deadline: 9999999999,
+        };
+        assert!(validate_request(&req).is_some());
+    }
+
+    #[test]
+    fn test_bounty_request_validation_negative_budget() {
+        let req = BountyRequest {
+            creator: "creator1".to_string(),
+            title: "Valid Title".to_string(),
+            description: "desc".to_string(),
+            budget: -100,
+            deadline: 9999999999,
+        };
+        assert!(validate_request(&req).is_some());
+    }
+
+    #[test]
+    fn test_bounty_request_validation_valid() {
+        let req = BountyRequest {
+            creator: "creator1".to_string(),
+            title: "Valid Title".to_string(),
+            description: "Valid description".to_string(),
+            budget: 100,
+            deadline: 9999999999,
+        };
+        assert!(validate_request(&req).is_none());
+    }
+
+    #[test]
+    fn test_freelancer_registration_validation_empty_name() {
+        let req = FreelancerRegistration {
+            name: "".to_string(),
+            discipline: "Rust Developer".to_string(),
+            bio: "Bio".to_string(),
+        };
+        assert!(validate_request(&req).is_some());
+    }
+
+    #[test]
+    fn test_freelancer_registration_validation_valid() {
+        let req = FreelancerRegistration {
+            name: "John Doe".to_string(),
+            discipline: "Rust Developer".to_string(),
+            bio: "Expert Rust developer".to_string(),
+        };
+        assert!(validate_request(&req).is_none());
     }
 }
