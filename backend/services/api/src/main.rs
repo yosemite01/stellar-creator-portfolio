@@ -1,6 +1,17 @@
-use actix_web::{middleware, web, App, HttpResponse, HttpServer};
+use actix_web::{middleware, web, App, HttpResponse, HttpServer, HttpRequest, HttpMessage};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing_subscriber;
+
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_request_id() -> u64 {
+    REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+fn get_request_id(_req: &HttpRequest) -> u64 {
+    next_request_id()
+}
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct BountyRequest {
@@ -67,8 +78,19 @@ async fn health() -> HttpResponse {
     }))
 }
 
-async fn create_bounty(body: web::Json<BountyRequest>) -> HttpResponse {
-    tracing::info!("Creating bounty: {:?}", body.title);
+async fn create_bounty(
+    req: HttpRequest,
+    body: web::Json<BountyRequest>,
+) -> HttpResponse {
+    let request_id = get_request_id(&req);
+    tracing::info!(
+        request_id = %request_id,
+        user_action = "create_bounty",
+        creator = %body.creator,
+        budget = %body.budget,
+        "Creating bounty"
+    );
+    
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "bounty_id": 1,
@@ -83,6 +105,7 @@ async fn create_bounty(body: web::Json<BountyRequest>) -> HttpResponse {
 }
 
 async fn list_bounties() -> HttpResponse {
+    tracing::info!(user_action = "list_bounties", "Listing bounties");
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({ "bounties": [], "total": 0, "page": 1, "limit": 10 }),
         None,
@@ -90,8 +113,20 @@ async fn list_bounties() -> HttpResponse {
     HttpResponse::Ok().json(response)
 }
 
-async fn get_bounty(path: web::Path<u64>) -> HttpResponse {
+async fn get_bounty(
+    req: HttpRequest,
+    path: web::Path<u64>,
+) -> HttpResponse {
     let bounty_id = path.into_inner();
+    let request_id = get_request_id(&req);
+    tracing::info!(
+        request_id = %request_id,
+        user_action = "get_bounty",
+        entity_type = "bounty",
+        entity_id = %bounty_id,
+        "Fetching bounty"
+    );
+    
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({ "id": bounty_id, "title": "Sample Bounty", "status": "open" }),
         None,
@@ -100,10 +135,22 @@ async fn get_bounty(path: web::Path<u64>) -> HttpResponse {
 }
 
 async fn apply_for_bounty(
+    req: HttpRequest,
     path: web::Path<u64>,
     body: web::Json<BountyApplication>,
 ) -> HttpResponse {
     let bounty_id = path.into_inner();
+    let request_id = get_request_id(&req);
+    tracing::info!(
+        request_id = %request_id,
+        user_action = "apply_for_bounty",
+        entity_type = "application",
+        bounty_id = %bounty_id,
+        freelancer = %body.freelancer,
+        proposed_budget = %body.proposed_budget,
+        "Submitting bounty application"
+    );
+    
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "application_id": 1,
@@ -116,7 +163,20 @@ async fn apply_for_bounty(
     HttpResponse::Created().json(response)
 }
 
-async fn register_freelancer(body: web::Json<FreelancerRegistration>) -> HttpResponse {
+async fn register_freelancer(
+    req: HttpRequest,
+    body: web::Json<FreelancerRegistration>,
+) -> HttpResponse {
+    let request_id = get_request_id(&req);
+    tracing::info!(
+        request_id = %request_id,
+        user_action = "register_freelancer",
+        entity_type = "freelancer",
+        name = %body.name,
+        discipline = %body.discipline,
+        "Registering freelancer"
+    );
+    
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "name": body.name,
@@ -132,6 +192,12 @@ async fn list_freelancers(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
     let discipline = query.get("discipline").cloned().unwrap_or_default();
+    tracing::info!(
+        user_action = "list_freelancers",
+        discipline = %discipline,
+        "Listing freelancers"
+    );
+    
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "freelancers": [],
@@ -143,8 +209,20 @@ async fn list_freelancers(
     HttpResponse::Ok().json(response)
 }
 
-async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
+async fn get_freelancer(
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
     let address = path.into_inner();
+    let request_id = get_request_id(&req);
+    tracing::info!(
+        request_id = %request_id,
+        user_action = "get_freelancer",
+        entity_type = "freelancer",
+        entity_id = %address,
+        "Fetching freelancer profile"
+    );
+    
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "address": address,
@@ -157,8 +235,20 @@ async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
     HttpResponse::Ok().json(response)
 }
 
-async fn get_escrow(path: web::Path<u64>) -> HttpResponse {
+async fn get_escrow(
+    req: HttpRequest,
+    path: web::Path<u64>,
+) -> HttpResponse {
     let escrow_id = path.into_inner();
+    let request_id = get_request_id(&req);
+    tracing::info!(
+        request_id = %request_id,
+        user_action = "get_escrow",
+        entity_type = "escrow",
+        entity_id = %escrow_id,
+        "Fetching escrow"
+    );
+    
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({ "id": escrow_id, "status": "active", "amount": 0 }),
         None,
@@ -166,8 +256,20 @@ async fn get_escrow(path: web::Path<u64>) -> HttpResponse {
     HttpResponse::Ok().json(response)
 }
 
-async fn release_escrow(path: web::Path<u64>) -> HttpResponse {
+async fn release_escrow(
+    req: HttpRequest,
+    path: web::Path<u64>,
+) -> HttpResponse {
     let escrow_id = path.into_inner();
+    let request_id = get_request_id(&req);
+    tracing::info!(
+        request_id = %request_id,
+        user_action = "release_escrow",
+        entity_type = "escrow",
+        entity_id = %escrow_id,
+        "Releasing escrow funds"
+    );
+    
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({ "id": escrow_id, "status": "released" }),
         Some("Funds released successfully".to_string()),
@@ -192,7 +294,13 @@ async fn main() -> std::io::Result<()> {
 
     let host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
-    tracing::info!("Starting Stellar API on {}:{}", host, port);
+    tracing::info!(
+        service = "stellar-api",
+        version = "0.1.0",
+        host = %host,
+        port = %port,
+        "Starting Stellar API"
+    );
 
     HttpServer::new(|| {
         App::new()

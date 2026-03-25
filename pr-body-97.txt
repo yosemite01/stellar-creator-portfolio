@@ -1,0 +1,45 @@
+## Stellar Wave Bounty - Issue #97: API Service - No Input Validation
+
+**Severity:** High
+**Component:** `services/api/src/main.rs`
+
+### Problem
+
+Request bodies were not validated. Fields like `budget`, `deadline`, `title` could be empty, negative, or malformed, potentially causing contract failures or data corruption.
+
+### Solution
+
+Added comprehensive input validation using the `validator` crate:
+
+- **BountyRequest**: title (1-200 chars), budget (must be positive), deadline (future timestamp)
+- **BountyApplication**: all fields required, budget positive, proposal length (1-2000 chars)
+- **FreelancerRegistration**: name/discipline required, bio max 2000 chars
+
+### Changes
+
+- Added `validator = { version = "0.18", features = ["derive"] }` dependency
+- Added `#[derive(Validate)]` to request structs with validation attributes
+- Added `validate_request<T>() helper returning error message or None
+- Applied validation in `create_bounty`, `apply_for_bounty`, `register_freelancer` handlers
+- Return `400 Bad Request` with descriptive error messages for invalid input
+- Added 5 comprehensive unit tests for validation logic
+
+### Testing
+
+```rust
+// Empty title is rejected
+let req = BountyRequest { title: "".to_string(), ... };
+assert!(validate_request(&req).is_some());
+
+// Negative budget is rejected
+let req = BountyRequest { budget: -100, ... };
+assert!(validate_request(&req).is_some());
+
+// Valid request passes
+let req = BountyRequest { title: "Valid".to_string(), budget: 100, ... };
+assert!(validate_request(&req).is_none());
+```
+
+---
+**Bounty:** 200 Points via Drips Wave
+**Bounty URL:** https://drips.network/stellar/issue/97
