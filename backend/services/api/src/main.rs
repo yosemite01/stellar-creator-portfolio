@@ -143,21 +143,69 @@ pub struct AppState {
 // ============================================================
 
 async fn health(state: web::Data<AppState>) -> HttpResponse {
-    // Verify DB connectivity
-    match sqlx::query("SELECT 1").execute(&state.db).await {
-        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
-            "status": "healthy",
-            "service": "stellar-api",
-            "version": "0.1.0",
-            "database": "connected"
-        })),
-        Err(e) => HttpResponse::ServiceUnavailable().json(serde_json::json!({
-            "status": "unhealthy",
-            "service": "stellar-api",
-            "database": "disconnected",
-            "error": e.to_string()
-        })),
-    }
+    use std::time::Instant;
+    
+    let start = Instant::now();
+    
+    // Verify DB connectivity and measure latency
+    let db_result = sqlx::query("SELECT 1, NOW(), pg_database_size(current_database())")
+        .execute(&state.db)
+        .await;
+    
+    let response = match db_result {
+        Ok(row) => {
+            let db_latency_ms = start.elapsed().as_millis() as u64;
+            let db_size_bytes: i64 = row.get(2);
+            
+            let health_data = serde_json::json!({
+                "status": "healthy",
+                "service": "stellar-api",
+                "version": env!("CARGO_PKG_VERSION"),
+                "uptime_seconds": std::time::Duration::from_secs(
+                    std::env::var("SERVER_START_TIME")
+                        .ok()
+                        .and_then(|t| t.parse::<i64>().ok())
+                        .unwrap_or_else(|| chrono::Utc::now().timestamp())
+                ),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "database": {
+                    "status": "connected",
+                    "latency_ms": db_latency_ms,
+                    "size_bytes": db_size_bytes,
+                    "pool": {
+                        "connections": state.db.size(),
+                        "idle_connections": state.db.num_idle(),
+                    }
+                },
+                "checks": {
+                    "database": "pass",
+                    "api": "pass"
+                }
+            });
+            
+            HttpResponse::Ok().json(health_data)
+        }
+        Err(e) => {
+            let health_data = serde_json::json!({
+                "status": "unhealthy",
+                "service": "stellar-api",
+                "version": env!("CARGO_PKG_VERSION"),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "database": {
+                    "status": "disconnected",
+                    "error": e.to_string()
+                },
+                "checks": {
+                    "database": "fail",
+                    "api": "pass"
+                }
+            });
+            
+            return HttpResponse::ServiceUnavailable().json(health_data);
+        }
+    };
+    
+    response
 }
 
 async fn create_bounty(
