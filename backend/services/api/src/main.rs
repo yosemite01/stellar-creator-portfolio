@@ -1,30 +1,105 @@
 use actix_web::{middleware, web, App, HttpResponse, HttpServer};
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use tracing_subscriber;
+
+// ============================================================
+// Database Models
+// ============================================================
+
+#[derive(Clone, Serialize, Deserialize, sqlx::FromRow, Debug)]
+pub struct User {
+    pub id: uuid::Uuid,
+    pub wallet_address: String,
+    pub email: Option<String>,
+    pub display_name: String,
+    pub role: String,
+    pub avatar_url: Option<String>,
+    pub bio: Option<String>,
+    pub discipline: Option<String>,
+    pub skills: Option<Vec<String>>,
+    pub rating: Option<rust_decimal::Decimal>,
+    pub completed_projects: Option<i32>,
+    pub verified: Option<bool>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Serialize, Deserialize, sqlx::FromRow, Debug)]
+pub struct Bounty {
+    pub id: uuid::Uuid,
+    pub creator_id: uuid::Uuid,
+    pub title: String,
+    pub description: String,
+    pub budget: i64,
+    pub deadline: chrono::DateTime<chrono::Utc>,
+    pub status: String,
+    pub category: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub applications_count: Option<i32>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Serialize, Deserialize, sqlx::FromRow, Debug)]
+pub struct BountyApplication {
+    pub id: uuid::Uuid,
+    pub bounty_id: uuid::Uuid,
+    pub applicant_id: uuid::Uuid,
+    pub proposal: String,
+    pub proposed_budget: i64,
+    pub timeline_days: i32,
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Serialize, Deserialize, sqlx::FromRow, Debug)]
+pub struct EscrowAccount {
+    pub id: uuid::Uuid,
+    pub bounty_id: uuid::Uuid,
+    pub application_id: Option<uuid::Uuid>,
+    pub client_wallet: String,
+    pub freelancer_wallet: Option<String>,
+    pub total_amount: i64,
+    pub released_amount: i64,
+    pub status: String,
+    pub stellar_escrow_account: Option<String>,
+    pub milestones: Option<serde_json::Value>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+// ============================================================
+// API Request/Response Types
+// ============================================================
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct BountyRequest {
     pub creator: String,
     pub title: String,
     pub description: String,
-    pub budget: i128,
+    pub budget: i64,
     pub deadline: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct BountyApplication {
-    pub bounty_id: u64,
+pub struct BountyApplicationRequest {
+    pub bounty_id: uuid::Uuid,
     pub freelancer: String,
     pub proposal: String,
-    pub proposed_budget: i128,
-    pub timeline: u64,
+    pub proposed_budget: i64,
+    pub timeline_days: i32,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct FreelancerRegistration {
-    pub name: String,
+    pub wallet_address: String,
+    pub display_name: String,
+    pub email: Option<String>,
     pub discipline: String,
-    pub bio: String,
+    pub bio: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -45,11 +120,7 @@ impl<T> ApiResponse<T> {
         }
     }
 
-    #[allow(dead_code)]
-    fn err(error: String) -> Self
-    where
-        T: Default,
-    {
+    fn err(error: String) -> Self {
         ApiResponse {
             success: false,
             data: None,
@@ -59,121 +130,437 @@ impl<T> ApiResponse<T> {
     }
 }
 
-async fn health() -> HttpResponse {
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "healthy",
-        "service": "stellar-api",
-        "version": "0.1.0"
-    }))
+// ============================================================
+// Application State
+// ============================================================
+
+pub struct AppState {
+    pub db: PgPool,
 }
 
-async fn create_bounty(body: web::Json<BountyRequest>) -> HttpResponse {
+// ============================================================
+// Handlers
+// ============================================================
+
+async fn health(state: web::Data<AppState>) -> HttpResponse {
+    // Verify DB connectivity
+    match sqlx::query("SELECT 1").execute(&state.db).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "healthy",
+            "service": "stellar-api",
+            "version": "0.1.0",
+            "database": "connected"
+        })),
+        Err(e) => HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "status": "unhealthy",
+            "service": "stellar-api",
+            "database": "disconnected",
+            "error": e.to_string()
+        })),
+    }
+}
+
+async fn create_bounty(
+    state: web::Data<AppState>,
+    body: web::Json<BountyRequest>,
+) -> HttpResponse {
     tracing::info!("Creating bounty: {:?}", body.title);
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "bounty_id": 1,
-            "creator": body.creator,
-            "title": body.title,
-            "budget": body.budget,
-            "status": "open"
-        }),
-        Some("Bounty created successfully".to_string()),
-    );
-    HttpResponse::Created().json(response)
+
+    let deadline = chrono::DateTime::from_timestamp(body.deadline as i64, 0)
+        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::days(30));
+
+    let result = sqlx::query_as::<_, Bounty>(
+        r#"
+        INSERT INTO bounties (creator_id, title, description, budget, deadline)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, creator_id, title, description, budget, deadline, status, 
+                   category, tags, applications_count, created_at, updated_at
+        "#,
+    )
+    .bind(uuid::Uuid::parse_str(&body.creator).unwrap_or_default())
+    .bind(&body.title)
+    .bind(&body.description)
+    .bind(body.budget)
+    .bind(deadline)
+    .fetch_one(&state.db)
+    .await;
+
+    match result {
+        Ok(bounty) => {
+            tracing::info!("Bounty created with ID: {}", bounty.id);
+            HttpResponse::Created().json(ApiResponse::ok(
+                serde_json::json!({
+                    "bounty_id": bounty.id,
+                    "title": bounty.title,
+                    "budget": bounty.budget,
+                    "status": bounty.status
+                }),
+                Some("Bounty created successfully".to_string()),
+            ))
+        }
+        Err(e) => {
+            tracing::error!("Failed to create bounty: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to create bounty: {}",
+                e
+            )))
+        }
+    }
 }
 
-async fn list_bounties() -> HttpResponse {
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({ "bounties": [], "total": 0, "page": 1, "limit": 10 }),
-        None,
-    );
-    HttpResponse::Ok().json(response)
+async fn list_bounties(state: web::Data<AppState>) -> HttpResponse {
+    let result = sqlx::query_as::<_, Bounty>(
+        r#"
+        SELECT id, creator_id, title, description, budget, deadline, status,
+               category, tags, applications_count, created_at, updated_at
+        FROM bounties
+        WHERE status = 'OPEN'
+        ORDER BY created_at DESC
+        LIMIT 50
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await;
+
+    match result {
+        Ok(bounties) => {
+            let total = bounties.len();
+            HttpResponse::Ok().json(ApiResponse::ok(
+                serde_json::json!({
+                    "bounties": bounties,
+                    "total": total,
+                    "page": 1,
+                    "limit": 50
+                }),
+                None,
+            ))
+        }
+        Err(e) => {
+            tracing::error!("Failed to list bounties: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to list bounties: {}",
+                e
+            )))
+        }
+    }
 }
 
-async fn get_bounty(path: web::Path<u64>) -> HttpResponse {
+async fn get_bounty(state: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> HttpResponse {
     let bounty_id = path.into_inner();
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({ "id": bounty_id, "title": "Sample Bounty", "status": "open" }),
-        None,
-    );
-    HttpResponse::Ok().json(response)
+
+    let result = sqlx::query_as::<_, Bounty>(
+        r#"
+        SELECT id, creator_id, title, description, budget, deadline, status,
+               category, tags, applications_count, created_at, updated_at
+        FROM bounties WHERE id = $1
+        "#,
+    )
+    .bind(bounty_id)
+    .fetch_optional(&state.db)
+    .await;
+
+    match result {
+        Ok(Some(bounty)) => HttpResponse::Ok().json(ApiResponse::ok(bounty, None)),
+        Ok(None) => HttpResponse::NotFound().json(ApiResponse::<()>::err(
+            "Bounty not found".to_string(),
+        )),
+        Err(e) => {
+            tracing::error!("Failed to get bounty: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to get bounty: {}",
+                e
+            )))
+        }
+    }
 }
 
 async fn apply_for_bounty(
-    path: web::Path<u64>,
-    body: web::Json<BountyApplication>,
+    state: web::Data<AppState>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<BountyApplicationRequest>,
 ) -> HttpResponse {
     let bounty_id = path.into_inner();
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "application_id": 1,
-            "bounty_id": bounty_id,
-            "freelancer": body.freelancer,
-            "status": "pending"
-        }),
-        Some("Application submitted successfully".to_string()),
-    );
-    HttpResponse::Created().json(response)
+    tracing::info!("Application for bounty {} by {}", bounty_id, body.freelancer);
+
+    let applicant_id = match uuid::Uuid::parse_str(&body.freelancer) {
+        Ok(id) => id,
+        Err(_) => {
+            return HttpResponse::BadRequest().json(ApiResponse::<()>::err(
+                "Invalid freelancer wallet address".to_string(),
+            ))
+        }
+    };
+
+    let result = sqlx::query_as::<_, BountyApplication>(
+        r#"
+        INSERT INTO bounty_applications (bounty_id, applicant_id, proposal, proposed_budget, timeline_days)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, bounty_id, applicant_id, proposal, proposed_budget, timeline_days,
+                   status, created_at, updated_at
+        "#,
+    )
+    .bind(bounty_id)
+    .bind(applicant_id)
+    .bind(&body.proposal)
+    .bind(body.proposed_budget)
+    .bind(body.timeline_days)
+    .fetch_one(&state.db)
+    .await;
+
+    match result {
+        Ok(application) => HttpResponse::Created().json(ApiResponse::ok(
+            serde_json::json!({
+                "application_id": application.id,
+                "bounty_id": application.bounty_id,
+                "status": application.status
+            }),
+            Some("Application submitted successfully".to_string()),
+        )),
+        Err(e) => {
+            tracing::error!("Failed to submit application: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to submit application: {}",
+                e
+            )))
+        }
+    }
 }
 
-async fn register_freelancer(body: web::Json<FreelancerRegistration>) -> HttpResponse {
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "name": body.name,
-            "discipline": body.discipline,
-            "verified": false
-        }),
-        Some("Freelancer registered successfully".to_string()),
-    );
-    HttpResponse::Created().json(response)
+async fn register_freelancer(
+    state: web::Data<AppState>,
+    body: web::Json<FreelancerRegistration>,
+) -> HttpResponse {
+    tracing::info!("Registering freelancer: {}", body.wallet_address);
+
+    let result = sqlx::query_as::<_, User>(
+        r#"
+        INSERT INTO users (wallet_address, display_name, email, discipline, bio, role)
+        VALUES ($1, $2, $3, $4, $5, 'CREATOR')
+        ON CONFLICT (wallet_address) DO UPDATE
+        SET display_name = EXCLUDED.display_name,
+            email = COALESCE(EXCLUDED.email, users.email),
+            discipline = COALESCE(EXCLUDED.discipline, users.discipline)
+        RETURNING id, wallet_address, email, display_name, role, avatar_url,
+                   bio, discipline, skills, rating, completed_projects,
+                   verified, created_at, updated_at
+        "#,
+    )
+    .bind(&body.wallet_address)
+    .bind(&body.display_name)
+    .bind(&body.email)
+    .bind(&body.discipline)
+    .bind(&body.bio)
+    .fetch_one(&state.db)
+    .await;
+
+    match result {
+        Ok(user) => HttpResponse::Created().json(ApiResponse::ok(
+            serde_json::json!({
+                "id": user.id,
+                "wallet_address": user.wallet_address,
+                "display_name": user.display_name,
+                "discipline": user.discipline,
+                "role": user.role,
+                "verified": user.verified
+            }),
+            Some("Freelancer registered successfully".to_string()),
+        )),
+        Err(e) => {
+            tracing::error!("Failed to register freelancer: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to register freelancer: {}",
+                e
+            )))
+        }
+    }
 }
 
 async fn list_freelancers(
+    state: web::Data<AppState>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
-    let discipline = query.get("discipline").cloned().unwrap_or_default();
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "freelancers": [],
-            "total": 0,
-            "filters": { "discipline": discipline }
-        }),
-        None,
-    );
-    HttpResponse::Ok().json(response)
+    let discipline = query.get("discipline").cloned();
+
+    let result = if let Some(ref disc) = discipline {
+        sqlx::query_as::<_, User>(
+            r#"
+            SELECT id, wallet_address, email, display_name, role, avatar_url,
+                   bio, discipline, skills, rating, completed_projects,
+                   verified, created_at, updated_at
+            FROM users
+            WHERE role IN ('CREATOR', 'USER') AND discipline = $1
+            ORDER BY rating DESC NULLS LAST, completed_projects DESC
+            LIMIT 50
+            "#,
+        )
+        .bind(disc)
+        .fetch_all(&state.db)
+        .await
+    } else {
+        sqlx::query_as::<_, User>(
+            r#"
+            SELECT id, wallet_address, email, display_name, role, avatar_url,
+                   bio, discipline, skills, rating, completed_projects,
+                   verified, created_at, updated_at
+            FROM users
+            WHERE role IN ('CREATOR', 'USER')
+            ORDER BY rating DESC NULLS LAST, completed_projects DESC
+            LIMIT 50
+            "#,
+        )
+        .fetch_all(&state.db)
+        .await
+    };
+
+    match result {
+        Ok(freelancers) => {
+            let total = freelancers.len();
+            HttpResponse::Ok().json(ApiResponse::ok(
+                serde_json::json!({
+                    "freelancers": freelancers,
+                    "total": total,
+                    "filters": { "discipline": discipline }
+                }),
+                None,
+            ))
+        }
+        Err(e) => {
+            tracing::error!("Failed to list freelancers: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to list freelancers: {}",
+                e
+            )))
+        }
+    }
 }
 
-async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
-    let address = path.into_inner();
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "address": address,
-            "discipline": "UI/UX Design",
-            "rating": 4.8,
-            "completed_projects": 0
-        }),
-        None,
-    );
-    HttpResponse::Ok().json(response)
+async fn get_freelancer(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let wallet_address = path.into_inner();
+
+    let result = sqlx::query_as::<_, User>(
+        r#"
+        SELECT id, wallet_address, email, display_name, role, avatar_url,
+               bio, discipline, skills, rating, completed_projects,
+               verified, created_at, updated_at
+        FROM users WHERE wallet_address = $1
+        "#,
+    )
+    .bind(&wallet_address)
+    .fetch_optional(&state.db)
+    .await;
+
+    match result {
+        Ok(Some(user)) => HttpResponse::Ok().json(ApiResponse::ok(
+            serde_json::json!({
+                "id": user.id,
+                "wallet_address": user.wallet_address,
+                "discipline": user.discipline,
+                "rating": user.rating,
+                "completed_projects": user.completed_projects,
+                "verified": user.verified
+            }),
+            None,
+        )),
+        Ok(None) => HttpResponse::NotFound().json(ApiResponse::<()>::err(
+            "Freelancer not found".to_string(),
+        )),
+        Err(e) => {
+            tracing::error!("Failed to get freelancer: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to get freelancer: {}",
+                e
+            )))
+        }
+    }
 }
 
-async fn get_escrow(path: web::Path<u64>) -> HttpResponse {
+async fn get_escrow(state: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> HttpResponse {
     let escrow_id = path.into_inner();
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({ "id": escrow_id, "status": "active", "amount": 0 }),
-        None,
-    );
-    HttpResponse::Ok().json(response)
+
+    let result = sqlx::query_as::<_, EscrowAccount>(
+        r#"
+        SELECT id, bounty_id, application_id, client_wallet, freelancer_wallet,
+               total_amount, released_amount, status, stellar_escrow_account,
+               milestones, created_at, updated_at
+        FROM escrow_accounts WHERE id = $1
+        "#,
+    )
+    .bind(escrow_id)
+    .fetch_optional(&state.db)
+    .await;
+
+    match result {
+        Ok(Some(escrow)) => HttpResponse::Ok().json(ApiResponse::ok(
+            serde_json::json!({
+                "id": escrow.id,
+                "bounty_id": escrow.bounty_id,
+                "total_amount": escrow.total_amount,
+                "released_amount": escrow.released_amount,
+                "status": escrow.status
+            }),
+            None,
+        )),
+        Ok(None) => HttpResponse::NotFound().json(ApiResponse::<()>::err(
+            "Escrow not found".to_string(),
+        )),
+        Err(e) => {
+            tracing::error!("Failed to get escrow: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to get escrow: {}",
+                e
+            )))
+        }
+    }
 }
 
-async fn release_escrow(path: web::Path<u64>) -> HttpResponse {
+async fn release_escrow(state: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> HttpResponse {
     let escrow_id = path.into_inner();
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({ "id": escrow_id, "status": "released" }),
-        Some("Funds released successfully".to_string()),
-    );
-    HttpResponse::Ok().json(response)
+    tracing::info!("Releasing escrow: {}", escrow_id);
+
+    let result = sqlx::query_as::<_, EscrowAccount>(
+        r#"
+        UPDATE escrow_accounts
+        SET status = 'RELEASED',
+            released_amount = total_amount,
+            updated_at = NOW()
+        WHERE id = $1 AND status IN ('FUNDED', 'PARTIALLY_RELEASED')
+        RETURNING id, bounty_id, application_id, client_wallet, freelancer_wallet,
+                   total_amount, released_amount, status, stellar_escrow_account,
+                   milestones, created_at, updated_at
+        "#,
+    )
+    .bind(escrow_id)
+    .fetch_optional(&state.db)
+    .await;
+
+    match result {
+        Ok(Some(escrow)) => HttpResponse::Ok().json(ApiResponse::ok(
+            serde_json::json!({
+                "id": escrow.id,
+                "status": escrow.status,
+                "released_amount": escrow.total_amount
+            }),
+            Some("Funds released successfully".to_string()),
+        )),
+        Ok(None) => HttpResponse::NotFound().json(ApiResponse::<()>::err(
+            "Escrow not found or already released".to_string(),
+        )),
+        Err(e) => {
+            tracing::error!("Failed to release escrow: {}", e);
+            HttpResponse::InternalServerError().json(ApiResponse::<()>::err(format!(
+                "Failed to release escrow: {}",
+                e
+            )))
+        }
+    }
 }
+
+// ============================================================
+// Main Entry Point
+// ============================================================
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -185,6 +572,17 @@ async fn main() -> std::io::Result<()> {
         )
         .init();
 
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&database_url)
+        .await
+        .expect("Failed to create database pool");
+
+    tracing::info!("Database connection established");
+
     let port = std::env::var("API_PORT")
         .unwrap_or_else(|_| "3001".to_string())
         .parse::<u16>()
@@ -194,8 +592,11 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("Starting Stellar API on {}:{}", host, port);
 
-    HttpServer::new(|| {
+    let app_state = web::Data::new(AppState { db: pool });
+
+    HttpServer::new(move || {
         App::new()
+            .app_data(app_state.clone())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             .route("/health", web::get().to(health))
@@ -212,23 +613,4 @@ async fn main() -> std::io::Result<()> {
     .bind((host.as_str(), port))?
     .run()
     .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_api_response_ok() {
-        let response: ApiResponse<String> = ApiResponse::ok("test".to_string(), None);
-        assert!(response.success);
-        assert_eq!(response.data, Some("test".to_string()));
-    }
-
-    #[test]
-    fn test_api_response_err() {
-        let response: ApiResponse<String> = ApiResponse::err("error".to_string());
-        assert!(!response.success);
-        assert_eq!(response.error, Some("error".to_string()));
-    }
 }

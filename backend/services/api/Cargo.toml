@@ -16,10 +16,18 @@ actix-rt.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sqlx.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "rust_decimal"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 dotenvy.workspace = true
+
+# Additional types
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { version = "1.33", features = ["db-postgres"] }
+
+[dev-dependencies]
+actix-rt.workspace = true

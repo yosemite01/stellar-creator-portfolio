@@ -1,0 +1,7 @@
+# SQLx configuration for offline builds
+# This file enables `cargo sqlx prepare` for compile-time query validation
+
+[database]
+postgres_url = "postgres://stellar:stellar_dev_password@localhost:5432/stellar_db"
+
+[params]
