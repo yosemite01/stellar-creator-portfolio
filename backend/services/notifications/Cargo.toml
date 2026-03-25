@@ -12,9 +12,40 @@ path = "src/main.rs"
 
 [dependencies]
 tokio.workspace = true
+tokio = { workspace = true, features = ["fs", "rt-multi-thread", "sync"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
+
+# HTTP client for webhooks and email services
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Database
+sqlx = { workspace = true, features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json"] }
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async traits
+async-trait = "0.1"
+
+# Error handling
+thiserror.workspace = true
+
+# Email
+# letters = "0.11"  # Optional: for HTML email templating
+# serde_yaml = "0.9"  # For notification templates
+
+# Queue
+# tokio/sync for in-memory queue, or use Redis for distributed
+tokio.workspace = true
+
+# Logging
+log = "0.4"
+
+[dev-dependencies]
+tokio-test = "0.4"
