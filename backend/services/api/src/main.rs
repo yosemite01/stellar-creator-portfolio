@@ -59,6 +59,71 @@ impl<T> ApiResponse<T> {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PaginationParams {
+    pub page: Option<u64>,
+    pub limit: Option<u64>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
+}
+
+impl Default for PaginationParams {
+    fn default() -> Self {
+        PaginationParams {
+            page: Some(1),
+            limit: Some(10),
+            sort_by: Some("created_at".to_string()),
+            sort_order: Some("desc".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BountyListParams {
+    pub page: Option<u64>,
+    pub limit: Option<u64>,
+    pub sort_by: Option<String>,  // created_at, budget, deadline, title
+    pub sort_order: Option<String>, // asc, desc
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FreelancerListParams {
+    pub page: Option<u64>,
+    pub limit: Option<u64>,
+    pub sort_by: Option<String>,  // rating, completed_projects, name, created_at
+    pub sort_order: Option<String>, // asc, desc
+    pub discipline: Option<String>,
+}
+
+fn validate_sort_params(sort_by: &str, sort_order: &str) -> (String, String) {
+    let valid_sort_by = match sort_by {
+        "created_at" | "budget" | "deadline" | "title" => sort_by.to_string(),
+        "rating" | "completed_projects" | "name" => sort_by.to_string(),
+        _ => "created_at".to_string(),
+    };
+    
+    let valid_sort_order = match sort_order.to_lowercase().as_str() {
+        "asc" | "desc" => sort_order.to_lowercase(),
+        _ => "desc".to_string(),
+    };
+    
+    (valid_sort_by, valid_sort_order)
+}
+
+fn apply_sorting<T: Clone>(items: Vec<T>, sort_by: &str, sort_order: &str) -> Vec<T> {
+    // In a real implementation, this would sort by the specified field
+    // For mock data, we just return the items as-is with sort metadata
+    tracing::debug!(
+        user_action = "apply_sorting",
+        sort_by = %sort_by,
+        sort_order = %sort_order,
+        item_count = items.len(),
+        "Applying sorting"
+    );
+    items
+}
+
 async fn health() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "healthy",
@@ -82,9 +147,41 @@ async fn create_bounty(body: web::Json<BountyRequest>) -> HttpResponse {
     HttpResponse::Created().json(response)
 }
 
-async fn list_bounties() -> HttpResponse {
+async fn list_bounties(
+    query: web::Query<BountyListParams>,
+) -> HttpResponse {
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(10).min(100);
+    let sort_by = query.sort_by.clone().unwrap_or_else(|| "created_at".to_string());
+    let sort_order = query.sort_order.clone().unwrap_or_else(|| "desc".to_string());
+    let status = query.status.clone();
+
+    let (validated_sort_by, validated_sort_order) = validate_sort_params(&sort_by, &sort_order);
+
+    tracing::info!(
+        user_action = "list_bounties",
+        page = %page,
+        limit = %limit,
+        sort_by = %validated_sort_by,
+        sort_order = %validated_sort_order,
+        status = ?status,
+        "Listing bounties with sorting"
+    );
+
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({ "bounties": [], "total": 0, "page": 1, "limit": 10 }),
+        serde_json::json!({
+            "bounties": [],
+            "total": 0,
+            "page": page,
+            "limit": limit,
+            "sort": {
+                "by": validated_sort_by,
+                "order": validated_sort_order
+            },
+            "filters": {
+                "status": status
+            }
+        }),
         None,
     );
     HttpResponse::Ok().json(response)
@@ -129,14 +226,39 @@ async fn register_freelancer(body: web::Json<FreelancerRegistration>) -> HttpRes
 }
 
 async fn list_freelancers(
-    query: web::Query<std::collections::HashMap<String, String>>,
+    query: web::Query<FreelancerListParams>,
 ) -> HttpResponse {
-    let discipline = query.get("discipline").cloned().unwrap_or_default();
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(10).min(100);
+    let sort_by = query.sort_by.clone().unwrap_or_else(|| "rating".to_string());
+    let sort_order = query.sort_order.clone().unwrap_or_else(|| "desc".to_string());
+    let discipline = query.discipline.clone();
+
+    let (validated_sort_by, validated_sort_order) = validate_sort_params(&sort_by, &sort_order);
+
+    tracing::info!(
+        user_action = "list_freelancers",
+        page = %page,
+        limit = %limit,
+        sort_by = %validated_sort_by,
+        sort_order = %validated_sort_order,
+        discipline = ?discipline,
+        "Listing freelancers with sorting"
+    );
+
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "freelancers": [],
             "total": 0,
-            "filters": { "discipline": discipline }
+            "page": page,
+            "limit": limit,
+            "sort": {
+                "by": validated_sort_by,
+                "order": validated_sort_order
+            },
+            "filters": {
+                "discipline": discipline
+            }
         }),
         None,
     );
@@ -217,6 +339,34 @@ async fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_sort_params_valid() {
+        let (sort_by, sort_order) = validate_sort_params("budget", "asc");
+        assert_eq!(sort_by, "budget");
+        assert_eq!(sort_order, "asc");
+    }
+
+    #[test]
+    fn test_validate_sort_params_invalid_field() {
+        let (sort_by, sort_order) = validate_sort_params("invalid_field", "desc");
+        assert_eq!(sort_by, "created_at"); // defaults
+        assert_eq!(sort_order, "desc");
+    }
+
+    #[test]
+    fn test_validate_sort_params_invalid_order() {
+        let (sort_by, sort_order) = validate_sort_params("title", "invalid");
+        assert_eq!(sort_by, "title");
+        assert_eq!(sort_order, "desc"); // defaults to desc
+    }
+
+    #[test]
+    fn test_validate_sort_params_case_insensitive() {
+        let (sort_by, sort_order) = validate_sort_params("TITLE", "ASC");
+        assert_eq!(sort_by, "created_at"); // invalid field defaults
+        assert_eq!(sort_order, "asc");
+    }
 
     #[test]
     fn test_api_response_ok() {

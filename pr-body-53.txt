@@ -1,0 +1,57 @@
+## Stellar Wave Bounty - Issue #53: All Services - No Docker Health Checks
+
+**Severity:** Medium
+**Component:** `backend/docker-compose.yml`
+
+### Problem
+
+The API and indexer services in docker-compose did not have health check configurations, preventing Docker from determining if services are actually healthy.
+
+### Solution
+
+Added comprehensive health checks to both services:
+
+#### API Service
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
+```
+
+#### Indexer Service
+- Added `INDEXER_PORT` environment variable (default: 3002)
+- Implemented Actix-web HTTP server with `/health` endpoint
+- Health check configuration in docker-compose:
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
+```
+
+### Health Endpoint Response
+
+```json
+{
+  "status": "healthy",
+  "service": "stellar-indexer",
+  "version": "0.1.0",
+  "network": "testnet"
+}
+```
+
+### Impact
+
+- Docker can now properly monitor service health
+- Services dependent on API/Indexer can use `condition: service_healthy`
+- Enables proper container orchestration and restarts
+- Clear visibility into service status
+
+---
+**Bounty:** 200 Points via Drips Wave
+**Bounty URL:** https://drips.network/stellar/issue/53
