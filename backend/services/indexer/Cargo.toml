@@ -19,3 +19,5 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
 sqlx.workspace = true
+actix-web = { workspace = true, features = ["rt-multi-thread"] }
+actix-rt = { workspace = true }

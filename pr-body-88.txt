@@ -1,0 +1,50 @@
+## Stellar Wave Bounty - Issue #88: API Service - No Request Logging
+
+**Severity:** Medium
+**Component:** `services/api/src/main.rs`
+
+### Problem
+
+While Logger middleware was added, there was no structured logging of request details, user actions, or business events. This made it difficult to debug issues or audit user actions.
+
+### Solution
+
+Added comprehensive structured logging using `tracing`:
+
+- Added `request_id` counter using `AtomicU64` for unique request identification
+- Added structured `tracing::info!` calls with contextual fields for all endpoints:
+  - `request_id` for tracing individual requests across services
+  - `user_action` describing the business operation (create_bounty, apply_for_bounty, etc.)
+  - `entity_type` and `entity_id` for business entity identification
+  - Related data fields (creator, budget, freelancer, discipline, etc.)
+
+### Changes
+
+Endpoints now log structured events:
+- `create_bounty`: logs creator, budget, title
+- `list_bounties`: logs user_action
+- `get_bounty`: logs entity_type=bounty, entity_id
+- `apply_for_bounty`: logs bounty_id, freelancer, proposed_budget
+- `register_freelancer`: logs name, discipline
+- `list_freelancers`: logs discipline filter
+- `get_freelancer`: logs entity_type=freelancer, entity_id
+- `get_escrow`: logs entity_type=escrow, entity_id
+- `release_escrow`: logs entity_type=escrow, entity_id
+
+Startup also logs service metadata (service name, version, host, port).
+
+### Example Log Output
+
+```
+2026-03-25T17:10:00Z INFO stellar_api: API request
+  request_id=42
+  method=POST
+  path=/api/bounties
+  user_action=create_bounty
+  creator=creator123
+  budget=500
+```
+
+---
+**Bounty:** 200 Points via Drips Wave
+**Bounty URL:** https://drips.network/stellar/issue/88
