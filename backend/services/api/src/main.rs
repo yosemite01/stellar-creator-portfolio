@@ -594,7 +594,11 @@ async fn main() -> std::io::Result<()> {
 
     let app_state = web::Data::new(AppState { db: pool });
 
-    HttpServer::new(move || {
+    tracing::info!("Starting Stellar API on {}:{} (press Ctrl+C to stop)", host, port);
+
+    let app_state = web::Data::new(AppState { db: pool });
+
+    let server = HttpServer::new(move || {
         App::new()
             .app_data(app_state.clone())
             .wrap(middleware::Logger::default())
@@ -611,6 +615,13 @@ async fn main() -> std::io::Result<()> {
             .route("/api/escrow/{id}/release", web::post().to(release_escrow))
     })
     .bind((host.as_str(), port))?
-    .run()
-    .await
+    .workers(4)
+    .keep_alive(std::time::Duration::from_secs(75))
+    .graceful_shutdown(std::time::Duration::from_secs(30));
+
+    // Get server handle for graceful shutdown
+    server.await.expect("Server error");
+
+    tracing::info!("API server shutdown complete");
+    Ok(())
 }
