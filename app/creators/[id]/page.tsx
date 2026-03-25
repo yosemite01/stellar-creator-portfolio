@@ -9,7 +9,8 @@ import { Footer } from '@/components/footer';
 import { ProjectCard } from '@/components/project-card';
 import { Button } from '@/components/ui/button';
 import { creators } from '@/lib/creators-data';
-import { ArrowLeft, Linkedin, Twitter, ExternalLink, Star } from 'lucide-react';
+import { ArrowLeft, Linkedin, Twitter, ExternalLink, Star, Settings2 } from 'lucide-react';
+import { useSession } from 'next-auth/react';
 import { AggregateRatingDisplay } from '@/components/rating-display';
 import { SocialShare } from '@/components/social-share';
 import Image from 'next/image';
@@ -23,6 +24,7 @@ interface CreatorProfilePageProps {
 
 export default function CreatorProfilePage({ params }: CreatorProfilePageProps) {
   const router = useRouter();
+  const { data: session } = useSession();
   const creator = creators.find((c) => c.id === params.id);
   const [aggregate, setAggregate] = useState<AggregateRating | null>(null);
   const heroSizes = buildSizes({
@@ -75,6 +77,21 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
               <ArrowLeft size={20} />
             </Button>
           </div>
+
+          {/* Customize Button - only visible to the creator */}
+          {session && (
+            <div className="absolute top-6 right-4 sm:right-6 lg:right-8">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="bg-background/80 backdrop-blur-sm hover:bg-background/90 gap-1.5"
+                onClick={() => router.push(`/creators/${creator.id}/customize`)}
+              >
+                <Settings2 size={16} />
+                Customize
+              </Button>
+            </div>
+          )}
         </section>
 
         {/* Profile Section */}
