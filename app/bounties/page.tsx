@@ -24,12 +24,12 @@ export default function BountiesPage() {
 
   const getDifficultyColor = (difficulty: string) => {
     const colors: Record<string, string> = {
-      beginner: 'bg-green-500/20 text-green-700 dark:text-green-400',
-      intermediate: 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-400',
-      advanced: 'bg-orange-500/20 text-orange-700 dark:text-orange-400',
-      expert: 'bg-red-500/20 text-red-700 dark:text-red-400',
+      beginner: 'badge-beginner',
+      intermediate: 'badge-intermediate',
+      advanced: 'badge-advanced',
+      expert: 'badge-expert',
     };
-    return colors[difficulty] || 'bg-gray-500/20 text-gray-700 dark:text-gray-400';
+    return colors[difficulty] || 'bg-muted text-muted-foreground';
   };
 
   const BountyCard = ({ bounty }: { bounty: Bounty }) => (

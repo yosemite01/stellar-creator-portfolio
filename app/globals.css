@@ -105,6 +105,22 @@ p {
   --sidebar-accent-foreground: oklch(0.98 0 0);
   --sidebar-border: oklch(0.92 0 0);
   --sidebar-ring: oklch(0.35 0.15 250);
+
+  /* Difficulty badge semantic colors - light mode */
+  --badge-beginner-bg: oklch(0.92 0.08 145);
+  --badge-beginner-text: oklch(0.28 0.1 145);
+  --badge-intermediate-bg: oklch(0.93 0.1 85);
+  --badge-intermediate-text: oklch(0.32 0.1 75);
+  --badge-advanced-bg: oklch(0.92 0.1 55);
+  --badge-advanced-text: oklch(0.32 0.12 45);
+  --badge-expert-bg: oklch(0.92 0.1 25);
+  --badge-expert-text: oklch(0.32 0.15 25);
+
+  /* Status indicator colors - light mode */
+  --status-open: oklch(0.28 0.1 145);
+  --status-in-progress: oklch(0.32 0.1 75);
+  --status-completed: oklch(0.35 0.15 250);
+  --status-cancelled: oklch(0.45 0 0);
 }
 
 .dark {
@@ -153,6 +169,22 @@ p {
   --sidebar-accent-foreground: oklch(0.12 0 0);
   --sidebar-border: oklch(0.25 0.02 240);
   --sidebar-ring: oklch(0.65 0.18 255);
+
+  /* Difficulty badge semantic colors - dark mode (high contrast on dark bg) */
+  --badge-beginner-bg: oklch(0.25 0.07 145);
+  --badge-beginner-text: oklch(0.82 0.14 145);
+  --badge-intermediate-bg: oklch(0.26 0.08 85);
+  --badge-intermediate-text: oklch(0.88 0.14 85);
+  --badge-advanced-bg: oklch(0.26 0.08 55);
+  --badge-advanced-text: oklch(0.88 0.14 50);
+  --badge-expert-bg: oklch(0.25 0.08 25);
+  --badge-expert-text: oklch(0.88 0.14 25);
+
+  /* Status indicator colors - dark mode */
+  --status-open: oklch(0.82 0.14 145);
+  --status-in-progress: oklch(0.88 0.14 85);
+  --status-completed: oklch(0.75 0.18 255);
+  --status-cancelled: oklch(0.65 0 0);
 }
 
 @theme inline {
@@ -202,5 +234,30 @@ p {
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  /* Difficulty badges - use CSS vars for guaranteed dark mode contrast */
+  .badge-beginner {
+    background-color: var(--badge-beginner-bg);
+    color: var(--badge-beginner-text);
+  }
+  .badge-intermediate {
+    background-color: var(--badge-intermediate-bg);
+    color: var(--badge-intermediate-text);
+  }
+  .badge-advanced {
+    background-color: var(--badge-advanced-bg);
+    color: var(--badge-advanced-text);
+  }
+  .badge-expert {
+    background-color: var(--badge-expert-bg);
+    color: var(--badge-expert-text);
+  }
+
+  /* Chat inputs - ensure readable in both modes */
+  .chat-input {
+    @apply bg-background text-foreground border-border placeholder:text-muted-foreground;
   }
 }

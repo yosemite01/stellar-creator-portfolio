@@ -122,7 +122,7 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
         {currentUser === 'admin' && (
           <div className="flex gap-2 text-xs">
             <button onClick={() => moderate(msg.id, 'delete', 'Removed by admin')} className="rounded-md bg-destructive/80 px-2 py-1 text-destructive-foreground">Delete</button>
-            <button onClick={() => moderate(msg.id, 'flag', 'Flagged for review')} className="rounded-md bg-amber-200 px-2 py-1 text-amber-800">Flag</button>
+            <button onClick={() => moderate(msg.id, 'flag', 'Flagged for review')} className="rounded-md bg-yellow-500/20 px-2 py-1 text-yellow-700 dark:text-yellow-300">Flag</button>
           </div>
         )}
       </div>
@@ -161,7 +161,7 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
             value={passphrase}
             onChange={(e) => setPassphrase(e.target.value)}
             placeholder="Set a shared secret"
-            className="w-full rounded-lg border px-3 py-2 text-sm"
+            className="w-full rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
         <div className="mt-4 space-y-2">
@@ -170,7 +170,7 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search messages"
-            className="w-full rounded-lg border px-3 py-2 text-sm"
+            className="w-full rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
       </aside>
@@ -179,7 +179,7 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
         <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <select
-              className="rounded-lg border px-3 py-2 text-sm"
+              className="rounded-lg border border-border bg-background text-foreground px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               value={currentUser}
               onChange={(e) => setCurrentUser(e.target.value)}
             >
@@ -229,10 +229,10 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
               }
             }}
             placeholder="Type a message..."
-            className="h-24 w-full resize-none rounded-lg border px-3 py-2 text-sm"
+            className="h-24 w-full resize-none rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <label className="flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-background text-foreground px-3 py-2 text-sm hover:bg-muted transition-colors">
               <Upload className="h-4 w-4" />
               <span>Attach file</span>
               <input type="file" className="hidden" onChange={handleAttachment} />
@@ -268,7 +268,7 @@ function AttachmentPreview({ attachment }: { attachment: Attachment }) {
   const href = useMemo(() => `data:${attachment.type};base64,${attachment.data}`, [attachment])
   return (
     <a
-      className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs hover:bg-muted"
+      className="inline-flex items-center gap-2 rounded-lg border border-border bg-background text-foreground px-3 py-2 text-xs hover:bg-muted transition-colors"
       href={href}
       download={attachment.name}
     >
