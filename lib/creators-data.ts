@@ -20,6 +20,17 @@ export interface Service {
   reviewCount: number;
 }
 
+export type VerificationStatus = 'unverified' | 'pending' | 'verified';
+
+export type SpecialBadge = 'top-rated' | 'responsive' | 'certified' | 'rising-star';
+
+export interface VerificationInfo {
+  status: VerificationStatus;
+  verifiedAt?: string; // ISO date string
+  verifiedBy?: string; // admin name
+  badges?: SpecialBadge[];
+}
+
 export interface Creator {
   id: string;
   name: string;
@@ -45,6 +56,7 @@ export interface Creator {
   availability?: 'available' | 'limited' | 'unavailable';
   rating?: number;
   reviewCount?: number;
+  verification?: VerificationInfo;
 }
 
 export const creators: Creator[] = [
@@ -96,6 +108,12 @@ export const creators: Creator[] = [
         year: 2023,
       },
     ],
+    verification: {
+      status: 'verified',
+      verifiedAt: '2024-03-15T10:00:00Z',
+      verifiedBy: 'Admin',
+      badges: ['top-rated', 'certified'],
+    },
   },
   {
     id: 'maya-writes',
@@ -144,6 +162,12 @@ export const creators: Creator[] = [
         year: 2023,
       },
     ],
+    verification: {
+      status: 'verified',
+      verifiedAt: '2024-01-20T09:00:00Z',
+      verifiedBy: 'Admin',
+      badges: ['top-rated', 'responsive'],
+    },
   },
   {
     id: 'jordan-creative',
@@ -193,6 +217,9 @@ export const creators: Creator[] = [
         year: 2023,
       },
     ],
+    verification: {
+      status: 'pending',
+    },
   },
   {
     id: 'sophia-ux',
@@ -241,6 +268,9 @@ export const creators: Creator[] = [
         year: 2023,
       },
     ],
+    verification: {
+      status: 'unverified',
+    },
   },
 ];
 

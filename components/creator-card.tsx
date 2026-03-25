@@ -6,6 +6,7 @@ import { ArrowRight, Linkedin, Twitter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Image from 'next/image';
 import { buildOptimizationProps, buildSizes } from '@/lib/image-utils';
+import { VerificationBadge, BadgeRow } from '@/components/verification-badge';
 
 interface CreatorCardProps {
   creator: Creator;
@@ -58,8 +59,18 @@ export function CreatorCard({ creator }: CreatorCardProps) {
         </div>
 
         {/* Name & Title */}
-        <h3 className="text-lg font-bold text-foreground mb-1 line-clamp-2">
+        <h3 className="text-lg font-bold text-foreground mb-1 line-clamp-2 flex items-center gap-1.5">
           {creator.name}
+          {creator.verification && (
+            <VerificationBadge
+              status={creator.verification.status}
+              verifiedAt={creator.verification.verifiedAt}
+              size="sm"
+            />
+          )}
+          {creator.verification?.badges && (
+            <BadgeRow badges={creator.verification.badges} size="sm" />
+          )}
         </h3>
         <p className="text-sm text-muted-foreground mb-2">
           {creator.title}
