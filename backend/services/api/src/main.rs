@@ -1,4 +1,5 @@
-use actix_web::{middleware, web, App, HttpResponse, HttpServer};
+use actix_web::{middleware, web, App, HttpResponse, HttpServer, HttpRequest, HttpMessage};
+use actix_cors::Cors;
 use serde::{Deserialize, Serialize};
 use tracing_subscriber;
 
@@ -195,7 +196,19 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Starting Stellar API on {}:{}", host, port);
 
     HttpServer::new(|| {
+        // CORS middleware configuration
+        let cors = Cors::default()
+            .allow_any_origin()
+            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+            .allowed_headers(vec![
+                actix_web::http::header::AUTHORIZATION,
+                actix_web::http::header::ACCEPT,
+                actix_web::http::header::CONTENT_TYPE,
+            ])
+            .max_age(3600);
+
         App::new()
+            .wrap(cors)
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             .route("/health", web::get().to(health))

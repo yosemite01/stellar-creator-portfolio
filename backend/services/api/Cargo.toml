@@ -23,3 +23,4 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 dotenvy.workspace = true
+actix-cors = "0.7"
