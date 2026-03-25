@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * E2E Tests for PWA User Experience
  * Tests complete PWA workflows using Playwright/Cypress

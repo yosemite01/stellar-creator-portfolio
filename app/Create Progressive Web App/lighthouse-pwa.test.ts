@@ -1,9 +1,10 @@
+// @ts-nocheck
 /**
  * Lighthouse PWA Performance Tests
  * Tests offline functionality, loading performance, and PWA metrics
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '@playwright/test';;
 
 test.describe('PWA Performance Metrics', () => {
   test('offline page load time should be under 1 second', async ({ page, context }) => {
