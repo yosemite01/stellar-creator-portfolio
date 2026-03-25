@@ -1,0 +1,80 @@
+## Stellar Wave Bounty - Issue #71: API Service - No Filtering Implementation
+
+**Severity:** Medium
+**Component:** `services/api/src/main.rs` - `list_bounties`, `list_freelancers`
+
+### Problem
+
+While query parameters were accepted, no actual filtering logic was implemented. Users could not filter results by discipline, budget range, or status.
+
+### Solution
+
+Added comprehensive filtering support to list endpoints:
+
+#### Bounty Filters (`/api/bounties`)
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `status` | string | `open`, `in_progress`, `completed`, `cancelled` |
+| `min_budget` | i128 | Minimum budget filter |
+| `max_budget` | i128 | Maximum budget filter |
+| `creator` | string | Filter by creator address |
+| `search` | string | Search in title/description |
+
+#### Freelancer Filters (`/api/freelancers`)
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `discipline` | string | frontend, backend, fullstack, devops, mobile, blockchain, ai, ml, security, data, ux, ui, design, marketing, writing |
+| `min_rating` | f64 | Minimum rating filter |
+| `max_completed` | u64 | Maximum completed projects |
+| `verified` | bool | Verified freelancers only |
+| `search` | string | Search in name/bio |
+
+### Example API Usage
+
+```bash
+# List open bounties with budget between 100 and 5000
+GET /api/bounties?status=open&min_budget=100&max_budget=5000
+
+# List backend freelancers with rating >= 4.0
+GET /api/freelancers?discipline=backend&min_rating=4.0
+
+# List verified blockchain freelancers
+GET /api/freelancers?discipline=blockchain&verified=true
+```
+
+### Implementation Details
+
+- Added `BountyListParams` and `FreelancerListParams` structs with filter fields
+- Added `validate_bounty_status()` to validate status values
+- Added `validate_discipline()` to validate and normalize discipline values
+- All filters include structured logging for observability
+- Invalid filter values are gracefully ignored
+- Added 8 unit tests for validation functions
+
+### Response Format
+
+```json
+{
+  "success": true,
+  "data": {
+    "bounties": [],
+    "total": 0,
+    "page": 1,
+    "limit": 10,
+    "sort": { "by": "created_at", "order": "desc" },
+    "filters": {
+      "status": "open",
+      "min_budget": 100,
+      "max_budget": 5000,
+      "creator": null,
+      "search": null
+    }
+  }
+}
+```
+
+---
+**Bounty:** 200 Points via Drips Wave
+**Bounty URL:** https://drips.network/stellar/issue/71
