@@ -4,6 +4,63 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tracing_subscriber;
 
+mod errors;
+use errors::{validate_budget, validate_length, validate_required, validate_timeline, validate_wallet_address, ApiError, ApiResult};
+
+// ============================================================
+// Global Error Handler (Catch Unhandled Panics)
+// ============================================================
+
+fn build_error_response(error: actix_web::Error) -> HttpResponse {
+    if let Some(api_error) = error.as_ref().downcast_ref::<ApiError>() {
+        let status = match api_error {
+            ApiError::DatabaseError(_) => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::NotFound(_) => actix_web::http::StatusCode::NOT_FOUND,
+            ApiError::DuplicateEntry(_) => actix_web::http::StatusCode::CONFLICT,
+            ApiError::ValidationError(_) => actix_web::http::StatusCode::BAD_REQUEST,
+            ApiError::InvalidInput(_) => actix_web::http::StatusCode::BAD_REQUEST,
+            ApiError::Unauthorized(_) => actix_web::http::StatusCode::UNAUTHORIZED,
+            ApiError::Forbidden(_) => actix_web::http::StatusCode::FORBIDDEN,
+            ApiError::InsufficientFunds => actix_web::http::StatusCode::PAYMENT_REQUIRED,
+            ApiError::InvalidStatus(_) => actix_web::http::StatusCode::CONFLICT,
+            ApiError::DeadlinePassed => actix_web::http::StatusCode::GONE,
+            ApiError::InternalError(_) => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::NotImplemented(_) => actix_web::http::StatusCode::NOT_IMPLEMENTED,
+            ApiError::BadRequest(_) => actix_web::http::StatusCode::BAD_REQUEST,
+            ApiError::PayloadTooLarge => actix_web::http::StatusCode::PAYLOAD_TOO_LARGE,
+            ApiError::UnsupportedMediaType => actix_web::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        };
+        HttpResponse::build(status).json(serde_json::json!({
+            "success": false,
+            "error": api_error.to_string(),
+            "error_code": match api_error {
+                ApiError::DatabaseError(_) => "DATABASE_ERROR",
+                ApiError::NotFound(_) => "NOT_FOUND",
+                ApiError::DuplicateEntry(_) => "DUPLICATE_ENTRY",
+                ApiError::ValidationError(_) => "VALIDATION_ERROR",
+                ApiError::InvalidInput(_) => "INVALID_INPUT",
+                ApiError::Unauthorized(_) => "UNAUTHORIZED",
+                ApiError::Forbidden(_) => "FORBIDDEN",
+                ApiError::InsufficientFunds => "INSUFFICIENT_FUNDS",
+                ApiError::InvalidStatus(_) => "INVALID_STATUS",
+                ApiError::DeadlinePassed => "DEADLINE_PASSED",
+                ApiError::InternalError(_) => "INTERNAL_ERROR",
+                ApiError::NotImplemented(_) => "NOT_IMPLEMENTED",
+                ApiError::BadRequest(_) => "BAD_REQUEST",
+                ApiError::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
+                ApiError::UnsupportedMediaType => "UNSUPPORTED_MEDIA_TYPE",
+            }
+        }))
+    } else {
+        tracing::error!("Unhandled error: {:?}", error);
+        HttpResponse::InternalServerError().json(serde_json::json!({
+            "success": false,
+            "error": "Internal server error",
+            "error_code": "INTERNAL_ERROR"
+        }))
+    }
+}
+
 // ============================================================
 // Database Models
 // ============================================================
@@ -163,8 +220,14 @@ async fn health(state: web::Data<AppState>) -> HttpResponse {
 async fn create_bounty(
     state: web::Data<AppState>,
     body: web::Json<BountyRequest>,
-) -> HttpResponse {
-    tracing::info!("Creating bounty: {:?}", body.title);
+) -> Result<HttpResponse, ApiError> {
+    // Validate required fields
+    let creator_id = validate_wallet_address(&body.creator)?;
+    let title = validate_length(&body.title, "title", Some(3), Some(255))?;
+    let description = validate_length(&body.description, "description", Some(10), Some(5000))?;
+    let budget = validate_budget(body.budget)?;
+    
+    tracing::info!("Creating bounty: {:?}", title);
 
     let deadline = chrono::DateTime::from_timestamp(body.deadline as i64, 0)
         .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::days(30));
