@@ -59,6 +59,56 @@ impl<T> ApiResponse<T> {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BountyListParams {
+    pub page: Option<u64>,
+    pub limit: Option<u64>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
+    // Filter parameters
+    pub status: Option<String>,        // open, in_progress, completed, cancelled
+    pub min_budget: Option<i128>,     // Minimum budget filter
+    pub max_budget: Option<i128>,     // Maximum budget filter
+    pub creator: Option<String>,       // Filter by creator address
+    pub search: Option<String>,        // Search in title/description
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FreelancerListParams {
+    pub page: Option<u64>,
+    pub limit: Option<u64>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
+    // Filter parameters
+    pub discipline: Option<String>,    // Filter by discipline
+    pub min_rating: Option<f64>,      // Minimum rating filter
+    pub max_completed: Option<u64>,   // Max completed projects filter
+    pub verified: Option<bool>,        // Verified freelancers only
+    pub search: Option<String>,        // Search in name/bio
+}
+
+fn validate_bounty_status(status: &str) -> Option<String> {
+    let valid = match status.to_lowercase().as_str() {
+        "open" | "in_progress" | "completed" | "cancelled" => status.to_lowercase(),
+        _ => return None,
+    };
+    Some(valid)
+}
+
+fn validate_discipline(discipline: &str) -> String {
+    let d = discipline.to_lowercase();
+    let valid_disciplines = [
+        "frontend", "backend", "fullstack", "devops", "mobile",
+        "blockchain", "ai", "ml", "security", "data",
+        "ux", "ui", "design", "marketing", "writing",
+    ];
+    if valid_disciplines.contains(&d.as_str()) {
+        d
+    } else {
+        discipline.to_string()
+    }
+}
+
 async fn health() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "healthy",
@@ -82,9 +132,74 @@ async fn create_bounty(body: web::Json<BountyRequest>) -> HttpResponse {
     HttpResponse::Created().json(response)
 }
 
-async fn list_bounties() -> HttpResponse {
+async fn list_bounties(
+    query: web::Query<BountyListParams>,
+) -> HttpResponse {
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(10).min(100);
+    let sort_by = query.sort_by.clone().unwrap_or_else(|| "created_at".to_string());
+    let sort_order = query.sort_order.clone().unwrap_or_else(|| "desc".to_string());
+
+    // Build filters
+    let status = query.status.as_ref()
+        .and_then(|s| validate_bounty_status(s))
+        .map(|s| {
+            tracing::debug!(user_action = "filter", field = "status", value = %s, "Applying status filter");
+            s
+        });
+
+    let min_budget = query.min_budget.map(|b| {
+        tracing::debug!(user_action = "filter", field = "min_budget", value = %b, "Applying budget filter");
+        b
+    });
+
+    let max_budget = query.max_budget.map(|b| {
+        tracing::debug!(user_action = "filter", field = "max_budget", value = %b, "Applying budget filter");
+        b
+    });
+
+    let creator = query.creator.as_ref().map(|c| {
+        tracing::debug!(user_action = "filter", field = "creator", value = %c, "Applying creator filter");
+        c.clone()
+    });
+
+    let search = query.search.as_ref().map(|s| {
+        tracing::debug!(user_action = "filter", field = "search", value = %s, "Applying search filter");
+        s.clone()
+    });
+
+    tracing::info!(
+        user_action = "list_bounties",
+        page = %page,
+        limit = %limit,
+        sort_by = %sort_by,
+        sort_order = %sort_order,
+        status = ?status,
+        min_budget = ?min_budget,
+        max_budget = ?max_budget,
+        has_creator_filter = %creator.is_some(),
+        has_search_filter = %search.is_some(),
+        "Listing bounties with filters"
+    );
+
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({ "bounties": [], "total": 0, "page": 1, "limit": 10 }),
+        serde_json::json!({
+            "bounties": [],
+            "total": 0,
+            "page": page,
+            "limit": limit,
+            "sort": {
+                "by": sort_by,
+                "order": sort_order
+            },
+            "filters": {
+                "status": status,
+                "min_budget": min_budget,
+                "max_budget": max_budget,
+                "creator": creator,
+                "search": search
+            }
+        }),
         None,
     );
     HttpResponse::Ok().json(response)
@@ -92,6 +207,12 @@ async fn list_bounties() -> HttpResponse {
 
 async fn get_bounty(path: web::Path<u64>) -> HttpResponse {
     let bounty_id = path.into_inner();
+    tracing::info!(
+        user_action = "get_bounty",
+        entity_type = "bounty",
+        entity_id = %bounty_id,
+        "Fetching bounty"
+    );
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({ "id": bounty_id, "title": "Sample Bounty", "status": "open" }),
         None,
@@ -104,6 +225,13 @@ async fn apply_for_bounty(
     body: web::Json<BountyApplication>,
 ) -> HttpResponse {
     let bounty_id = path.into_inner();
+    tracing::info!(
+        user_action = "apply_for_bounty",
+        entity_type = "application",
+        bounty_id = %bounty_id,
+        freelancer = %body.freelancer,
+        "Submitting bounty application"
+    );
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "application_id": 1,
@@ -117,6 +245,13 @@ async fn apply_for_bounty(
 }
 
 async fn register_freelancer(body: web::Json<FreelancerRegistration>) -> HttpResponse {
+    tracing::info!(
+        user_action = "register_freelancer",
+        entity_type = "freelancer",
+        name = %body.name,
+        discipline = %body.discipline,
+        "Registering freelancer"
+    );
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "name": body.name,
@@ -129,14 +264,71 @@ async fn register_freelancer(body: web::Json<FreelancerRegistration>) -> HttpRes
 }
 
 async fn list_freelancers(
-    query: web::Query<std::collections::HashMap<String, String>>,
+    query: web::Query<FreelancerListParams>,
 ) -> HttpResponse {
-    let discipline = query.get("discipline").cloned().unwrap_or_default();
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(10).min(100);
+    let sort_by = query.sort_by.clone().unwrap_or_else(|| "rating".to_string());
+    let sort_order = query.sort_order.clone().unwrap_or_else(|| "desc".to_string());
+
+    // Build filters
+    let discipline = query.discipline.as_ref().map(|d| {
+        let validated = validate_discipline(d);
+        tracing::debug!(user_action = "filter", field = "discipline", value = %validated, "Applying discipline filter");
+        validated
+    });
+
+    let min_rating = query.min_rating.map(|r| {
+        tracing::debug!(user_action = "filter", field = "min_rating", value = %r, "Applying rating filter");
+        r
+    });
+
+    let max_completed = query.max_completed.map(|c| {
+        tracing::debug!(user_action = "filter", field = "max_completed", value = %c, "Applying max completed filter");
+        c
+    });
+
+    let verified = query.verified.map(|v| {
+        tracing::debug!(user_action = "filter", field = "verified", value = %v, "Applying verified filter");
+        v
+    });
+
+    let search = query.search.as_ref().map(|s| {
+        tracing::debug!(user_action = "filter", field = "search", value = %s, "Applying search filter");
+        s.clone()
+    });
+
+    tracing::info!(
+        user_action = "list_freelancers",
+        page = %page,
+        limit = %limit,
+        sort_by = %sort_by,
+        sort_order = %sort_order,
+        discipline = ?discipline,
+        min_rating = ?min_rating,
+        max_completed = ?max_completed,
+        verified = ?verified,
+        has_search_filter = %search.is_some(),
+        "Listing freelancers with filters"
+    );
+
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "freelancers": [],
             "total": 0,
-            "filters": { "discipline": discipline }
+            "page": page,
+            "limit": limit,
+            "sort": {
+                "by": sort_by,
+                "order": sort_order
+            },
+            "filters": {
+                "discipline": discipline,
+                "min_rating": min_rating,
+                "max_completed": max_completed,
+                "verified": verified,
+                "search": search
+            }
         }),
         None,
     );
@@ -145,6 +337,12 @@ async fn list_freelancers(
 
 async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
     let address = path.into_inner();
+    tracing::info!(
+        user_action = "get_freelancer",
+        entity_type = "freelancer",
+        entity_id = %address,
+        "Fetching freelancer profile"
+    );
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "address": address,
@@ -159,6 +357,12 @@ async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
 
 async fn get_escrow(path: web::Path<u64>) -> HttpResponse {
     let escrow_id = path.into_inner();
+    tracing::info!(
+        user_action = "get_escrow",
+        entity_type = "escrow",
+        entity_id = %escrow_id,
+        "Fetching escrow"
+    );
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({ "id": escrow_id, "status": "active", "amount": 0 }),
         None,
@@ -168,6 +372,12 @@ async fn get_escrow(path: web::Path<u64>) -> HttpResponse {
 
 async fn release_escrow(path: web::Path<u64>) -> HttpResponse {
     let escrow_id = path.into_inner();
+    tracing::info!(
+        user_action = "release_escrow",
+        entity_type = "escrow",
+        entity_id = %escrow_id,
+        "Releasing escrow funds"
+    );
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({ "id": escrow_id, "status": "released" }),
         Some("Funds released successfully".to_string()),
@@ -217,6 +427,39 @@ async fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_bounty_status_valid() {
+        assert_eq!(validate_bounty_status("open"), Some("open".to_string()));
+        assert_eq!(validate_bounty_status("in_progress"), Some("in_progress".to_string()));
+        assert_eq!(validate_bounty_status("completed"), Some("completed".to_string()));
+        assert_eq!(validate_bounty_status("cancelled"), Some("cancelled".to_string()));
+    }
+
+    #[test]
+    fn test_validate_bounty_status_case_insensitive() {
+        assert_eq!(validate_bounty_status("OPEN"), Some("open".to_string()));
+        assert_eq!(validate_bounty_status("In_Progress"), Some("in_progress".to_string()));
+    }
+
+    #[test]
+    fn test_validate_bounty_status_invalid() {
+        assert_eq!(validate_bounty_status("invalid"), None);
+        assert_eq!(validate_bounty_status("pending"), None);
+    }
+
+    #[test]
+    fn test_validate_discipline_valid() {
+        assert_eq!(validate_discipline("backend"), "backend");
+        assert_eq!(validate_discipline("frontend"), "frontend");
+        assert_eq!(validate_discipline("blockchain"), "blockchain");
+    }
+
+    #[test]
+    fn test_validate_discipline_case_insensitive() {
+        assert_eq!(validate_discipline("BACKEND"), "backend");
+        assert_eq!(validate_discipline("Blockchain"), "blockchain");
+    }
 
     #[test]
     fn test_api_response_ok() {

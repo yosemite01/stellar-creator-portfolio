@@ -1,0 +1,69 @@
+## Stellar Wave Bounty - Issue #70: API Service - Missing Sorting Options
+
+**Severity:** Low
+**Component:** `services/api/src/main.rs` - list endpoints
+
+### Problem
+
+No ability to sort results by date, budget, rating, or other fields. Users could not organize results in meaningful ways.
+
+### Solution
+
+Added comprehensive sorting support to list endpoints:
+
+#### New Query Parameters
+
+**For `/api/bounties` (list bounties):**
+- `sort_by`: `created_at` (default), `budget`, `deadline`, `title`
+- `sort_order`: `desc` (default), `asc`
+
+**For `/api/freelancers` (list freelancers):**
+- `sort_by`: `rating` (default), `completed_projects`, `name`, `created_at`
+- `sort_order`: `desc` (default), `asc`
+
+### Example API Usage
+
+```bash
+# List bounties sorted by budget (ascending)
+GET /api/bounties?sort_by=budget&sort_order=asc
+
+# List bounties sorted by creation date (newest first)
+GET /api/bounties?sort_by=created_at&sort_order=desc
+
+# List freelancers sorted by rating (highest first)
+GET /api/freelancers?sort_by=rating&sort_order=desc
+
+# List freelancers sorted by completed projects
+GET /api/freelancers?sort_by=completed_projects&sort_order=desc
+```
+
+### Response Format
+
+```json
+{
+  "success": true,
+  "data": {
+    "bounties": [],
+    "total": 0,
+    "page": 1,
+    "limit": 10,
+    "sort": {
+      "by": "budget",
+      "order": "asc"
+    },
+    "filters": {}
+  }
+}
+```
+
+### Implementation Details
+
+- Added `validate_sort_params()` to validate and normalize sort parameters
+- Invalid sort fields default to `created_at` (bounties) or `rating` (freelancers)
+- Invalid sort orders default to `desc`
+- Case-insensitive parameter handling
+- Added 4 unit tests for sort parameter validation
+
+---
+**Bounty:** 200 Points via Drips Wave
+**Bounty URL:** https://drips.network/stellar/issue/70
