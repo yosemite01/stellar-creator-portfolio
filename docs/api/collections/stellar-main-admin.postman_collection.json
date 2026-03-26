@@ -1,0 +1,339 @@
+{
+  "info": {
+    "name": "Stellar — Main + Admin API",
+    "_postman_id": "stellar-main-admin-v1",
+    "description": "Importable collection for Stellar Creator Portfolio HTTP APIs.\n\n**Published:** 2026-03-26\n**Domains:** `auth`, `users`, `shop`, `admin` (folders match this layout).\n\n**Auth:** Set `bearerToken` for `Authorization: Bearer` (gateways / future JWT). Routes using NextAuth `getServerSession` need a session cookie — paste `sessionToken` (value of `next-auth.session-token`) or sign in via the app and copy cookies into Postman.\n\n**Internal-only NextAuth routes** (provider callbacks, etc.) are not listed; use `Get session` and credential sign-in flow from the README.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "bearerToken", "value": "" },
+    { "key": "sessionToken", "value": "" },
+    { "key": "creatorId", "value": "replace-with-creator-id" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{bearerToken}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "auth",
+      "description": "Registration, password, email verification, session.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"integrator@example.com\",\n  \"password\": \"password12345\",\n  \"name\": \"API Integrator\",\n  \"role\": \"CLIENT\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Creates app user (Prisma). Verify email per product rules before using session-protected routes."
+          }
+        },
+        {
+          "name": "Forgot password",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"integrator@example.com\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/forgot-password"
+          }
+        },
+        {
+          "name": "Reset password",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"<from-email>\",\n  \"email\": \"integrator@example.com\",\n  \"password\": \"newpassword12345\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/reset-password"
+          }
+        },
+        {
+          "name": "Verify email",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/auth/verify-email?token=<verification-token>"
+          }
+        },
+        {
+          "name": "Get session",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "next-auth.session-token={{sessionToken}}",
+                "description": "Set sessionToken variable, or attach Postman cookies from browser."
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/session",
+            "description": "NextAuth session JSON. Requires valid session cookie."
+          }
+        }
+      ]
+    },
+    {
+      "name": "users",
+      "description": "User listing and CRUD (Supabase-backed in app).",
+      "item": [
+        {
+          "name": "List users",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/users?page=1&limit=10"
+          }
+        },
+        {
+          "name": "Get user by id",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/users?id=<user-id>"
+          }
+        },
+        {
+          "name": "Create user",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"name\": \"Name\",\n  \"role\": \"USER\"\n}"
+            },
+            "url": "{{baseUrl}}/api/users",
+            "description": "Shape must match `userSchema` in validators."
+          }
+        },
+        {
+          "name": "Update user",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": "{{baseUrl}}/api/users?id=<user-id>"
+          }
+        },
+        {
+          "name": "Delete user",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/users?id=<user-id>"
+          }
+        }
+      ]
+    },
+    {
+      "name": "shop",
+      "description": "Marketplace: bounties, creators, reviews, referrals, messages, upload, analytics.",
+      "item": [
+        {
+          "name": "List bounties",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/bounties?page=1&limit=10"
+          }
+        },
+        {
+          "name": "Create bounty",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": "{{baseUrl}}/api/bounties",
+            "description": "Body must match `bountySchema`."
+          }
+        },
+        {
+          "name": "List creators",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/creators?page=1&limit=10"
+          }
+        },
+        {
+          "name": "Analytics (metrics)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/analytics?preset=30d"
+          }
+        },
+        {
+          "name": "Reviews — list for creator",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/reviews?creatorId={{creatorId}}&page=1&limit=10"
+          }
+        },
+        {
+          "name": "Reviews — create",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              {
+                "key": "Cookie",
+                "value": "next-auth.session-token={{sessionToken}}",
+                "description": "Session required; Bearer alone may not work until API accepts it."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"creatorId\": \"{{creatorId}}\",\n  \"rating\": 5,\n  \"title\": \"Great work\",\n  \"body\": \"Detailed feedback at least ten characters.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/reviews"
+          }
+        },
+        {
+          "name": "Reviews — vote helpful",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Cookie", "value": "next-auth.session-token={{sessionToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewId\": \"<review-id>\",\n  \"vote\": \"helpful\"\n}"
+            },
+            "url": "{{baseUrl}}/api/reviews?action=vote"
+          }
+        },
+        {
+          "name": "Referrals — get code",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Cookie", "value": "next-auth.session-token={{sessionToken}}" }],
+            "url": "{{baseUrl}}/api/referrals?action=code"
+          }
+        },
+        {
+          "name": "Referrals — track (signup)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"<referral-code>\",\n  \"referredUserId\": \"<new-user-id>\",\n  \"event\": \"signup\"\n}"
+            },
+            "url": "{{baseUrl}}/api/referrals"
+          }
+        },
+        {
+          "name": "Messages — list",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/messages?threadId=general"
+          }
+        },
+        {
+          "name": "Messages — send",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"senderId\": \"user-1\",\n  \"recipientId\": \"user-2\",\n  \"ciphertext\": \"base64-or-encrypted-payload\",\n  \"iv\": \"nonce\",\n  \"metadata\": { \"plainText\": \"hello\" }\n}"
+            },
+            "url": "{{baseUrl}}/api/messages"
+          }
+        },
+        {
+          "name": "Upload — file",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] },
+                { "key": "path", "value": "uploads", "type": "text" },
+                { "key": "userId", "value": "demo-user", "type": "text" }
+              ]
+            },
+            "url": "{{baseUrl}}/api/upload"
+          }
+        },
+        {
+          "name": "Upload — list",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/upload?prefix=uploads"
+          }
+        }
+      ]
+    },
+    {
+      "name": "admin",
+      "description": "Moderation and admin-only actions (session user role ADMIN).",
+      "item": [
+        {
+          "name": "Reviews — pending queue",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Cookie", "value": "next-auth.session-token={{sessionToken}}" }],
+            "url": "{{baseUrl}}/api/reviews?pending=true",
+            "description": "Requires ADMIN session."
+          }
+        },
+        {
+          "name": "Reviews — moderate",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Cookie", "value": "next-auth.session-token={{sessionToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewId\": \"<review-id>\",\n  \"status\": \"approved\"\n}"
+            },
+            "url": "{{baseUrl}}/api/reviews?action=moderate"
+          }
+        },
+        {
+          "name": "Referrals — admin action",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Cookie", "value": "next-auth.session-token={{sessionToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"referralId\": \"<referral-id>\",\n  \"action\": \"convert\"\n}"
+            },
+            "url": "{{baseUrl}}/api/referrals",
+            "description": "`action`: convert | reward | flag. ADMIN only."
+          }
+        }
+      ]
+    }
+  ]
+}
