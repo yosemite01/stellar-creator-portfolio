@@ -1,0 +1,49 @@
+
+> my-project@0.1.0 test C:\Users\Dell\Desktop\Github\stellar-creator-portfolio
+> vitest run
+
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mC:/Users/Dell/Desktop/Github/stellar-creator-portfolio[39m
+
+ [2m[90m↓[39m[22m __tests__/dark-mode.test.ts [2m([22m[2m17 tests[22m[2m | [22m[33m17 skipped[39m[2m)[22m
+ [32m✓[39m __tests__/storage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 11[2mms[22m[39m
+ [32m✓[39m __tests__/portfolio-customization.test.ts [2m([22m[2m17 tests[22m[2m)[22m[90m 28[2mms[22m[39m
+ [32m✓[39m __tests__/analytics-engine.test.ts [2m([22m[2m37 tests[22m[2m)[22m[90m 280[2mms[22m[39m
+ [32m✓[39m __tests__/auth.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 87[2mms[22m[39m
+ [32m✓[39m __tests__/reviews.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 716[2mms[22m[39m
+   [33m[2m✓[22m[39m calculateAggregate[2m > [22mreturns zeros for empty list [33m472[2mms[22m[39m
+ [32m✓[39m __tests__/analytics-api.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 329[2mms[22m[39m
+ [2m[90m↓[39m[22m __tests__/messages.integration.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m6 skipped[39m[2m)[22m
+ [32m✓[39m __tests__/image-utils.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 17[2mms[22m[39m
+ [32m✓[39m __tests__/messages.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 472[2mms[22m[39m
+   [33m[2m✓[22m[39m message encryption[2m > [22mencrypts and decrypts with shared key [33m422[2mms[22m[39m
+ [32m✓[39m __tests__/validation.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 18[2mms[22m[39m
+[90mstderr[2m | __tests__/creator-card.test.tsx[2m > [22m[2mCreatorCard[2m > [22m[2mrenders optimized image with responsive sizes and lazy loading
+[22m[39mReceived `true` for a non-boolean attribute `fill`.
+
+If you want to write it to the DOM, pass a string instead: fill="true" or fill={value.toString()}.
+Received `false` for a non-boolean attribute `priority`.
+
+If you want to write it to the DOM, pass a string instead: priority="false" or priority={value.toString()}.
+
+If you used to conditionally omit it with priority={condition && value}, pass priority={condition ? value : undefined} instead.
+
+ [32m✓[39m __tests__/creator-card.test.tsx [2m([22m[2m1 test[22m[2m)[22m[33m 517[2mms[22m[39m
+   [33m[2m✓[22m[39m CreatorCard[2m > [22mrenders optimized image with responsive sizes and lazy loading [33m512[2mms[22m[39m
+[90mstderr[2m | __tests__/creator-hero.test.tsx[2m > [22m[2mCreatorProfilePage hero image[2m > [22m[2mrenders hero cover eagerly for above-the-fold content
+[22m[39mReceived `true` for a non-boolean attribute `priority`.
+
+If you want to write it to the DOM, pass a string instead: priority="true" or priority={value.toString()}.
+Received `true` for a non-boolean attribute `fill`.
+
+If you want to write it to the DOM, pass a string instead: fill="true" or fill={value.toString()}.
+
+ [32m✓[39m __tests__/creator-hero.test.tsx [2m([22m[2m1 test[22m[2m)[22m[33m 403[2mms[22m[39m
+   [33m[2m✓[22m[39m CreatorProfilePage hero image[2m > [22mrenders hero cover eagerly for above-the-fold content [33m399[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m11 passed[39m[22m[2m | [22m[33m2 skipped[39m[90m (13)[39m
+[2m      Tests [22m [1m[32m109 passed[39m[22m[2m | [22m[33m17 skipped[39m[2m | [22m[90m6 todo[39m[90m (132)[39m
+[2m   Start at [22m 22:44:48
+[2m   Duration [22m 39.82s[2m (transform 5.61s, setup 24.91s, collect 14.77s, tests 2.88s, environment 73.82s, prepare 9.52s)[22m
+

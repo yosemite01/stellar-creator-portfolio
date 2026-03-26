@@ -44,6 +44,7 @@ services:
       API_HOST: "0.0.0.0"
       API_PORT: "3001"
       DATABASE_URL: "postgres://stellar:stellar_dev_password@postgres:5432/stellar_db"
+      REDIS_URL: "redis://redis:6379"
       RUST_LOG: "info,stellar_api=debug"
     depends_on:
       postgres:
@@ -79,6 +80,31 @@ services:
       - "5050:80"
     depends_on:
       - postgres
+
+  # ── Backup service ───────────────────────────────────────────────────────
+  # Runs pg_dump on a cron schedule and uploads to S3 (or S3-compatible store).
+  # Set BACKUP_SCHEDULE (cron syntax) and AWS_* vars in your .env file.
+  # Retention is managed by S3 lifecycle rules on the target bucket.
+  db-backup:
+    image: eeshugerman/postgres-backup-s3:16
+    container_name: stellar-db-backup
+    environment:
+      SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}        # default: daily at 02:00 UTC
+      S3_REGION: ${AWS_REGION}
+      S3_BUCKET: ${BACKUP_S3_BUCKET}
+      S3_PREFIX: ${BACKUP_S3_PREFIX:-stellar/postgres}
+      S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}           # leave empty for AWS S3
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      POSTGRES_HOST: postgres
+      POSTGRES_DATABASE: stellar_db
+      POSTGRES_USER: stellar
+      POSTGRES_PASSWORD: stellar_dev_password
+      POSTGRES_EXTRA_OPTS: --compress=9 --clean --if-exists
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   stellar_postgres_data:

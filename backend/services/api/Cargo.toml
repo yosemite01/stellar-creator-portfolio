@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 actix-web.workspace = true
+actix-cors = "0.7"
 actix-rt.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -23,5 +24,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 dotenvy.workspace = true
+redis.workspace = true
+deadpool-redis.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true

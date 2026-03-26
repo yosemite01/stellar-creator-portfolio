@@ -1,0 +1,331 @@
+
+> my-project@0.1.0 test C:\Users\Dell\Desktop\Github\stellar-creator-portfolio
+> vitest run
+
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mC:/Users/Dell/Desktop/Github/stellar-creator-portfolio[39m
+
+ [31m❯[39m __tests__/dark-mode.test.ts [2m([22m[2m17 tests[22m[2m | [22m[31m17 failed[39m[2m)[22m[90m 44[2mms[22m[39m
+[31m   [31m×[31m dark mode CSS variable contrast ratios[2m > [22mforeground on background meets WCAG AAA (>7:1)[90m 13[2mms[22m[31m[39m
+[31m     → expected 5.882352941176471 to be greater than or equal to 7[39m
+[31m   [31m×[31m dark mode CSS variable contrast ratios[2m > [22mcard foreground on card meets WCAG AAA[90m 2[2mms[22m[31m[39m
+[31m     → expected 4.347826086956522 to be greater than or equal to 7[39m
+[31m   [31m×[31m dark mode CSS variable contrast ratios[2m > [22mprimary foreground on primary meets WCAG AA[90m 2[2mms[22m[31m[39m
+[31m     → expected 4.11764705882353 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m dark mode CSS variable contrast ratios[2m > [22maccent foreground on accent meets WCAG AA[90m 1[2mms[22m[31m[39m
+[31m     → expected 4.411764705882353 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m dark mode CSS variable contrast ratios[2m > [22mdestructive foreground on destructive meets WCAG AA[90m 1[2mms[22m[31m[39m
+[31m     → expected 1.5833333333333333 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m dark mode CSS variable contrast ratios[2m > [22mmuted foreground on background meets WCAG AA[90m 1[2mms[22m[31m[39m
+[31m     → expected 4.11764705882353 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m dark mode difficulty badge contrast ratios[2m > [22mbeginner badge text on bg meets WCAG AAA[90m 1[2mms[22m[31m[39m
+[31m     → expected 2.9 to be greater than or equal to 7[39m
+[31m   [31m×[31m dark mode difficulty badge contrast ratios[2m > [22mintermediate badge text on bg meets WCAG AAA[90m 1[2mms[22m[31m[39m
+[31m     → expected 3 to be greater than or equal to 7[39m
+[31m   [31m×[31m dark mode difficulty badge contrast ratios[2m > [22madvanced badge text on bg meets WCAG AAA[90m 2[2mms[22m[31m[39m
+[31m     → expected 3 to be greater than or equal to 7[39m
+[31m   [31m×[31m dark mode difficulty badge contrast ratios[2m > [22mexpert badge text on bg meets WCAG AAA[90m 2[2mms[22m[31m[39m
+[31m     → expected 3.1 to be greater than or equal to 7[39m
+[31m   [31m×[31m light mode CSS variable contrast ratios[2m > [22mforeground on background meets WCAG AAA[90m 1[2mms[22m[31m[39m
+[31m     → expected 5.1499999999999995 to be greater than or equal to 7[39m
+[31m   [31m×[31m light mode CSS variable contrast ratios[2m > [22mprimary foreground on primary meets WCAG AA[90m 5[2mms[22m[31m[39m
+[31m     → expected 2.575 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m light mode CSS variable contrast ratios[2m > [22maccent foreground on accent meets WCAG AA[90m 2[2mms[22m[31m[39m
+[31m     → expected 1.6153846153846154 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m light mode difficulty badge contrast ratios[2m > [22mbeginner badge text on bg meets WCAG AA[90m 1[2mms[22m[31m[39m
+[31m     → expected 2.9393939393939394 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m light mode difficulty badge contrast ratios[2m > [22mintermediate badge text on bg meets WCAG AA[90m 2[2mms[22m[31m[39m
+[31m     → expected 2.648648648648649 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m light mode difficulty badge contrast ratios[2m > [22madvanced badge text on bg meets WCAG AA[90m 1[2mms[22m[31m[39m
+[31m     → expected 2.621621621621622 to be greater than or equal to 4.5[39m
+[31m   [31m×[31m light mode difficulty badge contrast ratios[2m > [22mexpert badge text on bg meets WCAG AA[90m 1[2mms[22m[31m[39m
+[31m     → expected 2.621621621621622 to be greater than or equal to 4.5[39m
+ [32m✓[39m __tests__/storage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 11[2mms[22m[39m
+ [32m✓[39m __tests__/portfolio-customization.test.ts [2m([22m[2m17 tests[22m[2m)[22m[90m 21[2mms[22m[39m
+ [32m✓[39m __tests__/analytics-engine.test.ts [2m([22m[2m37 tests[22m[2m)[22m[90m 175[2mms[22m[39m
+ [32m✓[39m __tests__/auth.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 131[2mms[22m[39m
+ [32m✓[39m __tests__/reviews.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 524[2mms[22m[39m
+   [33m[2m✓[22m[39m calculateAggregate[2m > [22mreturns zeros for empty list [33m374[2mms[22m[39m
+ [32m✓[39m __tests__/analytics-api.test.ts [2m([22m[2m12 tests[22m[2m)[22m[90m 270[2mms[22m[39m
+ [31m❯[39m __tests__/upload.e2e.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [32m✓[39m __tests__/image-utils.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 10[2mms[22m[39m
+ [31m❯[39m __tests__/creator-hero.test.tsx [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m __tests__/creator-card.test.tsx [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m __tests__/messages.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[90m 237[2mms[22m[39m
+[31m   [31m×[31m websocket wrapper[2m > [22mnotifies status changes and sends data[90m 39[2mms[22m[31m[39m
+[31m     → the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string[39m
+ [2m[90m↓[39m[22m __tests__/messages.integration.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m6 skipped[39m[2m)[22m
+ [31m❯[39m __tests__/validation.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[90m 22[2mms[22m[39m
+[31m   [31m×[31m slugify[2m > [22mnormalizes filenames[90m 16[2mms[22m[31m[39m
+[31m     → expected 'my-file-v1-.png' to be 'my-file-v1.png' // Object.is equality[39m
+
+[31m⎯⎯⎯⎯⎯⎯[1m[7m Failed Suites 3 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/creator-card.test.tsx[2m [ __tests__/creator-card.test.tsx ][22m
+[31m[1m[7m FAIL [27m[22m[39m __tests__/creator-hero.test.tsx[2m [ __tests__/creator-hero.test.tsx ][22m
+[31m[1mError[22m: Cannot find module '@testing-library/dom'
+Require stack:
+- C:\Users\Dell\Desktop\Github\stellar-creator-portfolio\node_modules\@testing-library\react\dist\pure.js[39m
+[90m [2m❯[22m Object.<anonymous> node_modules/@testing-library/react/dist/pure.js:[2m46:12[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/upload.e2e.test.ts[2m [ __tests__/upload.e2e.test.ts ][22m
+[31m[1mError[22m: Failed to resolve import "@playwright/test" from "__tests__/upload.e2e.test.ts". Does the file exist?[39m
+  Plugin: [35mvite:import-analysis[39m
+  File: [36mC:/Users/Dell/Desktop/Github/stellar-creator-portfolio/__tests__/upload.e2e.test.ts[39m:6:29
+[33m  1  |  import { expect, test } from "@playwright/test";
+     |                                ^
+  2  |  test.describe("file upload flow", () => {
+  3  |    test("user can upload and download a file", async ({ page }) => {[39m
+[90m [2m❯[22m TransformPluginContext._formatError node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:[2m49258:41[22m[39m
+[90m [2m❯[22m TransformPluginContext.error node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:[2m49253:16[22m[39m
+[90m [2m❯[22m normalizeUrl node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:[2m64307:23[22m[39m
+[90m [2m❯[22m node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:[2m64439:39[22m[39m
+[90m [2m❯[22m TransformPluginContext.transform node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:[2m64366:7[22m[39m
+[90m [2m❯[22m PluginContainer.transform node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:[2m49099:18[22m[39m
+[90m [2m❯[22m loadAndTransform node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:[2m51978:27[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/22]⎯[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 19 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode CSS variable contrast ratios[2m > [22mforeground on background meets WCAG AAA (>7:1)
+[31m[1mAssertionError[22m: expected 5.882352941176471 to be greater than or equal to 7[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m71:19[22m[39m
+    [90m 69| [39m  [34mit[39m([32m'foreground on background meets WCAG AAA (>7:1)'[39m[33m,[39m () [33m=>[39m {
+    [90m 70| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mforeground[33m,[39m darkTokens[33m.[39mback…
+    [90m 71| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AAA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m 72| [39m  })
+    [90m 73| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode CSS variable contrast ratios[2m > [22mcard foreground on card meets WCAG AAA
+[31m[1mAssertionError[22m: expected 4.347826086956522 to be greater than or equal to 7[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m76:19[22m[39m
+    [90m 74| [39m  [34mit[39m([32m'card foreground on card meets WCAG AAA'[39m[33m,[39m () [33m=>[39m {
+    [90m 75| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mcardForeground[33m,[39m darkTokens[33m.[39m…
+    [90m 76| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AAA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m 77| [39m  })
+    [90m 78| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode CSS variable contrast ratios[2m > [22mprimary foreground on primary meets WCAG AA
+[31m[1mAssertionError[22m: expected 4.11764705882353 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m81:19[22m[39m
+    [90m 79| [39m  [34mit[39m([32m'primary foreground on primary meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m 80| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mprimaryForeground[33m,[39m darkToke…
+    [90m 81| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m 82| [39m  })
+    [90m 83| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode CSS variable contrast ratios[2m > [22maccent foreground on accent meets WCAG AA
+[31m[1mAssertionError[22m: expected 4.411764705882353 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m86:19[22m[39m
+    [90m 84| [39m  [34mit[39m([32m'accent foreground on accent meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m 85| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39maccentForeground[33m,[39m darkToken…
+    [90m 86| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m 87| [39m  })
+    [90m 88| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode CSS variable contrast ratios[2m > [22mdestructive foreground on destructive meets WCAG AA
+[31m[1mAssertionError[22m: expected 1.5833333333333333 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m91:19[22m[39m
+    [90m 89| [39m  [34mit[39m([32m'destructive foreground on destructive meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m 90| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mdestructiveForeground[33m,[39m dark…
+    [90m 91| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m 92| [39m  })
+    [90m 93| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode CSS variable contrast ratios[2m > [22mmuted foreground on background meets WCAG AA
+[31m[1mAssertionError[22m: expected 4.11764705882353 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m96:19[22m[39m
+    [90m 94| [39m  [34mit[39m([32m'muted foreground on background meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m 95| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mmutedForeground[33m,[39m darkTokens…
+    [90m 96| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m 97| [39m  })
+    [90m 98| [39m})
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode difficulty badge contrast ratios[2m > [22mbeginner badge text on bg meets WCAG AAA
+[31m[1mAssertionError[22m: expected 2.9 to be greater than or equal to 7[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m103:19[22m[39m
+    [90m101| [39m  [34mit[39m([32m'beginner badge text on bg meets WCAG AAA'[39m[33m,[39m () [33m=>[39m {
+    [90m102| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mbadgeBeginnerText[33m,[39m darkToke…
+    [90m103| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AAA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m104| [39m  })
+    [90m105| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode difficulty badge contrast ratios[2m > [22mintermediate badge text on bg meets WCAG AAA
+[31m[1mAssertionError[22m: expected 3 to be greater than or equal to 7[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m108:19[22m[39m
+    [90m106| [39m  [34mit[39m([32m'intermediate badge text on bg meets WCAG AAA'[39m[33m,[39m () [33m=>[39m {
+    [90m107| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mbadgeIntermediateText[33m,[39m dark…
+    [90m108| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AAA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m109| [39m  })
+    [90m110| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode difficulty badge contrast ratios[2m > [22madvanced badge text on bg meets WCAG AAA
+[31m[1mAssertionError[22m: expected 3 to be greater than or equal to 7[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m113:19[22m[39m
+    [90m111| [39m  [34mit[39m([32m'advanced badge text on bg meets WCAG AAA'[39m[33m,[39m () [33m=>[39m {
+    [90m112| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mbadgeAdvancedText[33m,[39m darkToke…
+    [90m113| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AAA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m114| [39m  })
+    [90m115| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mdark mode difficulty badge contrast ratios[2m > [22mexpert badge text on bg meets WCAG AAA
+[31m[1mAssertionError[22m: expected 3.1 to be greater than or equal to 7[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m118:19[22m[39m
+    [90m116| [39m  [34mit[39m([32m'expert badge text on bg meets WCAG AAA'[39m[33m,[39m () [33m=>[39m {
+    [90m117| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(darkTokens[33m.[39mbadgeExpertText[33m,[39m darkTokens…
+    [90m118| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AAA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m119| [39m  })
+    [90m120| [39m})
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mlight mode CSS variable contrast ratios[2m > [22mforeground on background meets WCAG AAA
+[31m[1mAssertionError[22m: expected 5.1499999999999995 to be greater than or equal to 7[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m125:19[22m[39m
+    [90m123| [39m  [34mit[39m([32m'foreground on background meets WCAG AAA'[39m[33m,[39m () [33m=>[39m {
+    [90m124| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(lightTokens[33m.[39mforeground[33m,[39m lightTokens[33m.[39mba…
+    [90m125| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AAA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m126| [39m  })
+    [90m127| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mlight mode CSS variable contrast ratios[2m > [22mprimary foreground on primary meets WCAG AA
+[31m[1mAssertionError[22m: expected 2.575 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m130:19[22m[39m
+    [90m128| [39m  [34mit[39m([32m'primary foreground on primary meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m129| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(lightTokens[33m.[39mprimaryForeground[33m,[39m lightTo…
+    [90m130| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m131| [39m  })
+    [90m132| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mlight mode CSS variable contrast ratios[2m > [22maccent foreground on accent meets WCAG AA
+[31m[1mAssertionError[22m: expected 1.6153846153846154 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m135:19[22m[39m
+    [90m133| [39m  [34mit[39m([32m'accent foreground on accent meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m134| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(lightTokens[33m.[39maccentForeground[33m,[39m lightTok…
+    [90m135| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m136| [39m  })
+    [90m137| [39m})
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mlight mode difficulty badge contrast ratios[2m > [22mbeginner badge text on bg meets WCAG AA
+[31m[1mAssertionError[22m: expected 2.9393939393939394 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m142:19[22m[39m
+    [90m140| [39m  [34mit[39m([32m'beginner badge text on bg meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m141| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(lightTokens[33m.[39mbadgeBeginnerText[33m,[39m lightTo…
+    [90m142| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m143| [39m  })
+    [90m144| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mlight mode difficulty badge contrast ratios[2m > [22mintermediate badge text on bg meets WCAG AA
+[31m[1mAssertionError[22m: expected 2.648648648648649 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m147:19[22m[39m
+    [90m145| [39m  [34mit[39m([32m'intermediate badge text on bg meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m146| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(lightTokens[33m.[39mbadgeIntermediateText[33m,[39m lig…
+    [90m147| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m148| [39m  })
+    [90m149| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mlight mode difficulty badge contrast ratios[2m > [22madvanced badge text on bg meets WCAG AA
+[31m[1mAssertionError[22m: expected 2.621621621621622 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m152:19[22m[39m
+    [90m150| [39m  [34mit[39m([32m'advanced badge text on bg meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m151| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(lightTokens[33m.[39mbadgeAdvancedText[33m,[39m lightTo…
+    [90m152| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m153| [39m  })
+    [90m154| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/dark-mode.test.ts[2m > [22mlight mode difficulty badge contrast ratios[2m > [22mexpert badge text on bg meets WCAG AA
+[31m[1mAssertionError[22m: expected 2.621621621621622 to be greater than or equal to 4.5[39m
+[36m [2m❯[22m __tests__/dark-mode.test.ts:[2m157:19[22m[39m
+    [90m155| [39m  [34mit[39m([32m'expert badge text on bg meets WCAG AA'[39m[33m,[39m () [33m=>[39m {
+    [90m156| [39m    [35mconst[39m ratio [33m=[39m [34mcontrastRatio[39m(lightTokens[33m.[39mbadgeExpertText[33m,[39m lightToke…
+    [90m157| [39m    [34mexpect[39m(ratio)[33m.[39m[34mtoBeGreaterThanOrEqual[39m([33mWCAG_AA[39m)
+    [90m   | [39m                  [31m^[39m
+    [90m158| [39m  })
+    [90m159| [39m})
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/messages.test.ts[2m > [22mwebsocket wrapper[2m > [22mnotifies status changes and sends data
+[31m[1mAssertionError[22m: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string[39m
+[36m [2m❯[22m __tests__/messages.test.ts:[2m50:40[22m[39m
+    [90m 48| [39m    [34mexpect[39m(statuses)[33m.[39m[34mtoContain[39m([32m'open'[39m)
+    [90m 49| [39m    socket[33m.[39m[34msend[39m({ hello[33m:[39m [32m'world'[39m })
+    [90m 50| [39m    [34mexpect[39m((socket [35mas[39m any)[33m.[39mws[33m.[39msent[[34m0[39m])[33m.[39m[34mtoContain[39m([32m'hello'[39m)
+    [90m   | [39m                                       [31m^[39m
+    [90m 51| [39m    socket[33m.[39m[34mclose[39m()
+    [90m 52| [39m    [35mawait[39m [35mnew[39m [33mPromise[39m((resolve) [33m=>[39m [34msetTimeout[39m(resolve[33m,[39m [34m10[39m))
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/22]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/validation.test.ts[2m > [22mslugify[2m > [22mnormalizes filenames
+[31m[1mAssertionError[22m: expected 'my-file-v1-.png' to be 'my-file-v1.png' // Object.is equality[39m
+
+Expected: [32m"my-file-v1.png"[39m
+Received: [31m"my-file-v1[7m-[27m.png"[39m
+
+[36m [2m❯[22m __tests__/validation.test.ts:[2m9:41[22m[39m
+    [90m  7| [39m[34mdescribe[39m([32m"slugify"[39m[33m,[39m () [33m=>[39m {
+    [90m  8| [39m  [34mit[39m([32m"normalizes filenames"[39m[33m,[39m () [33m=>[39m {
+    [90m  9| [39m    [34mexpect[39m([34mslugify[39m([32m"My File (v1).png"[39m))[33m.[39m[34mtoBe[39m([32m"my-file-v1.png"[39m)[33m;[39m
+    [90m   | [39m                                        [31m^[39m
+    [90m 10| [39m  })[33m;[39m
+    [90m 11| [39m})[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/22]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m6 failed[39m[22m[2m | [22m[1m[32m7 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (14)[39m
+[2m      Tests [22m [1m[31m19 failed[39m[22m[2m | [22m[1m[32m105 passed[39m[22m[2m | [22m[90m6 todo[39m[90m (130)[39m
+[2m   Start at [22m 22:41:14
+[2m   Duration [22m 11.93s[2m (transform 3.74s, setup 10.46s, collect 6.38s, tests 1.45s, environment 42.44s, prepare 5.23s)[22m
+
+ ELIFECYCLE  Test failed. See above for more details.

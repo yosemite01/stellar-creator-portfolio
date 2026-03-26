@@ -1,5 +1,9 @@
+use actix_cors::Cors;
 use actix_web::{middleware, web, App, HttpResponse, HttpServer};
+use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
 use serde::{Deserialize, Serialize};
+use tracing_subscriber;
+#[derive(Clone, Serialize, Deserialize, Debug)]
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -125,11 +129,24 @@ async fn list_bounties() -> HttpResponse {
 )]
 async fn get_bounty(path: web::Path<u64>) -> HttpResponse {
     let bounty_id = path.into_inner();
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({ "id": bounty_id, "title": "Sample Bounty", "status": "open" }),
-        None,
-    );
-    HttpResponse::Ok().json(response)
+    let cache_key = format!("api:bounty:{}", bounty_id);
+
+    if let Ok(mut conn) = redis.get().await {
+        if let Ok(cached_data) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cached_data) {
+                tracing::debug!("Cache hit for {}", cache_key);
+                return HttpResponse::Ok().json(ApiResponse::ok(parsed, None));
+            }
+        }
+    }
+
+    let data = serde_json::json!({ "id": bounty_id, "title": "Sample Bounty", "status": "open" });
+
+    if let Ok(mut conn) = redis.get().await {
+        let _ = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await;
+    }
+
+    HttpResponse::Ok().json(ApiResponse::ok(data, None))
 }
 
 /// Apply for a bounty
@@ -189,6 +206,7 @@ async fn register_freelancer(body: web::Json<FreelancerRegistration>) -> HttpRes
 )]
 async fn list_freelancers(
     query: web::Query<std::collections::HashMap<String, String>>,
+    redis: web::Data<Pool>,
 ) -> HttpResponse {
     let discipline = query.get("discipline").cloned().unwrap_or_default();
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
@@ -209,16 +227,29 @@ async fn list_freelancers(
 )]
 async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
     let address = path.into_inner();
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "address": address,
-            "discipline": "UI/UX Design",
-            "rating": 4.8,
-            "completed_projects": 0
-        }),
-        None,
-    );
-    HttpResponse::Ok().json(response)
+    let cache_key = format!("api:freelancer:{}", address);
+
+    if let Ok(mut conn) = redis.get().await {
+        if let Ok(cached_data) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cached_data) {
+                tracing::debug!("Cache hit for {}", cache_key);
+                return HttpResponse::Ok().json(ApiResponse::ok(parsed, None));
+            }
+        }
+    }
+
+    let data = serde_json::json!({
+        "address": address,
+        "discipline": "UI/UX Design",
+        "rating": 4.8,
+        "completed_projects": 0
+    });
+
+    if let Ok(mut conn) = redis.get().await {
+        let _ = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await;
+    }
+
+    HttpResponse::Ok().json(ApiResponse::ok(data, None))
 }
 
 /// Get escrow details
@@ -309,6 +340,10 @@ async fn main() -> std::io::Result<()> {
 
     let host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
+    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let cfg = Config::from_url(redis_url);
+    let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).expect("Failed to create Redis pool");
+
     tracing::info!("Starting Stellar API on {}:{}", host, port);
     tracing::info!("Swagger UI available at http://{}:{}/swagger-ui/", host, port);
 
@@ -316,6 +351,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
+            .app_data(web::Data::new(redis_pool.clone()))
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             // Swagger UI at /swagger-ui/

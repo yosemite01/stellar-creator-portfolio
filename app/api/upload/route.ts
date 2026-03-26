@@ -21,7 +21,8 @@ export function slugify(name: string) {
     .toLowerCase()
     .replace(/[^a-z0-9.]+/g, "-")
     .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
+    .replace(/^-|-$/g, "")
+    .replace(/-\./g, ".");
 }
 
 export function allowedTypes(): string[] {

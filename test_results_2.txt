@@ -1,0 +1,64 @@
+
+> my-project@0.1.0 test C:\Users\Dell\Desktop\Github\stellar-creator-portfolio
+> vitest run
+
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mC:/Users/Dell/Desktop/Github/stellar-creator-portfolio[39m
+
+ [2m[90m↓[39m[22m __tests__/dark-mode.test.ts [2m([22m[2m17 tests[22m[2m | [22m[33m17 skipped[39m[2m)[22m
+ [32m✓[39m __tests__/portfolio-customization.test.ts [2m([22m[2m17 tests[22m[2m)[22m[90m 37[2mms[22m[39m
+ [32m✓[39m __tests__/storage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 14[2mms[22m[39m
+ [32m✓[39m __tests__/auth.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 102[2mms[22m[39m
+ [32m✓[39m __tests__/analytics-engine.test.ts [2m([22m[2m37 tests[22m[2m)[22m[90m 159[2mms[22m[39m
+ [32m✓[39m __tests__/reviews.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 494[2mms[22m[39m
+ [32m✓[39m __tests__/analytics-api.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 470[2mms[22m[39m
+ [32m✓[39m __tests__/image-utils.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 16[2mms[22m[39m
+ [2m[90m↓[39m[22m __tests__/messages.integration.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m6 skipped[39m[2m)[22m
+ [32m✓[39m __tests__/messages.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 339[2mms[22m[39m
+ [32m✓[39m __tests__/validation.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 19[2mms[22m[39m
+[90mstderr[2m | __tests__/creator-card.test.tsx[2m > [22m[2mCreatorCard[2m > [22m[2mrenders optimized image with responsive sizes and lazy loading
+[22m[39mReceived `true` for a non-boolean attribute `fill`.
+
+If you want to write it to the DOM, pass a string instead: fill="true" or fill={value.toString()}.
+Received `false` for a non-boolean attribute `priority`.
+
+If you want to write it to the DOM, pass a string instead: priority="false" or priority={value.toString()}.
+
+If you used to conditionally omit it with priority={condition && value}, pass priority={condition ? value : undefined} instead.
+
+ [32m✓[39m __tests__/creator-card.test.tsx [2m([22m[2m1 test[22m[2m)[22m[33m 922[2mms[22m[39m
+   [33m[2m✓[22m[39m CreatorCard[2m > [22mrenders optimized image with responsive sizes and lazy loading [33m917[2mms[22m[39m
+ [31m❯[39m __tests__/creator-hero.test.tsx [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[90m 98[2mms[22m[39m
+[31m   [31m×[31m CreatorProfilePage hero image[2m > [22mrenders hero cover eagerly for above-the-fold content[90m 94[2mms[22m[31m[39m
+[31m     → [next-auth]: `useSession` must be wrapped in a <SessionProvider />[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 1 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m __tests__/creator-hero.test.tsx[2m > [22mCreatorProfilePage hero image[2m > [22mrenders hero cover eagerly for above-the-fold content
+[31m[1mError[22m: [next-auth]: `useSession` must be wrapped in a <SessionProvider />[39m
+[36m [2m❯[22m Proxy.useSession node_modules/.pnpm/next-auth@4.24.13_next@16.1_26b0cd6f022313b7c8fb3f45e62bc28d/node_modules/next-auth/react/index.js:[2m91:11[22m[39m
+    [90m 89| [39m  [35mvar[39m value [33m=[39m [33mReact[39m[33m.[39m[34museContext[39m([33mSessionContext[39m)[33m;[39m
+    [90m 90| [39m  [35mif[39m ([33m![39mvalue [33m&&[39m process[33m.[39menv[33m.[39m[33mNODE_ENV[39m [33m!==[39m [32m"production"[39m) {
+    [90m 91| [39m    [35mthrow[39m [35mnew[39m [33mError[39m([32m"[next-auth]: `useSession` must be wrapped in a <S[39m…
+    [90m   | [39m          [31m^[39m
+    [90m 92| [39m  }
+    [90m 93| [39m  [35mvar[39m _ref2 [33m=[39m options [33m!==[39m [35mnull[39m [33m&&[39m options [33m!==[39m [35mvoid[39m [34m0[39m [33m?[39m options [33m:[39m {}[33m,[39m
+[90m [2m❯[22m CreatorProfilePage app/creators/[id]/page.tsx:[2m27:29[22m[39m
+[90m [2m❯[22m Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/cjs/react-dom-client.development.js:[2m25904:20[22m[39m
+[90m [2m❯[22m renderWithHooks node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/cjs/react-dom-client.development.js:[2m7662:22[22m[39m
+[90m [2m❯[22m updateFunctionComponent node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/cjs/react-dom-client.development.js:[2m10166:19[22m[39m
+[90m [2m❯[22m beginWork node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/cjs/react-dom-client.development.js:[2m11778:18[22m[39m
+[90m [2m❯[22m runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/cjs/react-dom-client.development.js:[2m874:13[22m[39m
+[90m [2m❯[22m performUnitOfWork node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/cjs/react-dom-client.development.js:[2m17641:22[22m[39m
+[90m [2m❯[22m workLoopSync node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/cjs/react-dom-client.development.js:[2m17469:41[22m[39m
+[90m [2m❯[22m renderRootSync node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/cjs/react-dom-client.development.js:[2m17450:11[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m10 passed[39m[22m[2m | [22m[33m2 skipped[39m[90m (13)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m108 passed[39m[22m[2m | [22m[33m17 skipped[39m[2m | [22m[90m6 todo[39m[90m (132)[39m
+[2m   Start at [22m 22:43:14
+[2m   Duration [22m 31.95s[2m (transform 4.31s, setup 15.43s, collect 14.82s, tests 2.67s, environment 65.18s, prepare 11.37s)[22m
+
+ ELIFECYCLE  Test failed. See above for more details.

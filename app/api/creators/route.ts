@@ -3,13 +3,15 @@ import {
   getSupabaseClient,
   getPaginationRange,
   buildPaginatedResponse,
-  getCached,
-  setCache,
-  invalidateCache,
+  getCachedAsync,
+  setCacheAsync,
+  invalidateCacheAsync,
 } from '@/lib/db'
+import { TTL } from '@/lib/redis'
 import {
   creatorSchema,
   creatorUpdateSchema,
+  creatorFilterSchema,
   paginationSchema,
   validateRequest,
   formatZodErrors,
@@ -62,10 +64,29 @@ export async function GET(request: NextRequest) {
     }
 
     const { page, limit } = validation.data
-    const discipline = searchParams.get('discipline')
-    const cacheKey = `creators:${discipline || 'all'}:${page}:${limit}`
 
-    const cached = getCached(cacheKey)
+    const filterParams = {
+      discipline: searchParams.get('discipline') || undefined,
+      availability: searchParams.get('availability') || undefined,
+      hourly_rate_min: searchParams.get('hourly_rate_min') || undefined,
+      hourly_rate_max: searchParams.get('hourly_rate_max') || undefined,
+      skills: searchParams.get('skills') || undefined,
+      sort_by: searchParams.get('sort_by') || undefined,
+      sort_order: searchParams.get('sort_order') || undefined,
+    }
+
+    const filterValidation = validateRequest(creatorFilterSchema, filterParams)
+    if (!filterValidation.success) {
+      return NextResponse.json(
+        { error: 'Invalid filter parameters', details: formatZodErrors(filterValidation.errors) },
+        { status: 400 }
+      )
+    }
+
+    const { discipline, availability, hourly_rate_min, hourly_rate_max, skills, sort_by, sort_order } = filterValidation.data
+    const cacheKey = `creators:${discipline || 'all'}:${availability || 'all'}:${hourly_rate_min ?? ''}:${hourly_rate_max ?? ''}:${skills || 'all'}:${sort_by || 'created_at'}:${sort_order || 'desc'}:${page}:${limit}`
+
+    const cached = await getCachedAsync(cacheKey)
     if (cached) {
       return NextResponse.json(cached)
     }
@@ -78,9 +99,25 @@ export async function GET(request: NextRequest) {
     if (discipline && discipline !== 'All') {
       query = query.eq('discipline', discipline)
     }
+    if (availability) {
+      query = query.eq('availability', availability)
+    }
+    if (hourly_rate_min !== undefined) {
+      query = query.gte('hourly_rate', hourly_rate_min)
+    }
+    if (hourly_rate_max !== undefined) {
+      query = query.lte('hourly_rate', hourly_rate_max)
+    }
+    if (skills) {
+      // skills is a comma-separated string; filter creators who have ALL specified skills
+      const skillList = skills.split(',').map((s) => s.trim()).filter(Boolean)
+      if (skillList.length > 0) {
+        query = query.contains('skills', skillList)
+      }
+    }
 
     const { data, error, count } = await query
-      .order('created_at', { ascending: false })
+      .order(sort_by || 'created_at', { ascending: sort_order === 'asc' })
       .range(from, to)
 
     if (error) {
@@ -88,7 +125,7 @@ export async function GET(request: NextRequest) {
     }
 
     const response = buildPaginatedResponse(data || [], count || 0, { page, limit })
-    setCache(cacheKey, response)
+    await setCacheAsync(cacheKey, response, TTL.MEDIUM)
 
     return NextResponse.json(response)
   } catch (error) {
@@ -127,7 +164,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    invalidateCache('creators:')
+    await invalidateCacheAsync('creators:')
     return NextResponse.json({ data }, { status: 201 })
   } catch (error) {
     return NextResponse.json(
@@ -177,7 +214,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Creator not found' }, { status: 404 })
     }
 
-    invalidateCache('creators:')
+    await invalidateCacheAsync('creators:')
     return NextResponse.json({ data })
   } catch (error) {
     return NextResponse.json(
@@ -208,7 +245,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    invalidateCache('creators:')
+    await invalidateCacheAsync('creators:')
     return NextResponse.json({ success: true }, { status: 200 })
   } catch (error) {
     return NextResponse.json(

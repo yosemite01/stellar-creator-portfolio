@@ -53,11 +53,11 @@ export function useCreatorFilters() {
     const params = new URLSearchParams(searchParams.toString());
     const next = { ...filters, ...patch };
 
-    next.query           ? params.set('q', next.query)                    : params.delete('q');
-    next.discipline !== 'All' ? params.set('discipline', next.discipline) : params.delete('discipline');
-    next.skills.length   ? params.set('skills', next.skills.join(','))    : params.delete('skills');
-    next.experienceRange !== 'All' ? params.set('exp', next.experienceRange) : params.delete('exp');
-    next.sort !== 'relevance' ? params.set('sort', next.sort)             : params.delete('sort');
+    if (next.query) { params.set('q', next.query); } else { params.delete('q'); }
+    if (next.discipline !== 'All') { params.set('discipline', next.discipline); } else { params.delete('discipline'); }
+    if (next.skills.length) { params.set('skills', next.skills.join(',')); } else { params.delete('skills'); }
+    if (next.experienceRange !== 'All') { params.set('exp', next.experienceRange); } else { params.delete('exp'); }
+    if (next.sort !== 'relevance') { params.set('sort', next.sort); } else { params.delete('sort'); }
     params.set('page', '1');
 
     router.push(`${pathname}?${params.toString()}`, { scroll: false });

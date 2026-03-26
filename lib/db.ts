@@ -127,31 +127,84 @@ export function buildPaginatedResponse<T>(
   }
 }
 
-const cache = new Map<string, { data: unknown; timestamp: number }>()
-const CACHE_TTL_MS = 60 * 1000
+// ── In-memory fallback cache (used when Redis is unavailable) ─────────────────
+const memCache = new Map<string, { data: unknown; timestamp: number }>()
+const MEM_CACHE_TTL_MS = 60 * 1000
 
-export function getCached<T>(key: string): T | null {
-  const cached = cache.get(key)
-  if (!cached) return null
-  if (Date.now() - cached.timestamp > CACHE_TTL_MS) {
-    cache.delete(key)
+function memGet<T>(key: string): T | null {
+  const entry = memCache.get(key)
+  if (!entry) return null
+  if (Date.now() - entry.timestamp > MEM_CACHE_TTL_MS) {
+    memCache.delete(key)
     return null
   }
-  return cached.data as T
+  return entry.data as T
 }
 
+function memSet<T>(key: string, data: T): void {
+  memCache.set(key, { data, timestamp: Date.now() })
+}
+
+function memInvalidate(pattern?: string): void {
+  if (!pattern) { memCache.clear(); return }
+  for (const key of memCache.keys()) {
+    if (key.includes(pattern)) memCache.delete(key)
+  }
+}
+
+// ── Public cache API (Redis-first, in-memory fallback) ────────────────────────
+import { redisGet, redisSet, redisDel, TTL } from '@/lib/redis'
+
+/**
+ * Synchronous read — checks in-memory cache only.
+ * Use `getCachedAsync` in API routes for Redis-backed reads.
+ */
+export function getCached<T>(key: string): T | null {
+  return memGet<T>(key)
+}
+
+/**
+ * Async read — checks Redis first, falls back to in-memory.
+ */
+export async function getCachedAsync<T>(key: string): Promise<T | null> {
+  const fromRedis = await redisGet<T>(key)
+  if (fromRedis !== null) return fromRedis
+  return memGet<T>(key)
+}
+
+/**
+ * Synchronous write — writes to in-memory cache only.
+ * Use `setCacheAsync` in API routes for Redis-backed writes.
+ */
 export function setCache<T>(key: string, data: T): void {
-  cache.set(key, { data, timestamp: Date.now() })
+  memSet(key, data)
 }
 
+/**
+ * Async write — writes to both Redis and in-memory.
+ */
+export async function setCacheAsync<T>(
+  key: string,
+  data: T,
+  ttlSeconds: number = TTL.MEDIUM,
+): Promise<void> {
+  await redisSet(key, data, ttlSeconds)
+  memSet(key, data)
+}
+
+/**
+ * Synchronous invalidation — clears in-memory cache only.
+ * Use `invalidateCacheAsync` in API routes for full invalidation.
+ */
 export function invalidateCache(pattern?: string): void {
-  if (!pattern) {
-    cache.clear()
-    return
-  }
-  for (const key of cache.keys()) {
-    if (key.includes(pattern)) {
-      cache.delete(key)
-    }
-  }
+  memInvalidate(pattern)
+}
+
+/**
+ * Async invalidation — clears both Redis (glob pattern) and in-memory.
+ */
+export async function invalidateCacheAsync(pattern?: string): Promise<void> {
+  const redisPattern = pattern ? `${pattern}*` : '*'
+  await redisDel(redisPattern)
+  memInvalidate(pattern)
 }

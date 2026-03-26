@@ -3,13 +3,15 @@ import {
   getSupabaseClient,
   getPaginationRange,
   buildPaginatedResponse,
-  getCached,
-  setCache,
-  invalidateCache,
+  getCachedAsync,
+  setCacheAsync,
+  invalidateCacheAsync,
 } from '@/lib/db'
+import { TTL } from '@/lib/redis'
 import {
   bountySchema,
   bountyUpdateSchema,
+  bountyFilterSchema,
   paginationSchema,
   validateRequest,
   formatZodErrors,
@@ -62,12 +64,29 @@ export async function GET(request: NextRequest) {
     }
 
     const { page, limit } = validation.data
-    const category = searchParams.get('category')
-    const difficulty = searchParams.get('difficulty')
-    const status = searchParams.get('status')
-    const cacheKey = `bounties:${category || 'all'}:${difficulty || 'all'}:${status || 'all'}:${page}:${limit}`
 
-    const cached = getCached(cacheKey)
+    const filterParams = {
+      category: searchParams.get('category') || undefined,
+      difficulty: searchParams.get('difficulty') || undefined,
+      status: searchParams.get('status') || undefined,
+      budget_min: searchParams.get('budget_min') || undefined,
+      budget_max: searchParams.get('budget_max') || undefined,
+      sort_by: searchParams.get('sort_by') || undefined,
+      sort_order: searchParams.get('sort_order') || undefined,
+    }
+
+    const filterValidation = validateRequest(bountyFilterSchema, filterParams)
+    if (!filterValidation.success) {
+      return NextResponse.json(
+        { error: 'Invalid filter parameters', details: formatZodErrors(filterValidation.errors) },
+        { status: 400 }
+      )
+    }
+
+    const { category, difficulty, status, budget_min, budget_max, sort_by, sort_order } = filterValidation.data
+    const cacheKey = `bounties:${category || 'all'}:${difficulty || 'all'}:${status || 'all'}:${budget_min ?? ''}:${budget_max ?? ''}:${sort_by || 'posted_date'}:${sort_order || 'desc'}:${page}:${limit}`
+
+    const cached = await getCachedAsync(cacheKey)
     if (cached) {
       return NextResponse.json(cached)
     }
@@ -86,9 +105,15 @@ export async function GET(request: NextRequest) {
     if (status && status !== 'All') {
       query = query.eq('status', status)
     }
+    if (budget_min !== undefined) {
+      query = query.gte('budget', budget_min)
+    }
+    if (budget_max !== undefined) {
+      query = query.lte('budget', budget_max)
+    }
 
     const { data, error, count } = await query
-      .order('posted_date', { ascending: false })
+      .order(sort_by || 'posted_date', { ascending: sort_order === 'asc' })
       .range(from, to)
 
     if (error) {
@@ -96,7 +121,7 @@ export async function GET(request: NextRequest) {
     }
 
     const response = buildPaginatedResponse(data || [], count || 0, { page, limit })
-    setCache(cacheKey, response)
+    await setCacheAsync(cacheKey, response, TTL.SHORT)
 
     return NextResponse.json(response)
   } catch (error) {
@@ -138,7 +163,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    invalidateCache('bounties:')
+    await invalidateCacheAsync('bounties:')
     return NextResponse.json({ data }, { status: 201 })
   } catch (error) {
     return NextResponse.json(
@@ -188,7 +213,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Bounty not found' }, { status: 404 })
     }
 
-    invalidateCache('bounties:')
+    await invalidateCacheAsync('bounties:')
     return NextResponse.json({ data })
   } catch (error) {
     return NextResponse.json(
@@ -219,7 +244,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    invalidateCache('bounties:')
+    await invalidateCacheAsync('bounties:')
     return NextResponse.json({ success: true }, { status: 200 })
   } catch (error) {
     return NextResponse.json(

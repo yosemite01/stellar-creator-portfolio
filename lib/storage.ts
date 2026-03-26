@@ -87,7 +87,7 @@ export async function uploadObject(params: UploadParams): Promise<UploadedObject
   );
 
   const publicBase = process.env.S3_PUBLIC_BASE_URL;
-  const url = publicBase ? `${publicBase.replace(/\\/$/, "")}/${params.key}` : signedUrl;
+  const url = publicBase ? `${publicBase.replace(/\/$/, "")}/${params.key}` : signedUrl;
 
   return {
     key: params.key,

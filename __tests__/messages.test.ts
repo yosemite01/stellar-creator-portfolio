@@ -15,6 +15,7 @@ describe('message encryption', () => {
 
 describe('websocket wrapper', () => {
   class FakeWebSocket {
+    static OPEN = 1
     public readyState = 0
     public onopen: (() => void) | null = null
     public onmessage: ((event: { data: string }) => void) | null = null

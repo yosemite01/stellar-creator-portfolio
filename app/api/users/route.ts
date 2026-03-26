@@ -3,10 +3,11 @@ import {
   getSupabaseClient,
   getPaginationRange,
   buildPaginatedResponse,
-  getCached,
-  setCache,
-  invalidateCache,
+  getCachedAsync,
+  setCacheAsync,
+  invalidateCacheAsync,
 } from '@/lib/db'
+import { TTL } from '@/lib/redis'
 import {
   userSchema,
   userUpdateSchema,
@@ -52,7 +53,7 @@ export async function GET(request: NextRequest) {
 
     if (id) {
       const cacheKey = `user:${id}`
-      const cached = getCached(cacheKey)
+      const cached = await getCachedAsync(cacheKey)
       if (cached) {
         return NextResponse.json({ data: cached })
       }
@@ -68,7 +69,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'User not found' }, { status: 404 })
       }
 
-      setCache(cacheKey, data)
+      await setCacheAsync(cacheKey, data, TTL.MEDIUM)
       return NextResponse.json({ data })
     }
 
@@ -89,7 +90,7 @@ export async function GET(request: NextRequest) {
     const role = searchParams.get('role')
     const cacheKey = `users:${role || 'all'}:${page}:${limit}`
 
-    const cached = getCached(cacheKey)
+    const cached = await getCachedAsync(cacheKey)
     if (cached) {
       return NextResponse.json(cached)
     }
@@ -112,7 +113,7 @@ export async function GET(request: NextRequest) {
     }
 
     const response = buildPaginatedResponse(data || [], count || 0, { page, limit })
-    setCache(cacheKey, response)
+    await setCacheAsync(cacheKey, response, TTL.SHORT)
 
     return NextResponse.json(response)
   } catch (error) {
@@ -158,7 +159,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    invalidateCache('users:')
+    await invalidateCacheAsync('users:')
     return NextResponse.json({ data }, { status: 201 })
   } catch (error) {
     return NextResponse.json(
@@ -222,8 +223,8 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
-    invalidateCache('users:')
-    invalidateCache(`user:${id}`)
+    await invalidateCacheAsync('users:')
+    await invalidateCacheAsync(`user:${id}`)
     return NextResponse.json({ data })
   } catch (error) {
     return NextResponse.json(
@@ -254,8 +255,8 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    invalidateCache('users:')
-    invalidateCache(`user:${id}`)
+    await invalidateCacheAsync('users:')
+    await invalidateCacheAsync(`user:${id}`)
     return NextResponse.json({ success: true }, { status: 200 })
   } catch (error) {
     return NextResponse.json(
