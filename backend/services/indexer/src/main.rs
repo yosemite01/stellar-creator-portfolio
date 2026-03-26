@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::time::Duration;
+use stellar_discovery::{create_discovery, ServiceInfo};
 use tracing::{error, info, warn};
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -499,6 +500,25 @@ async fn main() -> Result<()> {
 
     ensure_cursor_table(&pool).await?;
     ensure_schema(&pool).await?;
+
+    // ── Service Discovery ────────────────────────────────────────────────
+    let discovery = create_discovery()
+        .await
+        .context("Failed to initialise service discovery")?;
+
+    let indexer_port: u16 = std::env::var("INDEXER_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9000);
+    let indexer_host = std::env::var("INDEXER_HOST")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    let service_info = ServiceInfo::new("stellar-indexer", &indexer_host, indexer_port)
+        .with_tags(vec!["daemon".to_string()]);
+
+    if let Err(e) = discovery.register(service_info).await {
+        warn!("Service discovery registration failed (non-fatal): {e}");
+    }
 
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))

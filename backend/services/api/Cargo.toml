@@ -29,3 +29,4 @@ redis.workspace = true
 deadpool-redis.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
+stellar-discovery = { path = "../discovery" }
