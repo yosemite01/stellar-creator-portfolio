@@ -48,6 +48,14 @@ async fn main() -> anyhow::Result<()> {
             .route("/health", web::get().to(handlers::health))
             .route("/auth/token", web::post().to(handlers::mint_tokens))
             .route("/auth/refresh", web::post().to(handlers::refresh_tokens))
+            .route(
+                "/auth/oauth2/{provider}/authorize",
+                web::get().to(handlers::oauth2_authorize),
+            )
+            .route(
+                "/auth/oauth2/{provider}/token",
+                web::post().to(handlers::oauth2_token_exchange),
+            )
     })
     .bind((host.as_str(), port))?
     .run()

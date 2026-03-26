@@ -13,6 +13,12 @@ pub enum AuthError {
     Db(#[from] sqlx::Error),
     #[error("jwt error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
+    #[error("invalid OAuth provider: {0}")]
+    InvalidOAuthProvider(String),
+    #[error("OAuth provider not configured: {0}")]
+    OAuthProviderNotConfigured(String),
+    #[error("OAuth flow failed: {0}")]
+    OAuthFlowFailed(String),
 }
 
 impl ResponseError for AuthError {
@@ -31,6 +37,18 @@ impl ResponseError for AuthError {
             AuthError::Jwt(_) => (
                 actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "internal error".to_string(),
+            ),
+            AuthError::InvalidOAuthProvider(_) => (
+                actix_web::http::StatusCode::BAD_REQUEST,
+                self.to_string(),
+            ),
+            AuthError::OAuthProviderNotConfigured(_) => (
+                actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
+                self.to_string(),
+            ),
+            AuthError::OAuthFlowFailed(_) => (
+                actix_web::http::StatusCode::BAD_GATEWAY,
+                self.to_string(),
             ),
         };
         HttpResponse::build(status).json(json!({ "error": msg }))
