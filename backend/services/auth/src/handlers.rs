@@ -2,7 +2,10 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::{Duration, Utc};
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
-use oauth2::{AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope, TokenResponse, TokenUrl};
+use oauth2::{
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope,
+    TokenResponse, TokenUrl,
+};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -61,11 +64,16 @@ fn build_oauth_client(
     let mut client = BasicClient::new(
         ClientId::new(config.client_id.clone()),
         Some(ClientSecret::new(config.client_secret.clone())),
-        AuthUrl::new(auth_url.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
-        Some(TokenUrl::new(token_url.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?),
+        AuthUrl::new(auth_url.to_string())
+            .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
+        Some(
+            TokenUrl::new(token_url.to_string())
+                .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
+        ),
     )
     .set_redirect_uri(
-        RedirectUrl::new(redirect_uri.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
+        RedirectUrl::new(redirect_uri.to_string())
+            .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
     );
 
     for scope in scopes {
@@ -75,14 +83,16 @@ fn build_oauth_client(
     Ok(client)
 }
 
-async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Result<String, AuthError> {
+async fn fetch_oauth_user_id(
+    provider: OAuthProvider,
+    access_token: &str,
+) -> Result<String, AuthError> {
     let client = reqwest::Client::new();
     match provider {
         OAuthProvider::Google => {
             #[derive(serde::Deserialize)]
             struct GoogleProfile {
                 sub: String,
-                email: Option<String>,
             }
             let profile: GoogleProfile = client
                 .get("https://openidconnect.googleapis.com/v1/userinfo")
@@ -101,7 +111,6 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
             #[derive(serde::Deserialize)]
             struct GitHubProfile {
                 id: u64,
-                login: Option<String>,
             }
             let profile: GitHubProfile = client
                 .get("https://api.github.com/user")
@@ -122,7 +131,6 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
             #[derive(serde::Deserialize)]
             struct TwitterData {
                 id: String,
-                username: Option<String>,
             }
             #[derive(serde::Deserialize)]
             struct TwitterProfile {
@@ -232,6 +240,61 @@ pub async fn mint_tokens(
     })))
 }
 
+pub async fn refresh_tokens(
+    config: web::Data<Config>,
+    pool: web::Data<sqlx::PgPool>,
+    body: web::Json<RefreshRequest>,
+) -> Result<HttpResponse, AuthError> {
+    let old_hash = hash_refresh_token(&body.refresh_token);
+    let new_plain = generate_refresh_token();
+    let new_hash = hash_refresh_token(&new_plain);
+    let new_id = Uuid::new_v4();
+    let expires_at = Utc::now() + Duration::seconds(config.refresh_ttl_secs as i64);
+
+    let (user_id, family_id) =
+        db::rotate_refresh_token(pool.get_ref(), &old_hash, new_id, &new_hash, expires_at).await?;
+
+    let access = sign_access_token(
+        &user_id,
+        family_id,
+        &config.jwt_secret,
+        Duration::seconds(config.access_ttl_secs as i64),
+    )?;
+
+    Ok(HttpResponse::Ok().json(json!({
+        "access_token": access,
+        "refresh_token": new_plain,
+        "token_type": "Bearer",
+        "expires_in": config.access_ttl_secs
+    })))
+}
+
+pub async fn oauth2_authorize(
+    provider: web::Path<String>,
+    query: web::Query<OAuthAuthorizeRequest>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, AuthError> {
+    let provider = OAuthProvider::from_str(provider.as_str())
+        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider.into_inner()))?;
+
+    let provider_config = config
+        .oauth_provider_config(provider)
+        .ok_or_else(|| AuthError::OAuthProviderNotConfigured(provider.to_string()))?;
+
+    let redirect_uri = query
+        .redirect_uri
+        .clone()
+        .unwrap_or_else(|| provider_config.redirect_uri.clone());
+
+    let client = build_oauth_client(provider, provider_config, redirect_uri.as_str())?;
+    let (authorize_url, csrf_state) = client.authorize_url(CsrfToken::new_random);
+
+    Ok(HttpResponse::Ok().json(json!({
+        "authorization_url": authorize_url.to_string(),
+        "csrf_state": csrf_state.secret(),
+    })))
+}
+
 pub async fn oauth2_token_exchange(
     provider: web::Path<String>,
     body: web::Json<OAuthTokenRequest>,
@@ -261,59 +324,4 @@ pub async fn oauth2_token_exchange(
     let user_id = fetch_oauth_user_id(provider, token.access_token().secret()).await?;
 
     mint_tokens_for_user(&user_id, &config, pool.get_ref()).await
-}
-
-pub async fn oauth2_authorize(
-    provider: web::Path<String>,
-    query: web::Query<OAuthAuthorizeRequest>,
-    config: web::Data<Config>,
-) -> Result<HttpResponse, AuthError> {
-    let provider = OAuthProvider::from_str(provider.as_str())
-        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider.into_inner()))?;
-
-    let provider_config = config
-        .oauth_provider_config(provider)
-        .ok_or_else(|| AuthError::OAuthProviderNotConfigured(provider.to_string()))?;
-
-    let redirect_uri = query
-        .redirect_uri
-        .clone()
-        .unwrap_or_else(|| provider_config.redirect_uri.clone());
-
-    let client = build_oauth_client(provider, provider_config, redirect_uri.as_str())?;
-    let (authorize_url, csrf_state) = client.authorize_url(CsrfToken::new_random);
-
-    Ok(HttpResponse::Ok().json(json!({
-        "authorization_url": authorize_url.to_string(),
-        "csrf_state": csrf_state.secret(),
-    })))
-}
-
-pub async fn refresh_tokens(
-    config: web::Data<Config>,
-    pool: web::Data<sqlx::PgPool>,
-    body: web::Json<RefreshRequest>,
-) -> Result<HttpResponse, AuthError> {
-    let old_hash = hash_refresh_token(&body.refresh_token);
-    let new_plain = generate_refresh_token();
-    let new_hash = hash_refresh_token(&new_plain);
-    let new_id = Uuid::new_v4();
-    let expires_at = Utc::now() + Duration::seconds(config.refresh_ttl_secs as i64);
-
-    let (user_id, family_id) =
-        db::rotate_refresh_token(pool.get_ref(), &old_hash, new_id, &new_hash, expires_at).await?;
-
-    let access = sign_access_token(
-        &user_id,
-        family_id,
-        &config.jwt_secret,
-        Duration::seconds(config.access_ttl_secs as i64),
-    )?;
-
-    Ok(HttpResponse::Ok().json(json!({
-        "access_token": access,
-        "refresh_token": new_plain,
-        "token_type": "Bearer",
-        "expires_in": config.access_ttl_secs
-    })))
 }

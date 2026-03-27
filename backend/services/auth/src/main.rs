@@ -25,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
             "AUTH_DEV_MINT is enabled without AUTH_MINT_SECRET: token mint is unauthenticated; do not use in production"
         );
     }
+
     let pool = PgPool::connect(&config.database_url)
         .await
         .context("failed to connect to database")?;

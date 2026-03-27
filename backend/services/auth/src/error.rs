@@ -44,18 +44,16 @@ impl ResponseError for AuthError {
                 actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "internal error".to_string(),
             ),
-            AuthError::InvalidOAuthProvider(_) => (
-                actix_web::http::StatusCode::BAD_REQUEST,
-                self.to_string(),
-            ),
+            AuthError::InvalidOAuthProvider(_) => {
+                (actix_web::http::StatusCode::BAD_REQUEST, self.to_string())
+            }
             AuthError::OAuthProviderNotConfigured(_) => (
                 actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
                 self.to_string(),
             ),
-            AuthError::OAuthFlowFailed(_) => (
-                actix_web::http::StatusCode::BAD_GATEWAY,
-                self.to_string(),
-            ),
+            AuthError::OAuthFlowFailed(_) => {
+                (actix_web::http::StatusCode::BAD_GATEWAY, self.to_string())
+            }
         };
         HttpResponse::build(status).json(json!({ "error": msg }))
     }

@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn access_token_round_trip() {
-        let secret = "01234567890123456789012345678901"; // 32 chars
+        let secret = "01234567890123456789012345678901";
         let family = Uuid::new_v4();
         let token = sign_access_token("user-1", family, secret, Duration::minutes(15)).unwrap();
         let claims = verify_access_token(&token, secret).unwrap();

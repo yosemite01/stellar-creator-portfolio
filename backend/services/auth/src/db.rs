@@ -28,7 +28,8 @@ pub async fn insert_refresh_token(
     Ok(())
 }
 
-/// Deletes the matching refresh token row and inserts a new one with the same `family_id` (rotation).
+/// Deletes the matching refresh token row and inserts a new one with the same
+/// `family_id` (token rotation). Returns `(user_id, family_id)` on success.
 pub async fn rotate_refresh_token(
     pool: &PgPool,
     old_hash: &[u8],

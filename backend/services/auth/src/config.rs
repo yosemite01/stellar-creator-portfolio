@@ -44,7 +44,7 @@ pub struct Config {
     pub jwt_secret: String,
     pub access_ttl_secs: u64,
     pub refresh_ttl_secs: u64,
-    /// When set, `POST /auth/token` requires matching `X-Mint-Secret` header.
+    /// When set, `POST /auth/token` requires a matching `X-Mint-Secret` header.
     pub mint_secret: Option<String>,
     /// When true and `mint_secret` is unset, allows mint without a secret (development only).
     pub dev_mint_allow: bool,
@@ -79,9 +79,18 @@ impl Config {
             .unwrap_or(604_800);
 
         fn provider_config(prefix: &str) -> Option<OAuthProviderConfig> {
-            let client_id = std::env::var(format!("{}_CLIENT_ID", prefix)).ok()?.trim().to_owned();
-            let client_secret = std::env::var(format!("{}_CLIENT_SECRET", prefix)).ok()?.trim().to_owned();
-            let redirect_uri = std::env::var(format!("{}_REDIRECT_URI", prefix)).ok()?.trim().to_owned();
+            let client_id = std::env::var(format!("{}_CLIENT_ID", prefix))
+                .ok()?
+                .trim()
+                .to_owned();
+            let client_secret = std::env::var(format!("{}_CLIENT_SECRET", prefix))
+                .ok()?
+                .trim()
+                .to_owned();
+            let redirect_uri = std::env::var(format!("{}_REDIRECT_URI", prefix))
+                .ok()?
+                .trim()
+                .to_owned();
             if client_id.is_empty() || client_secret.is_empty() || redirect_uri.is_empty() {
                 return None;
             }
@@ -152,10 +161,11 @@ mod tests {
 
         let cfg = Config::from_env().expect("config load");
 
-        let google_config = cfg.oauth_provider_config(OAuthProvider::Google).expect("google configured");
+        let google_config = cfg
+            .oauth_provider_config(OAuthProvider::Google)
+            .expect("google configured");
         assert_eq!(google_config.client_id, "gcid");
         assert_eq!(google_config.client_secret, "gsecret");
         assert_eq!(google_config.redirect_uri, "https://localhost/callback");
     }
 }
-
