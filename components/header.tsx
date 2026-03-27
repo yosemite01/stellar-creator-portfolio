@@ -81,6 +81,11 @@ export function Header() {
             <Link href="/about" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
               About
             </Link>
+            {session && (
+              <Link href="/disputes" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
+                Disputes
+              </Link>
+            )}
           </nav>
 
           {/* Right Actions */}
@@ -200,6 +205,11 @@ export function Header() {
             <Link href="/about" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
               About
             </Link>
+            {session && (
+              <Link href="/disputes" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
+                Disputes
+              </Link>
+            )}
             
             {session ? (
               <>
