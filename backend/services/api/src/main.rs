@@ -473,46 +473,71 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
     Ok(HttpResponse::Created().json(ApiResponse::ok(data, Some("Bounty created successfully".to_string()))))
 }
 
-/// List bounties (paginated)
+/// List bounties (paginated, optionally full-text searched)
 #[utoipa::path(
     get, path = "/api/bounties",
     params(
-        PaginationParams,
+        ("q"      = Option<String>, Query, description = "Full-text search query"),
         ("status" = Option<String>, Query, description = "Filter by status: open | in-progress | completed"),
+        ("page"   = Option<i64>,   Query, description = "Page number (default 1)"),
+        ("limit"  = Option<i64>,   Query, description = "Results per page, 1-100 (default 10)"),
     ),
     responses(
         (status = 200, description = "Paginated list of bounties"),
         (status = 500, description = "Database error"),
     )
 )]
-async fn list_bounties() -> HttpResponse {
-    HttpResponse::Ok().json(ApiResponse::ok(
-        serde_json::json!({ "bounties": [], "total": 0, "page": 1, "limit": 10 }),
-        None::<String>,
-    ))
 async fn list_bounties(
+    req: HttpRequest,
     pool: web::Data<PgPool>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse, ApiError> {
-    let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
-    let limit = query.get("limit").and_then(|value| value.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
+    let request_id = get_request_id(&req).unwrap_or_else(|| "unknown".to_string());
+
+    let page  = query.get("page").and_then(|v| v.parse::<i64>().ok()).unwrap_or(1).max(1);
+    let limit = query.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
     let offset = (page - 1) * limit;
     let status = query.get("status").cloned();
 
+    // Sanitise and normalise the search query.
+    // websearch_to_tsquery understands quoted phrases and `-word` exclusions,
+    // which is friendlier for end-users than plainto_tsquery.
+    let search_query: Option<String> = query
+        .get("q")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    tracing::info!(
+        request_id = %request_id,
+        ?status,
+        search = ?search_query,
+        page,
+        limit,
+        "Listing bounties"
+    );
+
+    // ── Count ────────────────────────────────────────────────────────────────
     let total = match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::BIGINT FROM bounties WHERE ($1::TEXT IS NULL OR status = $1)",
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM   bounties
+        WHERE  ($1::TEXT IS NULL OR status = $1)
+          AND  ($2::TEXT IS NULL OR fts @@ websearch_to_tsquery('english', $2))
+        "#,
     )
     .bind(status.clone())
+    .bind(search_query.clone())
     .fetch_one(pool.get_ref())
     .await
     {
-        Ok(count) => count,
+        Ok(n) => n,
         Err(error) => {
-            tracing::error!("Failed to count bounties: {error}");
+            tracing::error!(request_id = %request_id, "Failed to count bounties: {error}");
             return Err(ApiError::Database(error));
         }
     };
 
+    // ── Rows — ranked by relevance when a query is present ──────────────────
     let bounties = match sqlx::query_as::<_, BountyRecord>(
         r#"
         SELECT
@@ -526,11 +551,20 @@ async fn list_bounties(
             EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
         FROM bounties
         WHERE ($1::TEXT IS NULL OR status = $1)
-        ORDER BY created_at DESC, id DESC
-        LIMIT $2 OFFSET $3
+          AND ($2::TEXT IS NULL OR fts @@ websearch_to_tsquery('english', $2))
+        ORDER BY
+            CASE WHEN $2::TEXT IS NOT NULL
+                 THEN ts_rank(fts, websearch_to_tsquery('english', $2))
+                 ELSE 0
+            END DESC,
+            created_at DESC,
+            id DESC
+        LIMIT  $3
+        OFFSET $4
         "#,
     )
-    .bind(status)
+    .bind(status.clone())
+    .bind(search_query.clone())
     .bind(limit)
     .bind(offset)
     .fetch_all(pool.get_ref())
@@ -538,7 +572,7 @@ async fn list_bounties(
     {
         Ok(rows) => rows,
         Err(error) => {
-            tracing::error!("Failed to list bounties: {error}");
+            tracing::error!(request_id = %request_id, "Failed to list bounties: {error}");
             return Err(ApiError::Database(error));
         }
     };
@@ -546,9 +580,13 @@ async fn list_bounties(
     Ok(HttpResponse::Ok().json(ApiResponse::ok(
         serde_json::json!({
             "bounties": bounties,
-            "total": total,
-            "page": page,
-            "limit": limit
+            "total":    total,
+            "page":     page,
+            "limit":    limit,
+            "filters": {
+                "status": status.unwrap_or_default(),
+                "q":      search_query.unwrap_or_default(),
+            }
         }),
         None,
     )))
