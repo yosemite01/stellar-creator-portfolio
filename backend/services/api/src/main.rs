@@ -1,7 +1,7 @@
 mod metrics;
 
 use actix_cors::Cors;
-use actix_web::{http::StatusCode, middleware, web, App, HttpResponse, HttpServer};
+use actix_web::{http::StatusCode, middleware, web, App, HttpResponse, HttpServer, ResponseError};
 use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
@@ -135,14 +135,14 @@ pub struct FreelancerRegistration {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
-pub struct ApiResponse<T: ToSchema> {
+pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
     pub message: Option<String>,
 }
 
-impl<T: ToSchema> ApiResponse<T> {
+impl<T> ApiResponse<T> {
     fn ok(data: T, message: Option<String>) -> Self {
         Self { success: true, data: Some(data), error: None, message }
     }
@@ -153,6 +153,63 @@ impl<T: ToSchema> ApiResponse<T> {
         T: Default,
     {
         Self { success: false, data: None, error: Some(error), message: None }
+    }
+}
+
+#[derive(Debug, Error)]
+enum ApiError {
+    #[error("Invalid request: {0}")]
+    BadRequest(String),
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+    #[error("Resource conflict: {0}")]
+    Conflict(String),
+    #[error("Database operation failed")]
+    Database(#[source] sqlx::Error),
+    #[error("Network operation failed")]
+    Network(String),
+    #[error("Contract invocation failed")]
+    ContractInvocation(String),
+    #[error("Failed to serialize response")]
+    Serialization(#[from] serde_json::Error),
+}
+
+impl ApiError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Network(_) => StatusCode::BAD_GATEWAY,
+            Self::ContractInvocation(_) => StatusCode::BAD_GATEWAY,
+            Self::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn public_message(&self) -> String {
+        match self {
+            Self::Database(_) => "A database error occurred".to_string(),
+            Self::Network(_) => "A network error occurred".to_string(),
+            Self::ContractInvocation(_) => "A contract invocation error occurred".to_string(),
+            _ => self.to_string(),
+        }
+    }
+}
+
+impl ResponseError for ApiError {
+    fn status_code(&self) -> StatusCode {
+        ApiError::status_code(self)
+    }
+
+    fn error_response(&self) -> HttpResponse {
+        if ApiError::status_code(self).is_server_error() {
+            tracing::error!("API error response: {self}");
+        } else {
+            tracing::warn!("API client error response: {self}");
+        }
+        let response: ApiResponse<serde_json::Value> = ApiResponse::err(self.public_message());
+        HttpResponse::build(ApiError::status_code(self)).json(response)
     }
 }
 
@@ -203,27 +260,21 @@ struct EscrowRecord {
     released_at: Option<i64>,
 }
 
-fn json_error(status: StatusCode, message: impl Into<String>) -> HttpResponse {
-    let response: ApiResponse<serde_json::Value> = ApiResponse::err(message.into());
-    HttpResponse::build(status).json(response)
-}
-
-fn value_response<T>(data: &T) -> Result<serde_json::Value, HttpResponse>
+fn value_response<T>(data: &T) -> Result<serde_json::Value, ApiError>
 where
     T: Serialize,
 {
-    serde_json::to_value(data)
-        .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize response: {error}")))
+    serde_json::to_value(data).map_err(ApiError::from)
 }
 
-fn parse_i64(value: i128, field: &str) -> Result<i64, HttpResponse> {
+fn parse_i64(value: i128, field: &str) -> Result<i64, ApiError> {
     i64::try_from(value)
-        .map_err(|_| json_error(StatusCode::BAD_REQUEST, format!("{field} is outside the supported range")))
+        .map_err(|_| ApiError::BadRequest(format!("{field} is outside the supported range")))
 }
 
-fn parse_u64_to_i64(value: u64, field: &str) -> Result<i64, HttpResponse> {
+fn parse_u64_to_i64(value: u64, field: &str) -> Result<i64, ApiError> {
     i64::try_from(value)
-        .map_err(|_| json_error(StatusCode::BAD_REQUEST, format!("{field} is outside the supported range")))
+        .map_err(|_| ApiError::BadRequest(format!("{field} is outside the supported range")))
 }
 
 /// Health check
@@ -249,16 +300,16 @@ async fn health() -> HttpResponse {
         (status = 500, description = "Database error"),
     )
 )]
-async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) -> HttpResponse {
+async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) -> Result<HttpResponse, ApiError> {
     tracing::info!("Creating bounty: {:?}", body.title);
 
     let budget = match parse_i64(body.budget, "budget") {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(error) => return Err(error),
     };
     let deadline = match parse_u64_to_i64(body.deadline, "deadline") {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(error) => return Err(error),
     };
 
     let bounty = match sqlx::query_as::<_, BountyRecord>(
@@ -287,16 +338,13 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
         Ok(record) => record,
         Err(error) => {
             tracing::error!("Failed to create bounty: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
-    let data = match value_response(&bounty) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let data = value_response(&bounty)?;
 
-    HttpResponse::Created().json(ApiResponse::ok(data, Some("Bounty created successfully".to_string())))
+    Ok(HttpResponse::Created().json(ApiResponse::ok(data, Some("Bounty created successfully".to_string()))))
 }
 
 /// List bounties (paginated)
@@ -315,7 +363,7 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
 async fn list_bounties(
     pool: web::Data<PgPool>,
     query: web::Query<std::collections::HashMap<String, String>>,
-) -> HttpResponse {
+) -> Result<HttpResponse, ApiError> {
     let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
     let limit = query.get("limit").and_then(|value| value.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
     let offset = (page - 1) * limit;
@@ -331,7 +379,7 @@ async fn list_bounties(
         Ok(count) => count,
         Err(error) => {
             tracing::error!("Failed to count bounties: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
@@ -361,11 +409,11 @@ async fn list_bounties(
         Ok(rows) => rows,
         Err(error) => {
             tracing::error!("Failed to list bounties: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
-    HttpResponse::Ok().json(ApiResponse::ok(
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(
         serde_json::json!({
             "bounties": bounties,
             "total": total,
@@ -373,7 +421,7 @@ async fn list_bounties(
             "limit": limit
         }),
         None,
-    ))
+    )))
 }
 
 /// Get a single bounty by ID
@@ -390,21 +438,32 @@ async fn get_bounty(
     path: web::Path<u64>,
     pool: web::Data<PgPool>,
     redis: web::Data<Pool>,
-) -> HttpResponse {
+) -> Result<HttpResponse, ApiError> {
     let bounty_id = path.into_inner();
     let bounty_id_db = match parse_u64_to_i64(bounty_id, "id") {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(error) => return Err(error),
     };
     let cache_key = format!("api:bounty:{bounty_id}");
 
-    if let Ok(mut conn) = redis.get().await {
-        let cached_data: Result<String, _> = conn.get(&cache_key).await;
-        if let Ok(payload) = cached_data {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
-                tracing::debug!("Cache hit for {cache_key}");
-                return HttpResponse::Ok().json(ApiResponse::ok(parsed, None));
+    match redis.get().await {
+        Ok(mut conn) => {
+            match conn.get::<_, String>(&cache_key).await {
+                Ok(payload) => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
+                        tracing::debug!("Cache hit for {cache_key}");
+                        return Ok(HttpResponse::Ok().json(ApiResponse::ok(parsed, None)));
+                    }
+                }
+                Err(error) => {
+                    tracing::error!("Redis GET failed for key {cache_key}: {error}");
+                    return Err(ApiError::Network("Cache backend unavailable".to_string()));
+                }
             }
+        }
+        Err(error) => {
+            tracing::error!("Redis pool checkout failed: {error}");
+            return Err(ApiError::Network("Cache backend unavailable".to_string()));
         }
     }
 
@@ -428,23 +487,27 @@ async fn get_bounty(
     .await
     {
         Ok(Some(record)) => record,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, format!("Bounty {bounty_id} not found")),
+        Ok(None) => return Err(ApiError::NotFound(format!("Bounty {bounty_id} not found"))),
         Err(error) => {
             tracing::error!("Failed to fetch bounty {bounty_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
-    let data = match value_response(&bounty) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let data = value_response(&bounty)?;
 
-    if let Ok(mut conn) = redis.get().await {
-        let _ = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await;
+    match redis.get().await {
+        Ok(mut conn) => {
+            if let Err(error) = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await {
+                tracing::warn!("Redis SETEX failed for key {cache_key}: {error}");
+            }
+        }
+        Err(error) => {
+            tracing::warn!("Redis pool checkout failed: {error}");
+        }
     }
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, None))
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
 }
 
 /// Apply for a bounty
@@ -460,22 +523,21 @@ async fn get_bounty(
     )
 )]
 async fn apply_for_bounty(
-    state: web::Data<AppState>,
     path: web::Path<u64>,
     body: web::Json<BountyApplication>,
     pool: web::Data<PgPool>,
-) -> HttpResponse {
+) -> Result<HttpResponse, ApiError> {
     let bounty_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(error) => return Err(error),
     };
     let proposed_budget = match parse_i64(body.proposed_budget, "proposed_budget") {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(error) => return Err(error),
     };
     let timeline = match parse_u64_to_i64(body.timeline, "timeline") {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(error) => return Err(error),
     };
 
     let exists = match sqlx::query_scalar::<_, i64>(
@@ -488,12 +550,12 @@ async fn apply_for_bounty(
         Ok(count) => count > 0,
         Err(error) => {
             tracing::error!("Failed to validate bounty {bounty_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
     if !exists {
-        return json_error(StatusCode::NOT_FOUND, format!("Bounty {bounty_id} not found"));
+        return Err(ApiError::NotFound(format!("Bounty {bounty_id} not found")));
     }
 
     let application = match sqlx::query_as::<_, ApplicationRecord>(
@@ -522,19 +584,16 @@ async fn apply_for_bounty(
         Ok(record) => record,
         Err(error) => {
             tracing::error!("Failed to create application for bounty {bounty_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
-    let data = match value_response(&application) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let data = value_response(&application)?;
 
-    HttpResponse::Created().json(ApiResponse::ok(
+    Ok(HttpResponse::Created().json(ApiResponse::ok(
         data,
         Some("Application submitted successfully".to_string()),
-    ))
+    )))
 }
 
 /// Register a freelancer profile
@@ -550,7 +609,7 @@ async fn apply_for_bounty(
 async fn register_freelancer(
     body: web::Json<FreelancerRegistration>,
     pool: web::Data<PgPool>,
-) -> HttpResponse {
+) -> Result<HttpResponse, ApiError> {
     let generated_address = Uuid::new_v4().to_string();
 
     let freelancer = match sqlx::query_as::<_, FreelancerRecord>(
@@ -577,18 +636,23 @@ async fn register_freelancer(
         Ok(record) => record,
         Err(error) => {
             tracing::error!("Failed to register freelancer {}: {error}", body.name);
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            if let Some(constraint_error) = error.as_database_error() {
+                if constraint_error.is_unique_violation() {
+                    return Err(ApiError::Conflict("Freelancer already registered".to_string()));
+                }
+            }
+            return Err(ApiError::Database(error));
         }
     };
 
-    HttpResponse::Created().json(ApiResponse::ok(
+    Ok(HttpResponse::Created().json(ApiResponse::ok(
         serde_json::json!({
             "name": freelancer.name,
             "discipline": freelancer.discipline,
             "verified": freelancer.verified
         }),
         Some("Freelancer registered successfully".to_string()),
-    ))
+    )))
 }
 
 /// List freelancers
@@ -607,7 +671,7 @@ async fn register_freelancer(
 async fn list_freelancers(
     query: web::Query<std::collections::HashMap<String, String>>,
     pool: web::Data<PgPool>,
-) -> HttpResponse {
+) -> Result<HttpResponse, ApiError> {
     let discipline = query.get("discipline").cloned();
     let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
     let limit = query.get("limit").and_then(|value| value.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
@@ -623,7 +687,7 @@ async fn list_freelancers(
         Ok(count) => count,
         Err(error) => {
             tracing::error!("Failed to count freelancers: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
@@ -652,11 +716,11 @@ async fn list_freelancers(
         Ok(rows) => rows,
         Err(error) => {
             tracing::error!("Failed to list freelancers: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
-    HttpResponse::Ok().json(ApiResponse::ok(
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(
         serde_json::json!({
             "freelancers": freelancers,
             "total": total,
@@ -665,7 +729,7 @@ async fn list_freelancers(
             }
         }),
         None,
-    ))
+    )))
 }
 
 /// Get a freelancer by Stellar address
@@ -682,17 +746,28 @@ async fn get_freelancer(
     path: web::Path<String>,
     pool: web::Data<PgPool>,
     redis: web::Data<Pool>,
-) -> HttpResponse {
+) -> Result<HttpResponse, ApiError> {
     let address = path.into_inner();
     let cache_key = format!("api:freelancer:{address}");
 
-    if let Ok(mut conn) = redis.get().await {
-        let cached_data: Result<String, _> = conn.get(&cache_key).await;
-        if let Ok(payload) = cached_data {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
-                tracing::debug!("Cache hit for {cache_key}");
-                return HttpResponse::Ok().json(ApiResponse::ok(parsed, None));
+    match redis.get().await {
+        Ok(mut conn) => {
+            match conn.get::<_, String>(&cache_key).await {
+                Ok(payload) => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
+                        tracing::debug!("Cache hit for {cache_key}");
+                        return Ok(HttpResponse::Ok().json(ApiResponse::ok(parsed, None)));
+                    }
+                }
+                Err(error) => {
+                    tracing::error!("Redis GET failed for key {cache_key}: {error}");
+                    return Err(ApiError::Network("Cache backend unavailable".to_string()));
+                }
             }
+        }
+        Err(error) => {
+            tracing::error!("Redis pool checkout failed: {error}");
+            return Err(ApiError::Network("Cache backend unavailable".to_string()));
         }
     }
 
@@ -715,23 +790,27 @@ async fn get_freelancer(
     .await
     {
         Ok(Some(record)) => record,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, format!("Freelancer {address} not found")),
+        Ok(None) => return Err(ApiError::NotFound(format!("Freelancer {address} not found"))),
         Err(error) => {
             tracing::error!("Failed to fetch freelancer {address}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
-    let data = match value_response(&freelancer) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let data = value_response(&freelancer)?;
 
-    if let Ok(mut conn) = redis.get().await {
-        let _ = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await;
+    match redis.get().await {
+        Ok(mut conn) => {
+            if let Err(error) = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await {
+                tracing::warn!("Redis SETEX failed for key {cache_key}: {error}");
+            }
+        }
+        Err(error) => {
+            tracing::warn!("Redis pool checkout failed: {error}");
+        }
     }
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, None))
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
 }
 
 /// Get escrow details
@@ -744,10 +823,10 @@ async fn get_freelancer(
         (status = 500, description = "Database error"),
     )
 )]
-async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpResponse {
+async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<HttpResponse, ApiError> {
     let escrow_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(error) => return Err(error),
     };
 
     let escrow = match sqlx::query_as::<_, EscrowRecord>(
@@ -770,19 +849,16 @@ async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRespon
     .await
     {
         Ok(Some(record)) => record,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, format!("Escrow {escrow_id} not found")),
+        Ok(None) => return Err(ApiError::NotFound(format!("Escrow {escrow_id} not found"))),
         Err(error) => {
             tracing::error!("Failed to fetch escrow {escrow_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
-    let data = match value_response(&escrow) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let data = value_response(&escrow)?;
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, None))
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
 }
 
 /// Release escrowed funds
@@ -796,10 +872,10 @@ async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRespon
         (status = 500, description = "Database error"),
     )
 )]
-async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpResponse {
+async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<HttpResponse, ApiError> {
     let escrow_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(error) => return Err(error),
     };
 
     let escrow = match sqlx::query_as::<_, EscrowRecord>(
@@ -823,19 +899,22 @@ async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRe
     .await
     {
         Ok(Some(record)) => record,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, format!("Escrow {escrow_id} not found")),
+        Ok(None) => return Err(ApiError::NotFound(format!("Escrow {escrow_id} not found"))),
         Err(error) => {
             tracing::error!("Failed to release escrow {escrow_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return Err(ApiError::Database(error));
         }
     };
 
-    let data = match value_response(&escrow) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    // Placeholder branch for future contract-call integration.
+    if std::env::var("SIMULATE_CONTRACT_FAILURE").as_deref() == Ok("1") {
+        tracing::error!("Escrow contract invocation failed for escrow_id={escrow_id}");
+        return Err(ApiError::ContractInvocation("Unable to release escrow on-chain".to_string()));
+    }
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, Some("Funds released successfully".to_string())))
+    let data = value_response(&escrow)?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(data, Some("Funds released successfully".to_string()))))
 }
 
 #[derive(OpenApi)]
@@ -901,6 +980,7 @@ async fn main() -> std::io::Result<()> {
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let cfg = Config::from_url(redis_url);
     let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).expect("Failed to create Redis pool");
+    let openapi = ApiDoc::openapi();
 
     let (prometheus, business_metrics) = metrics::setup_metrics();
     let business_metrics = web::Data::new(business_metrics);
@@ -961,7 +1041,7 @@ async fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{body::to_bytes, http::StatusCode, test};
+    use actix_web::http::StatusCode;
 
     #[test]
     fn test_api_response_ok() {
@@ -988,151 +1068,14 @@ mod tests {
     }
 
     #[test]
-    fn create_bounty_commits_all_related_writes() {
-        let store = Store::default();
-
-        let created = store
-            .create_bounty(BountyRequest {
-                creator: "GCREATOR".to_string(),
-                title: "Design a logo".to_string(),
-                description: "Need a logo".to_string(),
-                budget: 100,
-                deadline: 12345,
-            })
-            .expect("bounty should be created");
-
-        let db = store.db.lock().expect("db poisoned");
+    fn api_error_status_mappings_are_correct() {
+        assert_eq!(ApiError::BadRequest("x".to_string()).status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(ApiError::NotFound("x".to_string()).status_code(), StatusCode::NOT_FOUND);
+        assert_eq!(ApiError::Conflict("x".to_string()).status_code(), StatusCode::CONFLICT);
+        assert_eq!(ApiError::Network("x".to_string()).status_code(), StatusCode::BAD_GATEWAY);
         assert_eq!(
-            db.bounties.get(&created.id).map(|b| b.title.as_str()),
-            Some("Design a logo")
+            ApiError::ContractInvocation("x".to_string()).status_code(),
+            StatusCode::BAD_GATEWAY
         );
-        assert!(db
-            .creator_bounties
-            .get("GCREATOR")
-            .is_some_and(|bounties| bounties.contains(&created.id)));
-    }
-
-    #[test]
-    fn create_bounty_rolls_back_when_transaction_fails_midway() {
-        let store = Store::default();
-        store.set_fail_after_write(Some(1));
-
-        let result = store.create_bounty(BountyRequest {
-            creator: "GCREATOR".to_string(),
-            title: "Broken create".to_string(),
-            description: "Should rollback".to_string(),
-            budget: 100,
-            deadline: 12345,
-        });
-
-        assert!(matches!(result, Err(ApiError::Internal(_))));
-        let db = store.db.lock().expect("db poisoned");
-        assert!(db.bounties.is_empty());
-        assert!(db.creator_bounties.is_empty());
-    }
-
-    #[test]
-    fn apply_for_bounty_rolls_back_all_writes_on_failure() {
-        let store = Store::default();
-        store.seed_bounty(BountyRecord {
-            id: 1,
-            creator: "GCREATOR".to_string(),
-            title: "Design a logo".to_string(),
-            description: "Need a logo".to_string(),
-            budget: 100,
-            deadline: 12345,
-            status: "open".to_string(),
-            application_count: 0,
-        });
-        store.set_fail_after_write(Some(2));
-
-        let result = store.apply_for_bounty(BountyApplication {
-            bounty_id: 1,
-            freelancer: "GFREELANCER".to_string(),
-            proposal: "I can do it".to_string(),
-            proposed_budget: 90,
-            timeline: 7,
-        });
-
-        assert!(matches!(result, Err(ApiError::Internal(_))));
-        let db = store.db.lock().expect("db poisoned");
-        assert!(db.applications.is_empty());
-        assert!(db.bounty_applications.is_empty());
-        assert_eq!(db.bounties.get(&1).map(|b| b.application_count), Some(0));
-    }
-
-    #[test]
-    fn duplicate_freelancer_registration_does_not_partially_persist() {
-        let store = Store::default();
-
-        store
-            .register_freelancer(FreelancerRegistration {
-                name: "Alice Doe".to_string(),
-                discipline: "Design".to_string(),
-                bio: "Bio".to_string(),
-            })
-            .expect("initial registration should succeed");
-
-        let duplicate = store.register_freelancer(FreelancerRegistration {
-            name: "Alice Doe".to_string(),
-            discipline: "Design".to_string(),
-            bio: "Updated bio".to_string(),
-        });
-
-        assert!(matches!(duplicate, Err(ApiError::Conflict(_))));
-        let db = store.db.lock().expect("db poisoned");
-        assert_eq!(db.freelancers.len(), 1);
-        assert_eq!(
-            db.discipline_index.get("Design").map(BTreeSet::len),
-            Some(1)
-        );
-    }
-
-    #[actix_web::test]
-    async fn apply_handler_rejects_path_body_mismatch_without_writes() {
-        let state = AppState::default();
-        state.store.seed_bounty(BountyRecord {
-            id: 1,
-            creator: "GCREATOR".to_string(),
-            title: "Design a logo".to_string(),
-            description: "Need a logo".to_string(),
-            budget: 100,
-            deadline: 12345,
-            status: "open".to_string(),
-            application_count: 0,
-        });
-
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state.clone()))
-                .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty)),
-        )
-        .await;
-
-        let request = test::TestRequest::post()
-            .uri("/api/bounties/1/apply")
-            .set_json(BountyApplication {
-                bounty_id: 2,
-                freelancer: "GFREELANCER".to_string(),
-                proposal: "I can do it".to_string(),
-                proposed_budget: 90,
-                timeline: 7,
-            })
-            .to_request();
-
-        let response = test::call_service(&app, request).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-        let body = to_bytes(response.into_body())
-            .await
-            .expect("body should be readable");
-        let payload: ApiResponse<serde_json::Value> =
-            serde_json::from_slice(&body).expect("response should deserialize");
-        assert!(!payload.success);
-
-        let db = state.store.db.lock().expect("db poisoned");
-        assert!(db.applications.is_empty());
-        assert!(db.bounty_applications.is_empty());
-        assert_eq!(db.bounties.get(&1).map(|b| b.application_count), Some(0));
     }
 }

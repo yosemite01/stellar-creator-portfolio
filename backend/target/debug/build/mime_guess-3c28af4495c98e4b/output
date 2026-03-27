@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/workspaces/stellar-creator-portfolio/backend/target/debug/build/mime_guess-3c28af4495c98e4b/out/mime_types_generated.rs
