@@ -115,8 +115,9 @@ export async function POST(request: NextRequest) {
 
   const { application } = result
 
-  pushNotification({
+  await pushNotification({
     userId: session.user.id,
+    category: 'application',
     title: 'Application submitted',
     body: `Your proposal for "${bounty.title}" was sent to the client.`,
     applicationId: application.id,
@@ -124,8 +125,9 @@ export async function POST(request: NextRequest) {
   })
 
   if (bounty.ownerUserId) {
-    pushNotification({
+    await pushNotification({
       userId: bounty.ownerUserId,
+      category: 'application',
       title: 'New bounty application',
       body: `${application.applicantName} applied to "${bounty.title}".`,
       applicationId: application.id,
@@ -142,6 +144,7 @@ export async function POST(request: NextRequest) {
           to: session.user.email,
           name: session.user.name || 'there',
           bountyTitle: bounty.title,
+          userId: session.user.id,
         })
       }
     } catch (e) {
@@ -165,6 +168,7 @@ export async function POST(request: NextRequest) {
           bountyTitle: bounty.title,
           applicantName: application.applicantName,
           bountyId: bounty.id,
+          userId: bounty.ownerUserId || '',
         })
       }
     } catch (e) {

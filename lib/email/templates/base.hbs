@@ -35,7 +35,13 @@
         <a href="{{appUrl}}/about">About</a> &nbsp;·&nbsp;
         <a href="{{appUrl}}/auth/login">Sign In</a>
       </p>
-      <p class="small">You received this email because you have an account on Stellar Creators.</p>
+      <p class="small">
+        You received this email because you have an account on Stellar Creators.
+        {{#if unsubscribeUrl}}
+        <br />
+        <a href="{{unsubscribeUrl}}">Unsubscribe from these notifications</a>
+        {{/if}}
+      </p>
     </div>
   </div>
 </body>

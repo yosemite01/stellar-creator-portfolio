@@ -17,12 +17,12 @@ model Account {
   type              String
   provider          String
   providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
+  refresh_token     String?
+  access_token      String?
   expires_at        Int?
   token_type        String?
   scope             String?
-  id_token          String? @db.Text
+  id_token          String?
   session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -62,6 +62,7 @@ model User {
   clientProfile  ClientProfile?
   bounties       Bounty[]
   applications   BountyApplication[]
+  notificationPreferences NotificationPreference[]
 
   @@index([email])
 }
@@ -94,7 +95,7 @@ model CreatorProfile {
   bio         String?
   avatar      String?
   discipline  String?
-  skills      String[]
+  skills      String? // Changed from String[] for SQLite local dev
   portfolio   Json?
   rating      Float    @default(0)
   completedProjects Int @default(0)
@@ -130,7 +131,7 @@ model Bounty {
   deadline    DateTime
   status      BountyStatus @default(OPEN)
   category    String?
-  tags        String[]
+  tags        String? // Changed from String[] for SQLite local dev
   applications BountyApplication[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -180,7 +181,7 @@ model Review {
   reviewerName      String
   rating            Int          // 1-5
   title             String
-  body              String       @db.Text
+  body              String      
   isVerifiedPurchase Boolean     @default(false)
   helpfulCount      Int          @default(0)
   notHelpfulCount   Int          @default(0)
@@ -207,4 +208,18 @@ enum ReviewStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+model NotificationPreference {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category      String   // e.g., 'bounty_update', 'application', 'marketing', 'system'
+  emailEnabled  Boolean  @default(true)
+  inAppEnabled  Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, category])
+  @@index([userId])
 }

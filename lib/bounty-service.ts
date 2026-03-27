@@ -1,4 +1,7 @@
 import { getBountyById, type Bounty } from '@/lib/creators-data'
+import { PrismaClient } from '@prisma/client'
+
+const prisma = new PrismaClient()
 
 export type ApplicationStatus = 'pending' | 'accepted' | 'rejected'
 
@@ -48,6 +51,7 @@ export interface BountyNotificationRecord {
   read: boolean
   applicationId?: string
   bountyId?: string
+  category: string
   createdAt: string
 }
 
@@ -282,7 +286,27 @@ export function listThreadMessages(applicationId: string): ApplicationThreadMess
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
 }
 
-export function pushNotification(n: Omit<BountyNotificationRecord, 'id' | 'createdAt' | 'read'>): BountyNotificationRecord {
+export async function pushNotification(
+  n: Omit<BountyNotificationRecord, 'id' | 'createdAt' | 'read'>,
+): Promise<BountyNotificationRecord | null> {
+  const { userId, category } = n
+
+  // Check user preference
+  try {
+    const pref = await prisma.notificationPreference.findUnique({
+      where: {
+        userId_category: { userId, category },
+      },
+    })
+
+    if (pref && !pref.inAppEnabled) {
+      return null
+    }
+  } catch (error) {
+    console.error('[pushNotification] Error checking preferences:', error)
+    // Continue by default if DB check fails
+  }
+
   const record: BountyNotificationRecord = {
     ...n,
     id: crypto.randomUUID(),

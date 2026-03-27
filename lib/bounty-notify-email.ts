@@ -15,12 +15,15 @@ export async function sendApplicantReceivedEmail(params: {
   to: string
   name: string
   bountyTitle: string
+  userId: string
 }): Promise<void> {
   const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
   await sendEmail({
     to: params.to,
     subject: `Application received — ${params.bountyTitle}`,
     template: 'bounty-notification',
+    userId: params.userId,
+    category: 'application',
     variables: {
       name: params.name,
       headline: 'Your proposal was submitted',
@@ -38,12 +41,15 @@ export async function sendClientNewApplicationEmail(params: {
   bountyTitle: string
   applicantName: string
   bountyId: string
+  userId: string
 }): Promise<void> {
   const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
   await sendEmail({
     to: params.to,
     subject: `New application for "${params.bountyTitle}"`,
     template: 'bounty-notification',
+    userId: params.userId,
+    category: 'application',
     variables: {
       name: params.name,
       headline: 'Someone applied to your bounty',
@@ -60,6 +66,7 @@ export async function sendApplicantStatusEmail(params: {
   name: string
   bountyTitle: string
   status: 'accepted' | 'rejected'
+  userId: string
 }): Promise<void> {
   const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
   const accepted = params.status === 'accepted'
@@ -69,6 +76,8 @@ export async function sendApplicantStatusEmail(params: {
       ? `Accepted — ${params.bountyTitle}`
       : `Update on your application — ${params.bountyTitle}`,
     template: 'bounty-notification',
+    userId: params.userId,
+    category: 'application',
     variables: {
       name: params.name,
       headline: accepted ? 'Your application was accepted' : 'Your application was not selected',
