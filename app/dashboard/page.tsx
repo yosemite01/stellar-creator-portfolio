@@ -232,6 +232,25 @@ export default function DashboardPage() {
               </Link>
             </CardContent>
           </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <DollarSign className="h-5 w-5" />
+                Payments & escrow
+              </CardTitle>
+              <CardDescription>
+                Fund bounties, subscriptions, and manage escrow receipts
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link href="/dashboard/payments">
+                <Button variant="outline" className="w-full">
+                  Open payments
+                </Button>
+              </Link>
+            </CardContent>
+          </Card>
         </div>
       </main>
     </div>
