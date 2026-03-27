@@ -1,5 +1,5 @@
 use actix_web::{middleware, web, App, HttpResponse, HttpServer};
-use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
+use deadpool_redis::{redis::AsyncCommands, Config as RedisConfig, Pool as RedisPool, Runtime};
 use serde::{Deserialize, Serialize};
 mod metrics;
 
@@ -373,8 +373,7 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
 #[utoipa::path(
     get, path = "/api/bounties",
     params(
-        ("page" = Option<u32>, Query, description = "Page number (default 1)"),
-        ("limit" = Option<u32>, Query, description = "Items per page (default 10)"),
+        PaginationParams,
         ("status" = Option<String>, Query, description = "Filter by status: open | in-progress | completed"),
     ),
     responses(
@@ -714,9 +713,8 @@ async fn register_freelancer(
 #[utoipa::path(
     get, path = "/api/freelancers",
     params(
+        PaginationParams,
         ("discipline" = Option<String>, Query, description = "Filter by discipline"),
-        ("page" = Option<u32>, Query, description = "Page number"),
-        ("limit" = Option<u32>, Query, description = "Items per page"),
     ),
     responses(
         (status = 200, description = "Paginated list of freelancers"),
@@ -1079,7 +1077,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Connected to database");
 
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    let cfg = Config::from_url(redis_url);
+    let cfg = RedisConfig::from_url(redis_url);
     let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).expect("Failed to create Redis pool");
     let openapi = ApiDoc::openapi();
 
