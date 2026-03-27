@@ -2,7 +2,7 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 #[contracttype]
 pub enum BountyStatus {
     Open = 0,
@@ -10,6 +10,7 @@ pub enum BountyStatus {
     Completed = 2,
     Disputed = 3,
     Cancelled = 4,
+    PendingCompletion = 5,
 }
 
 #[contracttype]
@@ -171,6 +172,33 @@ impl BountyContract {
         true
     }
 
+    /// Called by the selected freelancer to signal work is done.
+    /// Transitions the bounty from InProgress -> PendingCompletion.
+    pub fn submit_completion(env: Env, bounty_id: u64) -> bool {
+        let mut bounty: Bounty = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Bounty(bounty_id))
+            .expect("Bounty not found");
+
+        assert!(bounty.status == BountyStatus::InProgress, "Bounty not in progress");
+
+        let freelancer: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SelectedFreelancer(bounty_id))
+            .expect("No freelancer selected");
+
+        freelancer.require_auth();
+
+        bounty.status = BountyStatus::PendingCompletion;
+        env.storage().persistent().set(&DataKey::Bounty(bounty_id), &bounty);
+
+        true
+    }
+
+    /// Called by the bounty creator to approve the freelancer's completion submission.
+    /// Transitions the bounty from PendingCompletion -> Completed.
     pub fn complete_bounty(env: Env, bounty_id: u64) -> bool {
         let mut bounty: Bounty = env
             .storage()
@@ -182,6 +210,8 @@ impl BountyContract {
         assert!(
             bounty.status == BountyStatus::InProgress,
             "Bounty not in progress"
+            bounty.status == BountyStatus::PendingCompletion,
+            "Bounty not pending completion"
         );
 
         // Verify work was submitted before allowing completion
@@ -294,6 +324,19 @@ mod tests {
     }
 
     #[test]
+    fn test_completion_workflow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(BountyContract, ());
+        let client = BountyContractClient::new(&env, &contract_id);
+
+        let creator = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+
+        let bounty_id = client.create_bounty(
+            &creator,
+            &String::from_str(&env, "Test Bounty"),
+            &String::from_str(&env, "Test Description"),
     fn test_submit_work_and_complete() {
         let env = Env::default();
         let contract =
@@ -311,6 +354,10 @@ mod tests {
             &100u64,
         );
 
+        let app_id = client.apply_for_bounty(
+            &bounty_id,
+            &freelancer,
+            &String::from_str(&env, "I can do this!"),
         // Apply for bounty
         let app_id = contract.apply_for_bounty(
             &bounty_id,
@@ -320,6 +367,19 @@ mod tests {
             &30u64,
         );
 
+        client.select_freelancer(&bounty_id, &app_id);
+
+        // Freelancer submits completion
+        let result = client.submit_completion(&bounty_id);
+        assert!(result);
+        let bounty = client.get_bounty(&bounty_id);
+        assert_eq!(bounty.status, BountyStatus::PendingCompletion);
+
+        // Creator approves completion
+        let result = client.complete_bounty(&bounty_id);
+        assert!(result);
+        let bounty = client.get_bounty(&bounty_id);
+        assert_eq!(bounty.status, BountyStatus::Completed);
         // Select freelancer
         contract.select_freelancer(&bounty_id, &app_id);
 

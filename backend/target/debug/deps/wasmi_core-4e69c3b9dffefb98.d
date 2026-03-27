@@ -1,0 +1,11 @@
+/home/jaja/Desktop/drips/stellar-creator-portfolio/backend/target/debug/deps/wasmi_core-4e69c3b9dffefb98.d: /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/lib.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/host_error.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/nan_preserving_float.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/trap.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/units.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/untyped.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/value.rs
+
+/home/jaja/Desktop/drips/stellar-creator-portfolio/backend/target/debug/deps/libwasmi_core-4e69c3b9dffefb98.rmeta: /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/lib.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/host_error.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/nan_preserving_float.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/trap.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/units.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/untyped.rs /home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/value.rs
+
+/home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/lib.rs:
+/home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/host_error.rs:
+/home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/nan_preserving_float.rs:
+/home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/trap.rs:
+/home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/units.rs:
+/home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/untyped.rs:
+/home/jaja/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/src/value.rs:

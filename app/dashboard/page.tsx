@@ -192,6 +192,48 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
+          {(userRole === 'CREATOR' || userRole === 'ADMIN') && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FileText className="h-5 w-5" />
+                  My applications
+                </CardTitle>
+                <CardDescription>
+                  Track proposals, timelines, and client messages
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Link href="/dashboard/applications">
+                  <Button variant="outline" className="w-full">
+                    Open applications
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
+          )}
+
+          {(userRole === 'CLIENT' || userRole === 'ADMIN') && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5" />
+                  Bounty applications
+                </CardTitle>
+                <CardDescription>
+                  Review and accept proposals for your roles
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Link href="/dashboard/bounties">
+                  <Button variant="outline" className="w-full">
+                    Manage applications
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Find Talent Card (for Clients) */}
           {(userRole === 'CLIENT' || userRole === 'ADMIN') && (
             <Card>
@@ -228,6 +270,25 @@ export default function DashboardPage() {
               <Link href="/dashboard/analytics">
                 <Button variant="outline" className="w-full">
                   View Analytics
+                </Button>
+              </Link>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <DollarSign className="h-5 w-5" />
+                Payments & escrow
+              </CardTitle>
+              <CardDescription>
+                Fund bounties, subscriptions, and manage escrow receipts
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link href="/dashboard/payments">
+                <Button variant="outline" className="w-full">
+                  Open payments
                 </Button>
               </Link>
             </CardContent>

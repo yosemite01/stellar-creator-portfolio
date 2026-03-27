@@ -7,6 +7,7 @@ mod tokens;
 use actix_web::{middleware, web, App, HttpServer};
 use anyhow::Context;
 use sqlx::PgPool;
+use stellar_discovery::{create_discovery, ServiceInfo};
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
@@ -37,6 +38,18 @@ async fn main() -> anyhow::Result<()> {
     let port = config.port;
     let config_data = web::Data::new(config);
 
+    // ── Service Discovery ────────────────────────────────────────────────
+    let discovery = create_discovery()
+        .await
+        .context("failed to initialise service discovery")?;
+
+    let service_info = ServiceInfo::new("stellar-auth", &host, port);
+    let service_id = service_info.id.clone();
+
+    if let Err(e) = discovery.register(service_info).await {
+        tracing::warn!("Service discovery registration failed (non-fatal): {e}");
+    }
+
     tracing::info!("Starting stellar-auth on {}:{}", host, port);
 
     HttpServer::new(move || {
@@ -48,10 +61,23 @@ async fn main() -> anyhow::Result<()> {
             .route("/health", web::get().to(handlers::health))
             .route("/auth/token", web::post().to(handlers::mint_tokens))
             .route("/auth/refresh", web::post().to(handlers::refresh_tokens))
+            .route(
+                "/auth/oauth2/{provider}/authorize",
+                web::get().to(handlers::oauth2_authorize),
+            )
+            .route(
+                "/auth/oauth2/{provider}/token",
+                web::post().to(handlers::oauth2_token_exchange),
+            )
     })
     .bind((host.as_str(), port))?
     .run()
     .await?;
+
+    // Deregister from service discovery on shutdown
+    if let Err(e) = discovery.deregister(&service_id).await {
+        tracing::warn!("Service discovery deregistration failed: {e}");
+    }
 
     Ok(())
 }
