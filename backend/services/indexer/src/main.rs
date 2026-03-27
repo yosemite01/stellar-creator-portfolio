@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::time::Duration;
+use stellar_discovery::{create_discovery, ServiceInfo};
 use tracing::{error, info, warn};
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -30,16 +31,12 @@ struct Config {
 impl Config {
     fn from_env() -> Result<Self> {
         Ok(Self {
-            database_url: std::env::var("DATABASE_URL")
-                .context("DATABASE_URL not set")?,
+            database_url: std::env::var("DATABASE_URL").context("DATABASE_URL not set")?,
             rpc_url: std::env::var("STELLAR_RPC_URL")
                 .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".into()),
-            bounty_contract_id: std::env::var("BOUNTY_CONTRACT_ID")
-                .unwrap_or_default(),
-            freelancer_contract_id: std::env::var("FREELANCER_CONTRACT_ID")
-                .unwrap_or_default(),
-            escrow_contract_id: std::env::var("ESCROW_CONTRACT_ID")
-                .unwrap_or_default(),
+            bounty_contract_id: std::env::var("BOUNTY_CONTRACT_ID").unwrap_or_default(),
+            freelancer_contract_id: std::env::var("FREELANCER_CONTRACT_ID").unwrap_or_default(),
+            escrow_contract_id: std::env::var("ESCROW_CONTRACT_ID").unwrap_or_default(),
             ledger_chunk: std::env::var("INDEXER_LEDGER_CHUNK")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -204,8 +201,51 @@ fn topic_name(topics: &[String]) -> String {
     topics.first().cloned().unwrap_or_default()
 }
 
+const BOUNTY_EVENT_SIGNATURES: &[&str] = &[
+    "bounty_created",
+    "bounty_applied",
+    "bounty_selected",
+    "bounty_completed",
+    "bounty_cancelled",
+];
+
+const FREELANCER_EVENT_SIGNATURES: &[&str] = &["freelancer_registered", "freelancer_verified"];
+
+const ESCROW_EVENT_SIGNATURES: &[&str] =
+    &["escrow_deposited", "escrow_released", "escrow_refunded"];
+
+fn allowed_event_signatures<'a>(
+    cfg: &'a Config,
+    contract_id: &str,
+) -> Option<&'static [&'static str]> {
+    if contract_id == cfg.bounty_contract_id {
+        Some(BOUNTY_EVENT_SIGNATURES)
+    } else if contract_id == cfg.freelancer_contract_id {
+        Some(FREELANCER_EVENT_SIGNATURES)
+    } else if contract_id == cfg.escrow_contract_id {
+        Some(ESCROW_EVENT_SIGNATURES)
+    } else {
+        None
+    }
+}
+
+fn is_relevant_event(event: &SorobanEvent, cfg: &Config) -> bool {
+    let name = topic_name(&event.topic);
+    allowed_event_signatures(cfg, &event.contract_id)
+        .map(|signatures| signatures.contains(&name.as_str()))
+        .unwrap_or(false)
+}
+
 async fn process_event(pool: &PgPool, event: &SorobanEvent, cfg: &Config) -> Result<()> {
     let name = topic_name(&event.topic);
+
+    if !is_relevant_event(event, cfg) {
+        info!(
+            "Skipping irrelevant event {} for contract {} with topic {}",
+            event.id, event.contract_id, name
+        );
+        return Ok(());
+    }
 
     if event.contract_id == cfg.bounty_contract_id {
         handle_bounty_event(pool, event, &name).await?;
@@ -232,7 +272,7 @@ async fn handle_bounty_event(pool: &PgPool, event: &SorobanEvent, name: &str) ->
         serde_json::from_str(&event.value).unwrap_or(serde_json::Value::Null);
 
     match name {
-        n if n.contains("created") => {
+        "bounty_created" => {
             let id = value["id"].as_i64().unwrap_or(0);
             let title = value["title"].as_str().unwrap_or("").to_string();
             let budget = value["budget"].as_i64().unwrap_or(0);
@@ -250,7 +290,7 @@ async fn handle_bounty_event(pool: &PgPool, event: &SorobanEvent, name: &str) ->
             .await?;
             info!("Indexed bounty created: id={id} title={title}");
         }
-        n if n.contains("applied") => {
+        "bounty_applied" => {
             let bounty_id = value["bounty_id"].as_i64().unwrap_or(0);
             let app_id = value["application_id"].as_i64().unwrap_or(0);
             let freelancer = value["freelancer"].as_str().unwrap_or("").to_string();
@@ -268,34 +308,28 @@ async fn handle_bounty_event(pool: &PgPool, event: &SorobanEvent, name: &str) ->
             .await?;
             info!("Indexed application: bounty={bounty_id} app={app_id}");
         }
-        n if n.contains("selected") => {
+        "bounty_selected" => {
             let bounty_id = value["bounty_id"].as_i64().unwrap_or(0);
-            sqlx::query(
-                "UPDATE chain_bounties SET status = 'IN_PROGRESS' WHERE chain_id = $1",
-            )
-            .bind(bounty_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE chain_bounties SET status = 'IN_PROGRESS' WHERE chain_id = $1")
+                .bind(bounty_id)
+                .execute(pool)
+                .await?;
             info!("Bounty {bounty_id} moved to IN_PROGRESS");
         }
-        n if n.contains("completed") => {
+        "bounty_completed" => {
             let bounty_id = value["bounty_id"].as_i64().unwrap_or(0);
-            sqlx::query(
-                "UPDATE chain_bounties SET status = 'COMPLETED' WHERE chain_id = $1",
-            )
-            .bind(bounty_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE chain_bounties SET status = 'COMPLETED' WHERE chain_id = $1")
+                .bind(bounty_id)
+                .execute(pool)
+                .await?;
             info!("Bounty {bounty_id} completed");
         }
-        n if n.contains("cancelled") => {
+        "bounty_cancelled" => {
             let bounty_id = value["bounty_id"].as_i64().unwrap_or(0);
-            sqlx::query(
-                "UPDATE chain_bounties SET status = 'CANCELLED' WHERE chain_id = $1",
-            )
-            .bind(bounty_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE chain_bounties SET status = 'CANCELLED' WHERE chain_id = $1")
+                .bind(bounty_id)
+                .execute(pool)
+                .await?;
             info!("Bounty {bounty_id} cancelled");
         }
         _ => {
@@ -310,7 +344,7 @@ async fn handle_freelancer_event(pool: &PgPool, event: &SorobanEvent, name: &str
         serde_json::from_str(&event.value).unwrap_or(serde_json::Value::Null);
 
     match name {
-        n if n.contains("registered") => {
+        "freelancer_registered" => {
             let address = value["address"].as_str().unwrap_or("").to_string();
             let discipline = value["discipline"].as_str().unwrap_or("").to_string();
             sqlx::query(
@@ -326,14 +360,12 @@ async fn handle_freelancer_event(pool: &PgPool, event: &SorobanEvent, name: &str
             .await?;
             info!("Indexed freelancer registered: {address}");
         }
-        n if n.contains("verified") => {
+        "freelancer_verified" => {
             let address = value["address"].as_str().unwrap_or("").to_string();
-            sqlx::query(
-                "UPDATE chain_freelancers SET verified = true WHERE address = $1",
-            )
-            .bind(&address)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE chain_freelancers SET verified = true WHERE address = $1")
+                .bind(&address)
+                .execute(pool)
+                .await?;
             info!("Freelancer {address} verified");
         }
         _ => {
@@ -348,7 +380,7 @@ async fn handle_escrow_event(pool: &PgPool, event: &SorobanEvent, name: &str) ->
         serde_json::from_str(&event.value).unwrap_or(serde_json::Value::Null);
 
     match name {
-        n if n.contains("deposited") => {
+        "escrow_deposited" => {
             let id = value["id"].as_i64().unwrap_or(0);
             let amount = value["amount"].as_i64().unwrap_or(0);
             let payer = value["payer"].as_str().unwrap_or("").to_string();
@@ -368,24 +400,20 @@ async fn handle_escrow_event(pool: &PgPool, event: &SorobanEvent, name: &str) ->
             .await?;
             info!("Indexed escrow deposit: id={id} amount={amount}");
         }
-        n if n.contains("released") => {
+        "escrow_released" => {
             let id = value["id"].as_i64().unwrap_or(0);
-            sqlx::query(
-                "UPDATE chain_escrows SET status = 'RELEASED' WHERE chain_id = $1",
-            )
-            .bind(id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE chain_escrows SET status = 'RELEASED' WHERE chain_id = $1")
+                .bind(id)
+                .execute(pool)
+                .await?;
             info!("Escrow {id} released");
         }
-        n if n.contains("refunded") => {
+        "escrow_refunded" => {
             let id = value["id"].as_i64().unwrap_or(0);
-            sqlx::query(
-                "UPDATE chain_escrows SET status = 'REFUNDED' WHERE chain_id = $1",
-            )
-            .bind(id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE chain_escrows SET status = 'REFUNDED' WHERE chain_id = $1")
+                .bind(id)
+                .execute(pool)
+                .await?;
             info!("Escrow {id} refunded");
         }
         _ => {
@@ -485,8 +513,7 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "info,stellar_indexer=debug".into()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,stellar_indexer=debug".into()),
         )
         .init();
 
@@ -499,6 +526,25 @@ async fn main() -> Result<()> {
 
     ensure_cursor_table(&pool).await?;
     ensure_schema(&pool).await?;
+
+    // ── Service Discovery ────────────────────────────────────────────────
+    let discovery = create_discovery()
+        .await
+        .context("Failed to initialise service discovery")?;
+
+    let indexer_port: u16 = std::env::var("INDEXER_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9000);
+    let indexer_host = std::env::var("INDEXER_HOST")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    let service_info = ServiceInfo::new("stellar-indexer", &indexer_host, indexer_port)
+        .with_tags(vec!["daemon".to_string()]);
+
+    if let Err(e) = discovery.register(service_info).await {
+        warn!("Service discovery registration failed (non-fatal): {e}");
+    }
 
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -516,8 +562,10 @@ async fn main() -> Result<()> {
     .collect();
 
     if contract_ids.is_empty() {
-        warn!("No contract IDs configured — indexer will poll but skip processing. \
-               Set BOUNTY_CONTRACT_ID / FREELANCER_CONTRACT_ID / ESCROW_CONTRACT_ID.");
+        warn!(
+            "No contract IDs configured — indexer will poll but skip processing. \
+               Set BOUNTY_CONTRACT_ID / FREELANCER_CONTRACT_ID / ESCROW_CONTRACT_ID."
+        );
     }
 
     let mut cursor = load_cursor(&pool, "main").await?;
@@ -568,6 +616,18 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
 
+    fn test_config() -> Config {
+        Config {
+            database_url: "postgres://test".to_string(),
+            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            bounty_contract_id: "bounty-contract".to_string(),
+            freelancer_contract_id: "freelancer-contract".to_string(),
+            escrow_contract_id: "escrow-contract".to_string(),
+            ledger_chunk: 100,
+            poll_interval_secs: 6,
+        }
+    }
+
     #[test]
     fn topic_name_returns_first_element() {
         let topics = vec!["bounty_created".to_string(), "extra".to_string()];
@@ -587,5 +647,53 @@ mod tests {
         assert_eq!(cfg.poll_interval_secs, 6);
         assert_eq!(cfg.ledger_chunk, 100);
         assert!(cfg.rpc_url.contains("stellar.org"));
+    }
+
+    #[test]
+    fn relevant_event_matches_known_contract_and_signature() {
+        let cfg = test_config();
+        let event = SorobanEvent {
+            contract_id: cfg.bounty_contract_id.clone(),
+            id: "evt-1".to_string(),
+            ledger: 1,
+            ledger_closed_at: "2026-03-27T00:00:00Z".to_string(),
+            paging_token: "1".to_string(),
+            topic: vec!["bounty_created".to_string()],
+            value: "{}".to_string(),
+        };
+
+        assert!(is_relevant_event(&event, &cfg));
+    }
+
+    #[test]
+    fn relevant_event_rejects_unknown_signature_for_known_contract() {
+        let cfg = test_config();
+        let event = SorobanEvent {
+            contract_id: cfg.bounty_contract_id.clone(),
+            id: "evt-2".to_string(),
+            ledger: 1,
+            ledger_closed_at: "2026-03-27T00:00:00Z".to_string(),
+            paging_token: "1".to_string(),
+            topic: vec!["unrelated_event".to_string()],
+            value: "{}".to_string(),
+        };
+
+        assert!(!is_relevant_event(&event, &cfg));
+    }
+
+    #[test]
+    fn relevant_event_rejects_unknown_contract() {
+        let cfg = test_config();
+        let event = SorobanEvent {
+            contract_id: "other-contract".to_string(),
+            id: "evt-3".to_string(),
+            ledger: 1,
+            ledger_closed_at: "2026-03-27T00:00:00Z".to_string(),
+            paging_token: "1".to_string(),
+            topic: vec!["bounty_created".to_string()],
+            value: "{}".to_string(),
+        };
+
+        assert!(!is_relevant_event(&event, &cfg));
     }
 }

@@ -1,0 +1,8 @@
+OUT_DIR: /Users/mac/drips/stellar-creator-portfolio/backend/target/debug/build/utoipa-swagger-ui-42b21b03f3a2bdfa/out
+SWAGGER_UI_DOWNLOAD_URL: https://github.com/swagger-api/swagger-ui/archive/refs/tags/v5.17.12.zip
+start download to : "/Users/mac/drips/stellar-creator-portfolio/backend/target/debug/build/utoipa-swagger-ui-42b21b03f3a2bdfa/out/v5.17.12.zip"
+cargo:rerun-if-env-changed=SWAGGER_UI_DOWNLOAD_URL
+reqwest feature: Err(NotPresent)
+trying to download using `curl` system package
+zip_top_level_folder: "swagger-ui-5.17.12"
+SWAGGER_UI_OVERWRITE_FOLDER not found: "overwrite"

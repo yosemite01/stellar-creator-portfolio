@@ -82,11 +82,27 @@ export const userSchema = z.object({
 export const userUpdateSchema = userSchema.partial()
 
 export const applicationSchema = z.object({
-  bounty_id: z.string().uuid(),
-  creator_id: z.string().uuid(),
+  bounty_id: z.string().min(1).max(128),
+  creator_id: z.string().min(1).max(128),
   proposed_budget: z.number().positive(),
   timeline: z.number().int().positive(),
   proposal: z.string().min(1).max(5000),
+})
+
+/** Client-submitted body (applicant comes from session). */
+export const applicationSubmitSchema = z.object({
+  bounty_id: z.string().min(1).max(128),
+  proposed_budget: z.number().positive(),
+  timeline: z.number().int().positive().max(3650),
+  proposal: z.string().min(50).max(5000),
+})
+
+export const applicationStatusBodySchema = z.object({
+  status: z.enum(['accepted', 'rejected']),
+})
+
+export const bountyMessageBodySchema = z.object({
+  body: z.string().min(1).max(8000),
 })
 
 export const applicationUpdateSchema = z.object({
@@ -103,6 +119,9 @@ export type BountyUpdateInput = z.infer<typeof bountyUpdateSchema>
 export type UserInput = z.infer<typeof userSchema>
 export type UserUpdateInput = z.infer<typeof userUpdateSchema>
 export type ApplicationInput = z.infer<typeof applicationSchema>
+export type ApplicationSubmitInput = z.infer<typeof applicationSubmitSchema>
+export type ApplicationStatusBodyInput = z.infer<typeof applicationStatusBodySchema>
+export type BountyMessageBodyInput = z.infer<typeof bountyMessageBodySchema>
 export type ApplicationUpdateInput = z.infer<typeof applicationUpdateSchema>
 export type PaginationInput = z.infer<typeof paginationSchema>
 

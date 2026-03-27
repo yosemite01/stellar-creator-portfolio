@@ -13,7 +13,7 @@ import path from 'path';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type EmailTemplate = 'verify-email' | 'reset-password' | 'welcome';
+export type EmailTemplate = 'verify-email' | 'reset-password' | 'welcome' | 'bounty-notification';
 
 interface BaseTemplateVars {
   subject: string;
@@ -37,10 +37,20 @@ export interface WelcomeVars {
   isCreator?: boolean;
 }
 
+export interface BountyNotificationVars {
+  name: string;
+  headline: string;
+  bodyText: string;
+  actionUrl?: string;
+  actionLabel?: string;
+  footerNote?: string;
+}
+
 type TemplateVarsMap = {
   'verify-email': VerifyEmailVars;
   'reset-password': ResetPasswordVars;
   welcome: WelcomeVars;
+  'bounty-notification': BountyNotificationVars;
 };
 
 export interface SendEmailOptions<T extends EmailTemplate> {
