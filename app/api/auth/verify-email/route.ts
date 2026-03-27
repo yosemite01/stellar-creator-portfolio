@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 import { sendEmail } from '@/lib/email/mailer';
+import { serverConfig } from '@/lib/config';
 
 const prisma = new PrismaClient();
 
@@ -49,7 +50,7 @@ export async function GET(request: NextRequest) {
     });
 
     const { user } = verificationToken;
-    const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000';
+    const appUrl = serverConfig.auth.nextAuthUrl;
 
     // Send welcome email (fire-and-forget — don't block the response)
     sendEmail({

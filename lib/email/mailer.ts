@@ -10,6 +10,7 @@ import nodemailer, { type Transporter } from 'nodemailer';
 import Handlebars, { type TemplateDelegate } from 'handlebars';
 import fs from 'fs';
 import path from 'path';
+import { serverConfig } from '@/lib/config';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ function renderTemplate(template: EmailTemplate, variables: Record<string, unkno
   return baseTemplate({
     ...variables,
     content,
-    appUrl: process.env.NEXTAUTH_URL ?? 'http://localhost:3000',
+    appUrl: serverConfig.auth.nextAuthUrl,
     year: new Date().getFullYear(),
   });
 }
@@ -98,7 +99,7 @@ let _transporter: Transporter | null = null;
 function getTransporter(): Transporter {
   if (_transporter) return _transporter;
 
-  const emailServer = process.env.EMAIL_SERVER;
+  const { server: emailServer, devUser, devPass } = serverConfig.email;
 
   if (emailServer) {
     // Supports smtp://user:pass@host:port or smtps://...
@@ -110,8 +111,8 @@ function getTransporter(): Transporter {
       host: 'smtp.ethereal.email',
       port: 587,
       auth: {
-        user: process.env.EMAIL_DEV_USER ?? '',
-        pass: process.env.EMAIL_DEV_PASS ?? '',
+        user: devUser ?? '',
+        pass: devPass ?? '',
       },
     });
   }
@@ -155,14 +156,14 @@ export async function sendEmail<T extends EmailTemplate>(
   const transporter = getTransporter();
 
   const info = await transporter.sendMail({
-    from: process.env.EMAIL_FROM ?? '"Stellar Creators" <noreply@stellar-creators.com>',
+    from: serverConfig.email.from,
     to,
     subject,
     html,
   });
 
   // In development, log the Ethereal preview URL if available
-  if (process.env.NODE_ENV !== 'production') {
+  if (serverConfig.app.nodeEnv !== 'production') {
     const previewUrl = nodemailer.getTestMessageUrl(info);
     if (previewUrl) {
       console.log(`[mailer] Preview email at: ${previewUrl}`);

@@ -1,4 +1,5 @@
 import Stripe from 'stripe'
+import { serverConfig, clientConfig } from '@/lib/config'
 
 /**
  * Server-side Stripe client. Requires `STRIPE_SECRET_KEY`.
@@ -7,7 +8,7 @@ import Stripe from 'stripe'
 let stripeSingleton: Stripe | null = null
 
 export function getStripe(): Stripe {
-  const key = process.env.STRIPE_SECRET_KEY
+  const key = serverConfig.stripe.secretKey
   if (!key) {
     throw new Error('STRIPE_SECRET_KEY is not configured')
   }
@@ -18,11 +19,11 @@ export function getStripe(): Stripe {
 }
 
 export function isStripeConfigured(): boolean {
-  return Boolean(process.env.STRIPE_SECRET_KEY?.trim())
+  return Boolean(serverConfig.stripe.secretKey?.trim())
 }
 
 export function getStripePublishableKey(): string {
-  const k = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+  const k = clientConfig.stripe.publishableKey
   if (!k?.trim()) {
     throw new Error('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY is not configured')
   }
@@ -30,7 +31,7 @@ export function getStripePublishableKey(): string {
 }
 
 export function getStripeWebhookSecret(): string {
-  const s = process.env.STRIPE_WEBHOOK_SECRET
+  const s = serverConfig.stripe.webhookSecret
   if (!s?.trim()) {
     throw new Error('STRIPE_WEBHOOK_SECRET is not configured')
   }

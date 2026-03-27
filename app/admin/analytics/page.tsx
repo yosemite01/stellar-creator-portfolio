@@ -14,9 +14,11 @@ type TopItem = { label: string; value: number };
 
 export const dynamic = "force-dynamic";
 
-const SITE_ID = process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN || "example.com";
-const API_KEY = process.env.PLAUSIBLE_API_KEY;
-const ADMIN_TOKEN = process.env.ADMIN_DASHBOARD_TOKEN;
+import { clientConfig, serverConfig } from '@/lib/config';
+
+const SITE_ID = clientConfig.analytics.plausibleDomain;
+const API_KEY = serverConfig.analytics.plausibleApiKey;
+const ADMIN_TOKEN = serverConfig.analytics.adminDashboardToken;
 
 const heatmapTrackedPages = ["/", "/creators", "/bounties", "/search"];
 

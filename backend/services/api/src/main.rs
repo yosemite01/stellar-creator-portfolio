@@ -1,6 +1,7 @@
 use actix_web::{middleware, web, App, HttpResponse, HttpServer};
 use deadpool_redis::{redis::AsyncCommands, Config as RedisConfig, Pool as RedisPool, Runtime};
 use serde::{Deserialize, Serialize};
+mod config;
 mod metrics;
 
 use actix_cors::Cors;

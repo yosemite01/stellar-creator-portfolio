@@ -1,5 +1,6 @@
 import { sendEmail } from '@/lib/email/mailer'
 import { PrismaClient } from '@prisma/client'
+import { serverConfig } from '@/lib/config'
 
 const prisma = new PrismaClient()
 
@@ -16,7 +17,7 @@ export async function sendApplicantReceivedEmail(params: {
   name: string
   bountyTitle: string
 }): Promise<void> {
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   await sendEmail({
     to: params.to,
     subject: `Application received — ${params.bountyTitle}`,
@@ -39,7 +40,7 @@ export async function sendClientNewApplicationEmail(params: {
   applicantName: string
   bountyId: string
 }): Promise<void> {
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   await sendEmail({
     to: params.to,
     subject: `New application for "${params.bountyTitle}"`,
@@ -61,7 +62,7 @@ export async function sendApplicantStatusEmail(params: {
   bountyTitle: string
   status: 'accepted' | 'rejected'
 }): Promise<void> {
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   const accepted = params.status === 'accepted'
   await sendEmail({
     to: params.to,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { serverConfig } from '@/lib/config'
 import {
   validateRequest,
   formatZodErrors,
@@ -133,7 +134,7 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
 
   void (async () => {
     try {
@@ -155,8 +156,8 @@ export async function POST(request: NextRequest) {
         clientEmail = await getEmailForUserId(bounty.ownerUserId)
         clientName = clientEmail?.split('@')[0] ?? clientName
       }
-      if (!clientEmail && process.env.BOUNTY_NOTIFY_EMAIL) {
-        clientEmail = process.env.BOUNTY_NOTIFY_EMAIL
+      if (!clientEmail && serverConfig.notifications.bountyNotifyEmail) {
+        clientEmail = serverConfig.notifications.bountyNotifyEmail
       }
       if (clientEmail) {
         await sendClientNewApplicationEmail({
