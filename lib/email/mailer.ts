@@ -10,6 +10,10 @@ import nodemailer, { type Transporter } from 'nodemailer';
 import Handlebars, { type TemplateDelegate } from 'handlebars';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,6 +23,7 @@ interface BaseTemplateVars {
   subject: string;
   appUrl: string;
   year: number;
+  unsubscribeUrl?: string;
 }
 
 export interface VerifyEmailVars {
@@ -58,6 +63,8 @@ export interface SendEmailOptions<T extends EmailTemplate> {
   subject: string;
   template: T;
   variables: TemplateVarsMap[T];
+  userId?: string;
+  category?: string;
 }
 
 // ─── Template cache ───────────────────────────────────────────────────────────
@@ -145,11 +152,43 @@ export function renderEmail<T extends EmailTemplate>(
 export async function sendEmail<T extends EmailTemplate>(
   options: SendEmailOptions<T>
 ): Promise<void> {
-  const { to, subject, template, variables } = options;
+  const { to, subject, template, variables, userId, category } = options;
+
+  // Check user preference if userId and category are provided
+  if (userId && category) {
+    try {
+      const pref = await prisma.notificationPreference.findUnique({
+        where: {
+          userId_category: { userId, category },
+        },
+      });
+
+      if (pref && !pref.emailEnabled) {
+        console.log(`[mailer] Skipping email to ${to} (category ${category} disabled)`);
+        return;
+      }
+    } catch (error) {
+      console.error('[mailer] Error checking preferences:', error);
+    }
+  }
+
+  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000';
+  let unsubscribeUrl: string | undefined;
+
+  if (userId && category) {
+    const secret = process.env.NOTIFICATION_SECRET || 'default_secret';
+    const token = crypto
+      .createHmac('sha256', secret)
+      .update(`${userId}:${category}`)
+      .digest('hex');
+    
+    unsubscribeUrl = `${appUrl}/api/notifications/unsubscribe?userId=${userId}&category=${category}&token=${token}`;
+  }
 
   const html = renderTemplate(template, {
     ...(variables as unknown as Record<string, unknown>),
     subject,
+    unsubscribeUrl,
   });
 
   const transporter = getTransporter();

@@ -12,7 +12,8 @@ declare module 'next-auth' {
       email: string;
       name?: string | null;
       role: string;
-    } & Session['user'];
+      image?: string | null;
+    };
   }
 
   interface User {
@@ -76,7 +77,6 @@ export const authOptions: NextAuthOptions = {
   },
   pages: {
     signIn: '/auth/login',
-    signUp: '/auth/register',
   },
   callbacks: {
     async jwt({ token, user, trigger, session }) {
@@ -109,10 +109,3 @@ export const authOptions: NextAuthOptions = {
     },
   },
 };
-
-export const {
-  handlers: { GET, POST },
-  auth,
-  signIn,
-  signOut,
-} = NextAuth(authOptions);

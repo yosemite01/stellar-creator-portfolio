@@ -66,8 +66,9 @@ export async function PATCH(request: NextRequest, context: RouteParams) {
     return NextResponse.json({ error: result.error }, { status: 400 })
   }
 
-  pushNotification({
+  await pushNotification({
     userId: application.applicantId,
+    category: 'application',
     title: status === 'accepted' ? 'Application accepted' : 'Application update',
     body:
       status === 'accepted'
@@ -85,6 +86,7 @@ export async function PATCH(request: NextRequest, context: RouteParams) {
           name: application.applicantName,
           bountyTitle: bounty.title,
           status,
+          userId: application.applicantId,
         })
       }
     } catch (e) {
