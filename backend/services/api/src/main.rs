@@ -1,3 +1,5 @@
+mod metrics;
+
 use actix_cors::Cors;
 use actix_web::{http::StatusCode, middleware, web, App, HttpResponse, HttpServer};
 use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
@@ -805,17 +807,23 @@ async fn main() -> std::io::Result<()> {
     let cfg = Config::from_url(redis_url);
     let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).expect("Failed to create Redis pool");
 
+    let (prometheus, business_metrics) = metrics::setup_metrics();
+    let business_metrics = web::Data::new(business_metrics);
+
     tracing::info!("Starting Stellar API on {}:{}", host, port);
     tracing::info!(
         "Swagger UI available at http://{}:{}/swagger-ui/",
         host,
         port
     );
+    tracing::info!("Prometheus metrics available at http://{}:{}/metrics", host, port);
 
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(db_pool.clone()))
             .app_data(web::Data::new(redis_pool.clone()))
+            .app_data(business_metrics.clone())
+            .wrap(prometheus.clone())
             .wrap(Cors::permissive())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())

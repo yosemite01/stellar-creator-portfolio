@@ -29,3 +29,5 @@ redis.workspace = true
 deadpool-redis.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
+actix-web-prom.workspace = true
+prometheus.workspace = true

@@ -54,6 +54,10 @@ anyhow = "1.0"
 futures = "0.3"
 dotenvy = "0.15"
 
+# Metrics
+actix-web-prom = "0.9"
+prometheus = "0.13"
+
 # OpenAPI / Swagger
 utoipa = { version = "4", features = ["actix_extras"] }
 utoipa-swagger-ui = { version = "7", features = ["actix-web"] }
