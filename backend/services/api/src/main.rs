@@ -352,20 +352,57 @@ async fn shutdown_signal() {
     );
 }
 
-fn configure_api_routes(cfg: &mut web::ServiceConfig) {
-    cfg.route("/health", web::get().to(health))
-        .route("/api/bounties", web::post().to(create_bounty))
-        .route("/api/bounties", web::get().to(list_bounties))
-        .route("/api/bounties/{id}", web::get().to(get_bounty))
-        .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-        .route(
-            "/api/freelancers/register",
-            web::post().to(register_freelancer),
+fn configure_api_routes(cfg: &mut web::ServiceConfig, redis: deadpool_redis::Pool) {
+    // ── Rate limit tiers ─────────────────────────────────────────────────────
+    // Writes: 30 req / 60 s per IP
+    let write_rl = RateLimit::new(
+        redis.clone(),
+        RateLimitConfig::new("api_write", 30, 60),
+    );
+    // Reads: 120 req / 60 s per IP
+    let read_rl = RateLimit::new(
+        redis.clone(),
+        RateLimitConfig::new("api_read", 120, 60),
+    );
+    // Auth-adjacent / sensitive paths: 10 req / 60 s per IP
+    let strict_rl = RateLimit::new(
+        redis.clone(),
+        RateLimitConfig::new("api_strict", 10, 60),
+    );
+
+    cfg
+        // Health — no rate limit; monitoring tools poll this endpoint.
+        .route("/health", web::get().to(health))
+
+        // Write endpoints — tighter quota.
+        .service(
+            web::scope("")
+                .wrap(write_rl)
+                .route("/api/bounties", web::post().to(create_bounty))
+                .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route("/api/freelancers/register", web::post().to(register_freelancer))
+                .route("/api/escrow/{id}/release", web::post().to(release_escrow)),
         )
-        .route("/api/freelancers", web::get().to(list_freelancers))
-        .route("/api/freelancers/{address}", web::get().to(get_freelancer))
-        .route("/api/escrow/{id}", web::get().to(get_escrow))
-        .route("/api/escrow/{id}/release", web::post().to(release_escrow));
+
+        // Read endpoints — generous quota.
+        .service(
+            web::scope("")
+                .wrap(read_rl)
+                .route("/api/bounties", web::get().to(list_bounties))
+                .route("/api/bounties/{id}", web::get().to(get_bounty))
+                .route("/api/freelancers", web::get().to(list_freelancers))
+                .route("/api/freelancers/{address}", web::get().to(get_freelancer))
+                .route("/api/escrow/{id}", web::get().to(get_escrow)),
+        )
+
+        // Webhook management — strict quota to prevent enumeration.
+        .service(
+            web::scope("/api/webhooks")
+                .wrap(strict_rl)
+                .route("", web::post().to(webhooks::register_webhook))
+                .route("", web::get().to(webhooks::list_webhooks))
+                .route("/{id}", web::delete().to(webhooks::delete_webhook)),
+        );
 }
 
 fn build_http_server(
@@ -374,15 +411,17 @@ fn build_http_server(
     openapi: utoipa::openapi::OpenApi,
 ) -> std::io::Result<Server> {
     Ok(HttpServer::new(move || {
+        let redis = state.redis.clone();
         App::new()
             .app_data(web::Data::new(state.clone()))
+            .wrap(RequestId)
             .wrap(Cors::permissive())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
             )
-            .configure(configure_api_routes)
+            .configure(move |cfg| configure_api_routes(cfg, redis.clone()))
     })
     .shutdown_signal(shutdown_signal())
     .listen(listener)?
