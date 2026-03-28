@@ -27,3 +27,6 @@ dist/
 
 # TypeScript
 *.tsbuildinfo
+
+#Agents
+GEMINI.md
