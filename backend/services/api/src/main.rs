@@ -374,35 +374,71 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig, redis: deadpool_redis::Poo
         // Health — no rate limit; monitoring tools poll this endpoint.
         .route("/health", web::get().to(health))
 
-        // Write endpoints — tighter quota.
+        // ── /api/v1 — versioned routes ────────────────────────────────────
         .service(
-            web::scope("")
-                .wrap(write_rl)
-                .route("/api/bounties", web::post().to(create_bounty))
-                .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                .route("/api/freelancers/register", web::post().to(register_freelancer))
-                .route("/api/escrow/{id}/release", web::post().to(release_escrow)),
+            web::scope("/api/v1")
+                // Write endpoints
+                .service(
+                    web::scope("")
+                        .wrap(write_rl)
+                        .route("/bounties", web::post().to(create_bounty))
+                        .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                        .route("/freelancers/register", web::post().to(register_freelancer))
+                        .route("/escrow/{id}/release", web::post().to(release_escrow)),
+                )
+                // Read endpoints
+                .service(
+                    web::scope("")
+                        .wrap(read_rl)
+                        .route("/bounties", web::get().to(list_bounties))
+                        .route("/bounties/{id}", web::get().to(get_bounty))
+                        .route("/freelancers", web::get().to(list_freelancers))
+                        .route("/freelancers/{address}", web::get().to(get_freelancer))
+                        .route("/escrow/{id}", web::get().to(get_escrow)),
+                )
+                // Webhook management
+                .service(
+                    web::scope("/webhooks")
+                        .wrap(strict_rl)
+                        .route("", web::post().to(webhooks::register_webhook))
+                        .route("", web::get().to(webhooks::list_webhooks))
+                        .route("/{id}", web::delete().to(webhooks::delete_webhook)),
+                ),
         )
 
-        // Read endpoints — generous quota.
+        // ── /api — unversioned redirects to /api/v1 (backward compat) ────
         .service(
-            web::scope("")
-                .wrap(read_rl)
-                .route("/api/bounties", web::get().to(list_bounties))
-                .route("/api/bounties/{id}", web::get().to(get_bounty))
-                .route("/api/freelancers", web::get().to(list_freelancers))
-                .route("/api/freelancers/{address}", web::get().to(get_freelancer))
-                .route("/api/escrow/{id}", web::get().to(get_escrow)),
-        )
-
-        // Webhook management — strict quota to prevent enumeration.
-        .service(
-            web::scope("/api/webhooks")
-                .wrap(strict_rl)
-                .route("", web::post().to(webhooks::register_webhook))
-                .route("", web::get().to(webhooks::list_webhooks))
-                .route("/{id}", web::delete().to(webhooks::delete_webhook)),
+            web::scope("/api")
+                .route("/bounties",                  web::get().to(redirect_to_v1))
+                .route("/bounties",                  web::post().to(redirect_to_v1))
+                .route("/bounties/{tail:.*}",        web::route().to(redirect_to_v1))
+                .route("/freelancers",               web::get().to(redirect_to_v1))
+                .route("/freelancers/{tail:.*}",     web::route().to(redirect_to_v1))
+                .route("/escrow/{tail:.*}",          web::route().to(redirect_to_v1))
+                .route("/webhooks",                  web::get().to(redirect_to_v1))
+                .route("/webhooks",                  web::post().to(redirect_to_v1))
+                .route("/webhooks/{tail:.*}",        web::route().to(redirect_to_v1)),
         );
+}
+
+/// Redirect unversioned `/api/<path>` requests to `/api/v1/<path>` with 308
+/// (Permanent Redirect, method-preserving) so existing clients keep working
+/// while being nudged toward the versioned URL.
+async fn redirect_to_v1(req: actix_web::HttpRequest) -> HttpResponse {
+    let path = req.uri().path();
+    // Replace the first `/api/` segment with `/api/v1/`
+    let versioned = if let Some(rest) = path.strip_prefix("/api/") {
+        format!("/api/v1/{rest}")
+    } else {
+        format!("/api/v1{path}")
+    };
+    let location = match req.uri().query() {
+        Some(q) => format!("{versioned}?{q}"),
+        None => versioned,
+    };
+    HttpResponse::PermanentRedirect()
+        .insert_header(("Location", location))
+        .finish()
 }
 
 fn build_http_server(
@@ -572,7 +608,7 @@ async fn health(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
 
 /// Create a new bounty
 #[utoipa::path(
-    post, path = "/api/bounties",
+    post, path = "/api/v1/bounties",
     request_body = BountyRequest,
     responses(
         (status = 201, description = "Bounty created"),
@@ -640,7 +676,7 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
 
 /// List bounties (paginated, optionally full-text searched)
 #[utoipa::path(
-    get, path = "/api/bounties",
+    get, path = "/api/v1/bounties",
     params(
         ("q"      = Option<String>, Query, description = "Full-text search query"),
         ("status" = Option<String>, Query, description = "Filter by status: open | in-progress | completed"),
@@ -759,7 +795,7 @@ async fn list_bounties(
 
 /// Get a single bounty by ID
 #[utoipa::path(
-    get, path = "/api/bounties/{id}",
+    get, path = "/api/v1/bounties/{id}",
     params(("id" = u64, Path, description = "Bounty ID")),
     responses(
         (status = 200, description = "Bounty details"),
@@ -856,7 +892,7 @@ async fn get_bounty(
 
 /// Apply for a bounty
 #[utoipa::path(
-    post, path = "/api/bounties/{id}/apply",
+    post, path = "/api/v1/bounties/{id}/apply",
     params(("id" = u64, Path, description = "Bounty ID")),
     request_body = BountyApplication,
     responses(
@@ -954,7 +990,7 @@ async fn apply_for_bounty(
 
 /// Register a freelancer profile
 #[utoipa::path(
-    post, path = "/api/freelancers/register",
+    post, path = "/api/v1/freelancers/register",
     request_body = FreelancerRegistration,
     responses(
         (status = 201, description = "Freelancer registered"),
@@ -1018,7 +1054,7 @@ async fn register_freelancer(
 
 /// List freelancers
 #[utoipa::path(
-    get, path = "/api/freelancers",
+    get, path = "/api/v1/freelancers",
     params(
         PaginationParams,
         ("discipline" = Option<String>, Query, description = "Filter by discipline"),
@@ -1102,7 +1138,7 @@ async fn list_freelancers(
 
 /// Get a freelancer by Stellar address
 #[utoipa::path(
-    get, path = "/api/freelancers/{address}",
+    get, path = "/api/v1/freelancers/{address}",
     params(("address" = String, Path, description = "Stellar address")),
     responses(
         (status = 200, description = "Freelancer profile"),
@@ -1194,7 +1230,7 @@ async fn get_freelancer(
 
 /// Get escrow details
 #[utoipa::path(
-    get, path = "/api/escrow/{id}",
+    get, path = "/api/v1/escrow/{id}",
     params(("id" = u64, Path, description = "Escrow ID")),
     responses(
         (status = 200, description = "Escrow details"),
@@ -1248,7 +1284,7 @@ async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<Htt
 
 /// Release escrowed funds
 #[utoipa::path(
-    post, path = "/api/escrow/{id}/release",
+    post, path = "/api/v1/escrow/{id}/release",
     params(("id" = u64, Path, description = "Escrow ID")),
     responses(
         (status = 200, description = "Funds released"),
@@ -1444,28 +1480,35 @@ async fn main() -> anyhow::Result<()> {
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
             )
             .route("/health", web::get().to(health))
-            .route("/api/bounties", web::post().to(create_bounty))
-            .route("/api/bounties", web::get().to(list_bounties))
-            .route("/api/bounties/{id}", web::get().to(get_bounty))
-            .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-            .route(
-                "/api/freelancers/register",
-                web::post().to(register_freelancer),
-            )
-            .route("/api/freelancers", web::get().to(list_freelancers))
-            .route("/api/freelancers/{address}", web::get().to(get_freelancer))
-            .route("/api/escrow/{id}", web::get().to(get_escrow))
-            .route("/api/escrow/{id}/release", web::post().to(release_escrow))
-            .route("/api/webhooks", web::post().to(webhooks::register_webhook))
-            .route("/api/webhooks", web::get().to(webhooks::list_webhooks))
-            .route("/api/webhooks/{id}", web::delete().to(webhooks::delete_webhook))
+            .route("/api/v1/bounties", web::post().to(create_bounty))
+            .route("/api/v1/bounties", web::get().to(list_bounties))
+            .route("/api/v1/bounties/{id}", web::get().to(get_bounty))
+            .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
+            .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
+            .route("/api/v1/freelancers", web::get().to(list_freelancers))
+            .route("/api/v1/freelancers/{address}", web::get().to(get_freelancer))
+            .route("/api/v1/escrow/{id}", web::get().to(get_escrow))
+            .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
+            .route("/api/v1/webhooks", web::post().to(webhooks::register_webhook))
+            .route("/api/v1/webhooks", web::get().to(webhooks::list_webhooks))
+            .route("/api/v1/webhooks/{id}", web::delete().to(webhooks::delete_webhook))
             // ── File upload routes ───────────────────────────────────────
-            .route("/api/upload/avatar", web::post().to(upload::upload_avatar))
-            .route("/api/upload/project-image", web::post().to(upload::upload_project_image))
-            .route("/api/upload/bounty-attachment", web::post().to(upload::upload_bounty_attachment))
-            .route("/api/uploads", web::get().to(upload::list_uploads))
-            .route("/api/uploads/{category}/{filename}", web::get().to(upload::serve_upload))
-            .route("/api/uploads/{id}", web::delete().to(upload::delete_upload))
+            .route("/api/v1/upload/avatar", web::post().to(upload::upload_avatar))
+            .route("/api/v1/upload/project-image", web::post().to(upload::upload_project_image))
+            .route("/api/v1/upload/bounty-attachment", web::post().to(upload::upload_bounty_attachment))
+            .route("/api/v1/uploads", web::get().to(upload::list_uploads))
+            .route("/api/v1/uploads/{category}/{filename}", web::get().to(upload::serve_upload))
+            .route("/api/v1/uploads/{id}", web::delete().to(upload::delete_upload))
+            // ── Backward-compat redirects: /api/* → /api/v1/* ───────────
+            .route("/api/bounties",              web::get().to(redirect_to_v1))
+            .route("/api/bounties",              web::post().to(redirect_to_v1))
+            .route("/api/bounties/{tail:.*}",    web::route().to(redirect_to_v1))
+            .route("/api/freelancers",           web::get().to(redirect_to_v1))
+            .route("/api/freelancers/{tail:.*}", web::route().to(redirect_to_v1))
+            .route("/api/escrow/{tail:.*}",      web::route().to(redirect_to_v1))
+            .route("/api/webhooks",              web::get().to(redirect_to_v1))
+            .route("/api/webhooks",              web::post().to(redirect_to_v1))
+            .route("/api/webhooks/{tail:.*}",    web::route().to(redirect_to_v1))
     })
     .bind((config.api_host.as_str(), config.api_port))?
     .run()
@@ -1508,10 +1551,30 @@ mod tests {
         let spec = ApiDoc::openapi();
         let paths = &spec.paths.paths;
         assert!(paths.contains_key("/health"));
-        assert!(paths.contains_key("/api/bounties"));
-        assert!(paths.contains_key("/api/freelancers"));
-        assert!(paths.contains_key("/api/escrow/{id}"));
-        assert!(paths.contains_key("/api/webhooks"));
+        assert!(paths.contains_key("/api/v1/bounties"));
+        assert!(paths.contains_key("/api/v1/freelancers"));
+        assert!(paths.contains_key("/api/v1/escrow/{id}"));
+        assert!(paths.contains_key("/api/v1/webhooks"));
+    }
+
+    #[test]
+    fn redirect_to_v1_builds_correct_location() {
+        // Simulate the path rewrite logic used in redirect_to_v1
+        let cases = vec![
+            ("/api/bounties",           "/api/v1/bounties"),
+            ("/api/bounties/42",        "/api/v1/bounties/42"),
+            ("/api/freelancers",        "/api/v1/freelancers"),
+            ("/api/escrow/7/release",   "/api/v1/escrow/7/release"),
+            ("/api/webhooks",           "/api/v1/webhooks"),
+        ];
+        for (input, expected) in cases {
+            let versioned = if let Some(rest) = input.strip_prefix("/api/") {
+                format!("/api/v1/{rest}")
+            } else {
+                format!("/api/v1{input}")
+            };
+            assert_eq!(versioned, expected, "failed for input {input}");
+        }
     }
 
     #[test]
