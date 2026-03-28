@@ -17,9 +17,17 @@ pub struct FreelancerProfile {
 }
 
 #[contracttype]
+pub struct FilterOptions {
+    pub discipline: Option<String>,
+    pub min_rating: Option<u32>,
+    pub verified_only: Option<bool>,
+}
+
+#[contracttype]
 pub enum DataKey {
     FreelancerCount,
     Profile(Address),
+    AllFreelancers,
 }
 
 #[contract]
@@ -77,6 +85,15 @@ impl FreelancerContract {
         };
 
         env.storage().persistent().set(&key, &profile);
+
+        // Add to all freelancers list
+        let mut freelancers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllFreelancers)
+            .unwrap_or(Vec::new(&env));
+        freelancers.push_back(freelancer);
+        env.storage().persistent().set(&DataKey::AllFreelancers, &freelancers);
 
         let count: u32 = env
             .storage()
@@ -270,6 +287,141 @@ impl FreelancerContract {
             .get(&DataKey::FreelancerCount)
             .unwrap_or(0)
     }
+
+    /// Get all freelancer addresses
+    pub fn get_all_freelancer_addresses(env: Env) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AllFreelancers)
+            .unwrap_or(Vec::new(&env))
+    }
+
+    /// Query freelancers filtered by discipline
+    pub fn get_freelancers_by_discipline(
+        env: Env,
+        discipline: String,
+    ) -> Vec<FreelancerProfile> {
+        let freelancers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllFreelancers)
+            .unwrap_or(Vec::new(&env));
+        let mut result = Vec::new(&env);
+
+        for freelancer in freelancers.iter() {
+            if let Some(profile) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, FreelancerProfile>(&DataKey::Profile(freelancer))
+            {
+                if profile.discipline == discipline {
+                    result.push_back(profile);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Query freelancers filtered by minimum rating
+    pub fn get_freelancers_by_min_rating(
+        env: Env,
+        min_rating: u32,
+    ) -> Vec<FreelancerProfile> {
+        let freelancers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllFreelancers)
+            .unwrap_or(Vec::new(&env));
+        let mut result = Vec::new(&env);
+
+        for freelancer in freelancers.iter() {
+            if let Some(profile) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, FreelancerProfile>(&DataKey::Profile(freelancer))
+            {
+                if profile.rating >= min_rating {
+                    result.push_back(profile);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Query freelancers filtered by verification status
+    pub fn get_freelancers_by_verification(
+        env: Env,
+        verified: bool,
+    ) -> Vec<FreelancerProfile> {
+        let freelancers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllFreelancers)
+            .unwrap_or(Vec::new(&env));
+        let mut result = Vec::new(&env);
+
+        for freelancer in freelancers.iter() {
+            if let Some(profile) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, FreelancerProfile>(&DataKey::Profile(freelancer))
+            {
+                if profile.verified == verified {
+                    result.push_back(profile);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Query freelancers with combined filters
+    pub fn query_freelancers(
+        env: Env,
+        filters: FilterOptions,
+    ) -> Vec<FreelancerProfile> {
+        let freelancers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllFreelancers)
+            .unwrap_or(Vec::new(&env));
+        let mut result = Vec::new(&env);
+
+        for freelancer in freelancers.iter() {
+            if let Some(profile) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, FreelancerProfile>(&DataKey::Profile(freelancer))
+            {
+                // Apply discipline filter
+                if let Some(ref discipline) = filters.discipline {
+                    if profile.discipline != *discipline {
+                        continue;
+                    }
+                }
+
+                // Apply minimum rating filter
+                if let Some(min_rating) = filters.min_rating {
+                    if profile.rating < min_rating {
+                        continue;
+                    }
+                }
+
+                // Apply verification filter
+                if let Some(verified_only) = filters.verified_only {
+                    if verified_only && !profile.verified {
+                        continue;
+                    }
+                }
+
+                result.push_back(profile);
+            }
+        }
+
+        result
+    }
 }
 
 #[cfg(test)]
@@ -278,7 +430,6 @@ mod event_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
     use soroban_sdk::Env;
 
     #[test]
@@ -322,5 +473,212 @@ mod tests {
             &String::from_str(&env, \"Bio\"),
         );
         assert!(!second);
+    }
+
+    #[test]
+    fn test_get_all_freelancer_addresses() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(FreelancerContract, ());
+        let client = FreelancerContractClient::new(&env, &contract_id);
+
+        let f1 = Address::generate(&env);
+        let f2 = Address::generate(&env);
+        
+        client.register_freelancer(
+            &f1,
+            &String::from_str(&env, "Alice"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+        client.register_freelancer(
+            &f2,
+            &String::from_str(&env, "Bob"),
+            &String::from_str(&env, "Development"),
+            &String::from_str(&env, "Bio"),
+        );
+
+        let addresses = client.get_all_freelancer_addresses();
+        assert_eq!(addresses.len(), 2);
+    }
+
+    #[test]
+    fn test_get_freelancers_by_discipline() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(FreelancerContract, ());
+        let client = FreelancerContractClient::new(&env, &contract_id);
+
+        let f1 = Address::generate(&env);
+        let f2 = Address::generate(&env);
+        
+        client.register_freelancer(
+            &f1,
+            &String::from_str(&env, "Alice"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+        client.register_freelancer(
+            &f2,
+            &String::from_str(&env, "Bob"),
+            &String::from_str(&env, "Development"),
+            &String::from_str(&env, "Bio"),
+        );
+
+        let designers = client.get_freelancers_by_discipline(&String::from_str(&env, "Design"));
+        assert_eq!(designers.len(), 1);
+        assert_eq!(designers.get(0).unwrap().name, String::from_str(&env, "Alice"));
+
+        let developers = client.get_freelancers_by_discipline(&String::from_str(&env, "Development"));
+        assert_eq!(developers.len(), 1);
+        assert_eq!(developers.get(0).unwrap().name, String::from_str(&env, "Bob"));
+    }
+
+    #[test]
+    fn test_get_freelancers_by_min_rating() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(FreelancerContract, ());
+        let client = FreelancerContractClient::new(&env, &contract_id);
+
+        let f1 = Address::generate(&env);
+        let f2 = Address::generate(&env);
+        let f3 = Address::generate(&env);
+        
+        client.register_freelancer(
+            &f1,
+            &String::from_str(&env, "Alice"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+        client.register_freelancer(
+            &f2,
+            &String::from_str(&env, "Bob"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+        client.register_freelancer(
+            &f3,
+            &String::from_str(&env, "Charlie"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+
+        // Update ratings: Alice=5, Bob=3, Charlie=1
+        client.update_rating(&f1, &5);
+        client.update_rating(&f2, &3);
+        client.update_rating(&f3, &1);
+
+        let high_rated = client.get_freelancers_by_min_rating(&4);
+        assert_eq!(high_rated.len(), 1);
+        assert_eq!(high_rated.get(0).unwrap().rating, 5);
+
+        let mid_rated = client.get_freelancers_by_min_rating(&3);
+        assert_eq!(mid_rated.len(), 2);
+    }
+
+    #[test]
+    fn test_get_freelancers_by_verification() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(FreelancerContract, ());
+        let client = FreelancerContractClient::new(&env, &contract_id);
+
+        let f1 = Address::generate(&env);
+        let f2 = Address::generate(&env);
+        
+        client.register_freelancer(
+            &f1,
+            &String::from_str(&env, "Alice"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+        client.register_freelancer(
+            &f2,
+            &String::from_str(&env, "Bob"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+
+        // Verify Alice
+        let admin = Address::generate(&env);
+        client.verify_freelancer(&admin, &f1);
+
+        let verified = client.get_freelancers_by_verification(&true);
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified.get(0).unwrap().name, String::from_str(&env, "Alice"));
+
+        let unverified = client.get_freelancers_by_verification(&false);
+        assert_eq!(unverified.len(), 1);
+        assert_eq!(unverified.get(0).unwrap().name, String::from_str(&env, "Bob"));
+    }
+
+    #[test]
+    fn test_query_freelancers_combined_filters() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(FreelancerContract, ());
+        let client = FreelancerContractClient::new(&env, &contract_id);
+
+        let f1 = Address::generate(&env);
+        let f2 = Address::generate(&env);
+        let f3 = Address::generate(&env);
+        
+        client.register_freelancer(
+            &f1,
+            &String::from_str(&env, "Alice"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+        client.register_freelancer(
+            &f2,
+            &String::from_str(&env, "Bob"),
+            &String::from_str(&env, "Design"),
+            &String::from_str(&env, "Bio"),
+        );
+        client.register_freelancer(
+            &f3,
+            &String::from_str(&env, "Charlie"),
+            &String::from_str(&env, "Development"),
+            &String::from_str(&env, "Bio"),
+        );
+
+        // Update ratings and verify
+        client.update_rating(&f1, &5);
+        client.update_rating(&f2, &3);
+        client.update_rating(&f3, &5);
+        
+        let admin = Address::generate(&env);
+        client.verify_freelancer(&admin, &f1);
+        client.verify_freelancer(&admin, &f3);
+
+        // Filter: Design + rating >= 4 + verified only
+        let filters = FilterOptions {
+            discipline: Some(String::from_str(&env, "Design")),
+            min_rating: Some(4),
+            verified_only: Some(true),
+        };
+        let result = client.query_freelancers(&filters);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get(0).unwrap().name, String::from_str(&env, "Alice"));
+
+        // Filter: verified only (any discipline, any rating)
+        let filters_verified = FilterOptions {
+            discipline: None,
+            min_rating: None,
+            verified_only: Some(true),
+        };
+        let verified = client.query_freelancers(&filters_verified);
+        assert_eq!(verified.len(), 2);
+
+        // Filter: Development only
+        let filters_dev = FilterOptions {
+            discipline: Some(String::from_str(&env, "Development")),
+            min_rating: None,
+            verified_only: None,
+        };
+        let devs = client.query_freelancers(&filters_dev);
+        assert_eq!(devs.len(), 1);
+        assert_eq!(devs.get(0).unwrap().name, String::from_str(&env, "Charlie"));
     }
 }
