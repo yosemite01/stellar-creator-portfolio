@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { MobileNav, MOBILE_NAV_PANEL_ID } from '@/components/layout/mobile-nav';
+import { NotificationBell } from '@/components/notification-bell';
 import { cn } from '@/lib/utils';
 
 const touchIconButtonClass =
@@ -121,6 +122,7 @@ export function Header() {
 
             {session ? (
               <>
+                <NotificationBell />
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" className="relative hidden md:inline-flex h-9 w-9 rounded-full">
@@ -152,6 +154,11 @@ export function Header() {
                       <Link href="/dashboard" className="flex items-center">
                         <User className="mr-2 h-4 w-4" />
                         Profile
+                      </Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <Link href="/dashboard/settings/notifications" className="flex items-center">
+                        Notifications
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />

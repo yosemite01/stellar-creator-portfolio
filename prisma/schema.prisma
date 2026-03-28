@@ -62,6 +62,10 @@ model User {
   clientProfile  ClientProfile?
   bounties       Bounty[]
   applications   BountyApplication[]
+  notificationPreference NotificationPreference?
+  inAppNotifications     InAppNotification[]
+  emailDeliveryLogs      EmailDeliveryLog[]
+  emailUnsubscribeToken  String? @unique
 
   @@index([email])
 }
@@ -207,4 +211,58 @@ enum ReviewStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+// ── Notifications & email delivery ───────────────────────────────────────────
+
+model NotificationPreference {
+  userId                  String   @id
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailBountyAlerts       Boolean  @default(true)
+  emailApplicationUpdates Boolean  @default(true)
+  emailMessages           Boolean  @default(true)
+  emailMarketing          Boolean  @default(false)
+  inAppEnabled            Boolean  @default(true)
+  updatedAt               DateTime @updatedAt
+}
+
+model InAppNotification {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  body          String   @db.Text
+  read          Boolean  @default(false)
+  applicationId String?
+  bountyId      String?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model EmailDeliveryLog {
+  id                String              @id @default(cuid())
+  userId            String?
+  user              User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  toEmail           String
+  templateKey       String
+  subject           String
+  category          String
+  status            EmailDeliveryStatus @default(QUEUED)
+  provider          String?
+  providerMessageId String?
+  errorMessage      String?             @db.Text
+  payload           Json
+  createdAt         DateTime            @default(now())
+  sentAt            DateTime?
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+enum EmailDeliveryStatus {
+  QUEUED
+  SENT
+  FAILED
+  SKIPPED
 }

@@ -1,4 +1,5 @@
 import { getBountyById, type Bounty } from '@/lib/services/creators-data'
+import { persistInAppNotification } from '@/lib/notifications'
 
 export type ApplicationStatus = 'pending' | 'accepted' | 'rejected'
 
@@ -290,6 +291,7 @@ export function pushNotification(n: Omit<BountyNotificationRecord, 'id' | 'creat
     createdAt: nowIso(),
   }
   getGlobalStore().notifications.push(record)
+  void persistInAppNotification(record)
   return record
 }
 
