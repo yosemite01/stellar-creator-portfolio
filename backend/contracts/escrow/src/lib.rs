@@ -2,6 +2,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
+    String, Vec,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -21,6 +22,35 @@ pub enum ReleaseCondition {
     Timelock(u64),
 }
 
+#[derive(Clone, Copy, PartialEq)]
+#[contracttype]
+pub enum DisputeOutcome {
+    HoldInEscrow = 0,
+    ReleaseToPayee = 1,
+    RefundToPayer = 2,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct DisputeEvidence {
+    pub submitter: Address,
+    pub content: String,
+    pub submitted_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct Dispute {
+    pub escrow_id: u64,
+    pub initiator: Address,
+    pub reason: String,
+    pub initiated_at: u64,
+    pub evidence_count: u32,
+    pub resolved: bool,
+    pub outcome: Option<DisputeOutcome>,
+    pub resolution_timestamp: Option<u64>,
+}
+
 #[contracttype]
 pub struct EscrowAccount {
     pub id: u64,
@@ -38,6 +68,9 @@ pub enum DataKey {
     EscrowCounter,
     Escrow(u64),
     Governance,
+    Arbitrator,
+    Dispute(u64),
+    Evidence(u64, u32),
 }
 
 #[contract]
@@ -287,6 +320,323 @@ impl EscrowContract {
         true
     }
 
+    /// Sets the arbitrator address.
+    /// Can only be called once by an authorized caller (admin).
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `caller`: Caller address (must be admin).
+    /// - `arbitrator`: Arbitrator address.
+    ///
+    /// # Returns
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors
+    /// - Panics if caller not admin.
+    /// - Panics if arbitrator already set.
+    pub fn set_arbitrator(env: Env, caller: Address, arbitrator: Address) -> bool {
+        caller.require_auth();
+
+        let governance: Address = env.storage().persistent().get(&DataKey::Governance).expect("Governance not set");
+
+        let is_admin: bool = env.invoke_contract(
+            &governance,
+            &symbol_short!("is_admin"),
+            (caller.clone(),).into_val(&env),
+        );
+
+        assert!(is_admin, "Unauthorized: not an admin");
+
+        if env.storage().persistent().has(&DataKey::Arbitrator) {
+            panic!("Arbitrator already set");
+        }
+
+        env.storage().persistent().set(&DataKey::Arbitrator, &arbitrator);
+        true
+    }
+
+    /// Initiates a dispute for an active escrow.
+    /// Only payer or payee can initiate a dispute.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `escrow_id`: Escrow ID.
+    /// - `initiator`: Address initiating dispute (must be payer or payee, must authenticate).
+    /// - `reason`: Dispute reason (1-500 characters).
+    ///
+    /// # Returns
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors
+    /// - Panics if initiator not authenticated.
+    /// - Panics if escrow not found or not active.
+    /// - Panics if initiator is not payer or payee.
+    /// - Panics if reason is empty or over 500 characters.
+    /// - Panics if dispute already exists for this escrow.
+    pub fn initiate_dispute(env: Env, escrow_id: u64, initiator: Address, reason: String) -> bool {
+        initiator.require_auth();
+
+        assert!(reason.len() > 0, "Reason cannot be empty");
+        assert!(reason.len() <= 500, "Reason must be at most 500 characters");
+
+        let mut escrow: EscrowAccount = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        assert!(escrow.status == EscrowStatus::Active, "Can only dispute active escrows");
+        assert!(
+            initiator == escrow.payer || initiator == escrow.payee,
+            "Only payer or payee can initiate dispute"
+        );
+
+        if env.storage().persistent().has(&DataKey::Dispute(escrow_id)) {
+            panic!("Dispute already exists for this escrow");
+        }
+
+        let dispute = Dispute {
+            escrow_id,
+            initiator: initiator.clone(),
+            reason,
+            initiated_at: env.ledger().timestamp(),
+            evidence_count: 0,
+            resolved: false,
+            outcome: None,
+            resolution_timestamp: None,
+        };
+
+        escrow.status = EscrowStatus::Disputed;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(escrow_id), &dispute);
+
+        env.events().publish(
+            (symbol_short!("dispute_init"), escrow_id),
+            (initiator, env.ledger().timestamp()),
+        );
+
+        true
+    }
+
+    /// Submits evidence for a dispute.
+    /// Only payer or payee can submit evidence (max 10 pieces per dispute).
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `escrow_id`: Escrow ID.
+    /// - `submitter`: Address submitting evidence (must authenticate).
+    /// - `evidence_text`: Evidence content (1-1000 characters).
+    ///
+    /// # Returns
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors
+    /// - Panics if submitter not authenticated.
+    /// - Panics if dispute not found or already resolved.
+    /// - Panics if submitter is not payer or payee.
+    /// - Panics if evidence text is empty or exceeds 1000 characters.
+    /// - Panics if max evidence pieces reached (10).
+    pub fn submit_evidence(
+        env: Env,
+        escrow_id: u64,
+        submitter: Address,
+        evidence_text: String,
+    ) -> bool {
+        submitter.require_auth();
+
+        assert!(evidence_text.len() > 0, "Evidence cannot be empty");
+        assert!(evidence_text.len() <= 1000, "Evidence must be at most 1000 characters");
+
+        let escrow: EscrowAccount = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        assert!(
+            submitter == escrow.payer || submitter == escrow.payee,
+            "Only payer or payee can submit evidence"
+        );
+
+        let mut dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(escrow_id))
+            .expect("Dispute not found");
+
+        assert!(!dispute.resolved, "Cannot submit evidence to resolved dispute");
+        assert!(
+            dispute.evidence_count < 10,
+            "Maximum evidence pieces (10) reached"
+        );
+
+        let evidence = DisputeEvidence {
+            submitter: submitter.clone(),
+            content: evidence_text,
+            submitted_at: env.ledger().timestamp(),
+        };
+
+        let evidence_index = dispute.evidence_count;
+        dispute.evidence_count += 1;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Evidence(escrow_id, evidence_index), &evidence);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(escrow_id), &dispute);
+
+        env.events().publish(
+            (symbol_short!("ev_submit"), escrow_id),
+            (submitter, evidence_index, env.ledger().timestamp()),
+        );
+
+        true
+    }
+
+    /// Resolves a dispute with a specified outcome.
+    /// Only arbitrator can resolve disputes.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `arbitrator`: Arbitrator address (must authenticate).
+    /// - `escrow_id`: Escrow ID.
+    /// - `outcome`: Resolution outcome.
+    /// - `payee_amount`: Amount for payee if splitting (used with SplitBetween).
+    ///
+    /// # Returns
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors
+    /// - Panics if arbitrator not authenticated.
+    /// - Panics if arbitrator address doesn't match registered arbitrator.
+    /// - Panics if dispute not found or already resolved.
+    /// - Panics if escrow not found or not disputed.
+    /// - Token transfer fails if issues.
+    ///
+    /// # State Changes
+    /// - Transfers tokens according to outcome.
+    /// - Updates dispute with outcome and resolution timestamp.
+    /// - Updates escrow status to Released or Refunded.
+    pub fn resolve_dispute(
+        env: Env,
+        arbitrator: Address,
+        escrow_id: u64,
+        outcome: DisputeOutcome,
+        payee_amount: Option<i128>,
+    ) -> bool {
+        arbitrator.require_auth();
+
+        let registered_arbitrator: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Arbitrator)
+            .expect("Arbitrator not set");
+
+        assert!(arbitrator == registered_arbitrator, "Unauthorized: not the arbitrator");
+
+        let escrow: EscrowAccount = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        assert!(escrow.status == EscrowStatus::Disputed, "Escrow not disputed");
+
+        let mut dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(escrow_id))
+            .expect("Dispute not found");
+
+        assert!(!dispute.resolved, "Dispute already resolved");
+
+        let token_client = TokenClient::new(&env, &escrow.token);
+        let mut final_escrow = escrow.clone();
+
+        match outcome {
+            DisputeOutcome::HoldInEscrow => {
+                // Funds remain in escrow, no transfer
+                final_escrow.status = EscrowStatus::Disputed;
+            }
+            DisputeOutcome::ReleaseToPayee => {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &escrow.payee,
+                    &escrow.amount,
+                );
+                final_escrow.status = EscrowStatus::Released;
+            }
+            DisputeOutcome::RefundToPayer => {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &escrow.payer,
+                    &escrow.amount,
+                );
+                final_escrow.status = EscrowStatus::Refunded;
+            }
+        }
+
+        dispute.resolved = true;
+        dispute.outcome = Some(outcome);
+        dispute.resolution_timestamp = Some(env.ledger().timestamp());
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(escrow_id), &dispute);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &final_escrow);
+
+        env.events().publish(
+            (symbol_short!("dispute_res"), escrow_id),
+            (outcome as u32, env.ledger().timestamp()),
+        );
+
+        true
+    }
+
+    /// Retrieves a dispute by escrow ID.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `escrow_id`: Escrow ID.
+    ///
+    /// # Returns
+    /// - `Dispute`: Full dispute details.
+    ///
+    /// # Errors
+    /// - Panics if dispute not found.
+    pub fn get_dispute(env: Env, escrow_id: u64) -> Dispute {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Dispute(escrow_id))
+            .expect("Dispute not found")
+    }
+
+    /// Retrieves evidence for a dispute.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `escrow_id`: Escrow ID.
+    /// - `evidence_index`: Evidence index (0-based).
+    ///
+    /// # Returns
+    /// - `DisputeEvidence`: Evidence details.
+    ///
+    /// # Errors
+    /// - Panics if evidence not found.
+    pub fn get_evidence(env: Env, escrow_id: u64, evidence_index: u32) -> DisputeEvidence {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Evidence(escrow_id, evidence_index))
+            .expect("Evidence not found")
+    }
+
     /// Emergency withdrawal of stuck funds from disputed escrow.
     /// Only callable by governance admin.
     ///
@@ -450,4 +800,471 @@ impl EscrowContract {
         // Should panic
         client.emergency_withdraw(&admin, &escrow_id, &payee);
     }
+
+    // -------------------------------------------------------------------------
+    // Tests for dispute mechanism (Issue #178)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_initiate_dispute_by_payer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        // Payer initiates dispute
+        assert!(client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Payment not received")));
+
+        let dispute = client.get_dispute(&escrow_id);
+        assert_eq!(dispute.escrow_id, escrow_id);
+        assert_eq!(dispute.initiator, payer);
+        assert!(!dispute.resolved);
+        assert_eq!(dispute.evidence_count, 0);
+
+        let escrow = client.get_escrow(&escrow_id);
+        assert_eq!(escrow.status, EscrowStatus::Disputed);
+    }
+
+    #[test]
+    fn test_initiate_dispute_by_payee() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        // Payee initiates dispute
+        assert!(client.initiate_dispute(&escrow_id, &payee, &String::from_str(&env, "Funds locked unfairly")));
+
+        let dispute = client.get_dispute(&escrow_id);
+        assert_eq!(dispute.initiator, payee);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only payer or payee can initiate dispute")]
+    fn test_initiate_dispute_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let rando = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        // Random address tries to initiate dispute
+        client.initiate_dispute(&escrow_id, &rando, &String::from_str(&env, "I want this"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Can only dispute active escrows")]
+    fn test_initiate_dispute_not_active() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        // Release the escrow
+        client.release_funds(&escrow_id, &payer);
+
+        // Try to dispute released escrow
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Too late"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Reason cannot be empty")]
+    fn test_initiate_dispute_empty_reason() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, ""));
+    }
+
+    #[test]
+    #[should_panic(expected = "Reason must be at most 500 characters")]
+    fn test_initiate_dispute_reason_too_long() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        let long_reason = String::from_str(&env, "a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1");
+
+        client.initiate_dispute(&escrow_id, &payer, &long_reason);
+    }
+
+    #[test]
+    #[should_panic(expected = "Dispute already exists for this escrow")]
+    fn test_initiate_dispute_duplicate() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        // First dispute succeeds
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "First dispute"));
+
+        // Second dispute should fail
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Second dispute"));
+    }
+
+    #[test]
+    fn test_submit_evidence_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+
+        // Payer submits evidence
+        assert!(client.submit_evidence(&escrow_id, &payer, &String::from_str(&env, "Evidence from payer")));
+
+        // Payee submits evidence
+        assert!(client.submit_evidence(&escrow_id, &payee, &String::from_str(&env, "Counter evidence")));
+
+        let dispute = client.get_dispute(&escrow_id);
+        assert_eq!(dispute.evidence_count, 2);
+
+        let evidence0 = client.get_evidence(&escrow_id, 0);
+        assert_eq!(evidence0.submitter, payer);
+
+        let evidence1 = client.get_evidence(&escrow_id, 1);
+        assert_eq!(evidence1.submitter, payee);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only payer or payee can submit evidence")]
+    fn test_submit_evidence_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let rando = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+
+        client.submit_evidence(&escrow_id, &rando, &String::from_str(&env, "Fake evidence"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Evidence must be at most 1000 characters")]
+    fn test_submit_evidence_too_long() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+
+        let long_evidence = String::from_str(&env, "a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1234567890a1");
+
+        client.submit_evidence(&escrow_id, &payer, &long_evidence);
+    }
+
+    #[test]
+    #[should_panic(expected = "Maximum evidence pieces (10) reached")]
+    fn test_submit_evidence_max_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+
+        // Submit 10 pieces of evidence
+        for i in 0..10 {
+            let evidence = String::from_str(&env, &format!("Evidence {}", i));
+            client.submit_evidence(&escrow_id, &payer, &evidence);
+        }
+
+        // 11th should fail
+        client.submit_evidence(&escrow_id, &payer, &String::from_str(&env, "Evidence 11"));
+    }
+
+    #[test]
+    fn test_resolve_dispute_release_to_payee() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let arbitrator = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+
+        env.mock_contract(&governance, |mock| {
+            mock.with_args(("is_admin", admin.clone())).returns(true);
+        });
+
+        client.set_arbitrator(&admin, &arbitrator);
+
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+        client.submit_evidence(&escrow_id, &payer, &String::from_str(&env, "Payer evidence"));
+        client.submit_evidence(&escrow_id, &payee, &String::from_str(&env, "Payee evidence"));
+
+        // Arbitrator resolves in favor of payee
+        assert!(client.resolve_dispute(&arbitrator, &escrow_id, &DisputeOutcome::ReleaseToPayee, &None));
+
+        let dispute = client.get_dispute(&escrow_id);
+        assert!(dispute.resolved);
+        assert_eq!(dispute.outcome, Some(DisputeOutcome::ReleaseToPayee));
+
+        let escrow = client.get_escrow(&escrow_id);
+        assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    #[test]
+    fn test_resolve_dispute_refund_to_payer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let arbitrator = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+
+        env.mock_contract(&governance, |mock| {
+            mock.with_args(("is_admin", admin.clone())).returns(true);
+        });
+
+        client.set_arbitrator(&admin, &arbitrator);
+
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+
+        // Arbitrator resolves in favor of payer
+        assert!(client.resolve_dispute(&arbitrator, &escrow_id, &DisputeOutcome::RefundToPayer, &None));
+
+        let escrow = client.get_escrow(&escrow_id);
+        assert_eq!(escrow.status, EscrowStatus::Refunded);
+    }
+
+    #[test]
+    fn test_resolve_dispute_hold_in_escrow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let arbitrator = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+
+        env.mock_contract(&governance, |mock| {
+            mock.with_args(("is_admin", admin.clone())).returns(true);
+        });
+
+        client.set_arbitrator(&admin, &arbitrator);
+
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+
+        // Arbitrator holds funds in escrow
+        assert!(client.resolve_dispute(&arbitrator, &escrow_id, &DisputeOutcome::HoldInEscrow, &None));
+
+        let escrow = client.get_escrow(&escrow_id);
+        assert_eq!(escrow.status, EscrowStatus::Disputed);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized: not the arbitrator")]
+    fn test_resolve_dispute_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let arbitrator = Address::generate(&env);
+        let rando = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+
+        env.mock_contract(&governance, |mock| {
+            mock.with_args(("is_admin", admin.clone())).returns(true);
+        });
+
+        client.set_arbitrator(&admin, &arbitrator);
+
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+
+        // Random address tries to resolve
+        client.resolve_dispute(&rando, &escrow_id, &DisputeOutcome::ReleaseToPayee, &None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Dispute already resolved")]
+    fn test_resolve_dispute_already_resolved() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let governance = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let arbitrator = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(Address::generate(&env));
+        let amount = 1000_i128;
+
+        client.set_governance(&admin, &governance);
+
+        env.mock_contract(&governance, |mock| {
+            mock.with_args(("is_admin", admin.clone())).returns(true);
+        });
+
+        client.set_arbitrator(&admin, &arbitrator);
+
+        let escrow_id = client.deposit(&payer, &payee, &amount, &token, &ReleaseCondition::OnCompletion);
+
+        client.initiate_dispute(&escrow_id, &payer, &String::from_str(&env, "Dispute"));
+
+        // First resolution
+        client.resolve_dispute(&arbitrator, &escrow_id, &DisputeOutcome::ReleaseToPayee, &None);
+
+        // Second resolution should fail
+        client.resolve_dispute(&arbitrator, &escrow_id, &DisputeOutcome::RefundToPayer, &None);
+    }
 }
+
