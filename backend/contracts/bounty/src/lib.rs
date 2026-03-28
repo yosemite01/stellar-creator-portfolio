@@ -54,6 +54,7 @@ pub struct BountyApplication {
     pub proposed_budget: i128,
     pub timeline: u64,
     pub created_at: u64,
+    pub is_withdrawn: bool,
 }
 
 #[contracttype]
@@ -295,6 +296,7 @@ impl BountyContract {
             proposed_budget,
             timeline,
             created_at: env.ledger().timestamp(),
+            is_withdrawn: false,
         };
 
         // Persistent storage for permanent application record
@@ -342,6 +344,85 @@ impl BountyContract {
             .persistent()
             .get(&DataKey::Application(application_id))
             .expect("Application not found")
+    }
+
+    /// Allows a freelancer to withdraw their own pending application.
+    ///
+    /// Only the original applicant may withdraw, and only while the bounty is
+    /// still `Open` (i.e. before a freelancer has been selected / bounty moved
+    /// to `InProgress`). The application record is marked `is_withdrawn = true`
+    /// rather than deleted so that on-chain history is preserved.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `application_id`: ID of the application to withdraw.
+    /// - `freelancer`: Address of the applicant (must authenticate).
+    ///
+    /// # Returns
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors
+    /// - Panics with "Application not found" if `application_id` doesn't exist.
+    /// - Panics with "Not the application owner" if `freelancer` is not the
+    ///   original applicant.
+    /// - Panics with "Application already withdrawn" if already withdrawn.
+    /// - Panics with "Bounty not found" if the referenced bounty doesn't exist.
+    /// - Panics with "Cannot withdraw after freelancer has been selected" if the
+    ///   bounty is no longer `Open`.
+    ///
+    /// # State Changes
+    /// - Sets `application.is_withdrawn = true` on the stored application record.
+    pub fn withdraw_application(
+        env: Env,
+        application_id: u64,
+        freelancer: Address,
+    ) -> bool {
+        freelancer.require_auth();
+
+        // Load and validate the application
+        let mut application: BountyApplication = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Application(application_id))
+            .expect("Application not found");
+
+        // Ownership check — only the submitting freelancer may withdraw
+        assert!(
+            application.freelancer == freelancer,
+            "Not the application owner"
+        );
+
+        // Idempotency guard — prevent double-withdrawal
+        assert!(
+            !application.is_withdrawn,
+            "Application already withdrawn"
+        );
+
+        // State guard — cannot withdraw once a freelancer has been selected
+        let bounty: Bounty = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Bounty(application.bounty_id))
+            .expect("Bounty not found");
+
+        assert!(
+            bounty.status == BountyStatus::Open,
+            "Cannot withdraw after freelancer has been selected"
+        );
+
+        // Mark as withdrawn and persist
+        application.is_withdrawn = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Application(application_id), &application);
+
+        // Emit ApplicationWithdrawn event
+        env.events().publish(
+            (Symbol::new(&env, "app_withdraw"), application.bounty_id, application_id),
+            &freelancer,
+        );
+
+        true
     }
 
     /// Bounty creator selects a freelancer application.
