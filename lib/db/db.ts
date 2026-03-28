@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { serverConfig } from '@/lib/config'
 
 export interface Database {
   creators: {
@@ -75,14 +76,9 @@ export function getSupabaseClient(): SupabaseClient {
     return supabaseClient
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL
-  const supabaseKey = process.env.SUPABASE_ANON_KEY
+  const { supabaseUrl, supabaseAnonKey } = serverConfig.db
 
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Missing SUPABASE_URL or SUPABASE_ANON_KEY environment variables')
-  }
-
-  supabaseClient = createClient(supabaseUrl, supabaseKey)
+  supabaseClient = createClient(supabaseUrl, supabaseAnonKey)
   return supabaseClient
 }
 

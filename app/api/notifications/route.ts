@@ -13,6 +13,7 @@ import {
   markNotificationRead,
   markAllNotificationsRead,
 } from '@/lib/services/bounty-service'
+import { serverConfig } from '@/lib/config'
 
 function mapDbNotification(n: {
   id: string
@@ -77,7 +78,7 @@ export async function PATCH(request: NextRequest) {
 
   if (body.readAll) {
     let dbUpdated = 0
-    if (process.env.DATABASE_URL) {
+    if (serverConfig.db.databaseUrl) {
       dbUpdated = await markAllInAppNotificationsRead(session.user.id)
     }
     const memUpdated = markAllNotificationsRead(session.user.id)
@@ -85,7 +86,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (body.id) {
-    if (process.env.DATABASE_URL) {
+    if (serverConfig.db.databaseUrl) {
       const c = await markInAppNotificationRead(body.id, session.user.id)
       if (c > 0) {
         markNotificationRead(body.id, session.user.id)

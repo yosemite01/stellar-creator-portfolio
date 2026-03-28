@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
+import { serverConfig, clientConfig } from '@/lib/config'
 import {
   createEscrow,
   attachPaymentIntent,
@@ -89,7 +90,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       escrowId: escrow.id,
       clientSecret: pi.client_secret,
-      publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? null,
+      publishableKey: clientConfig.stripe.publishableKey ?? null,
       amountCents: data.amountCents,
       currency: data.currency,
     })
@@ -100,7 +101,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Payments are not configured' }, { status: 503 })
     }
 
-    const base = process.env.NEXTAUTH_URL ?? request.nextUrl.origin
+    const base = serverConfig.auth.nextAuthUrl
     const successUrl = data.successUrl ?? `${base}/dashboard/payments?session_id={CHECKOUT_SESSION_ID}`
     const cancelUrl = data.cancelUrl ?? `${base}/dashboard/payments?canceled=1`
 

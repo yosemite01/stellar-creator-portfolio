@@ -7,47 +7,15 @@
 //! Cursor persistence: the last processed ledger sequence is stored in the
 //! `indexer_cursors` table so restarts resume from where they left off.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::time::Duration;
 use stellar_discovery::{create_discovery, ServiceInfo};
 use tracing::{error, info, warn};
 
-// ── Config ────────────────────────────────────────────────────────────────────
-
-struct Config {
-    database_url: String,
-    rpc_url: String,
-    bounty_contract_id: String,
-    freelancer_contract_id: String,
-    escrow_contract_id: String,
-    /// How many ledgers to fetch per poll
-    ledger_chunk: u32,
-    /// Seconds between polls
-    poll_interval_secs: u64,
-}
-
-impl Config {
-    fn from_env() -> Result<Self> {
-        Ok(Self {
-            database_url: std::env::var("DATABASE_URL").context("DATABASE_URL not set")?,
-            rpc_url: std::env::var("STELLAR_RPC_URL")
-                .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".into()),
-            bounty_contract_id: std::env::var("BOUNTY_CONTRACT_ID").unwrap_or_default(),
-            freelancer_contract_id: std::env::var("FREELANCER_CONTRACT_ID").unwrap_or_default(),
-            escrow_contract_id: std::env::var("ESCROW_CONTRACT_ID").unwrap_or_default(),
-            ledger_chunk: std::env::var("INDEXER_LEDGER_CHUNK")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(100),
-            poll_interval_secs: std::env::var("INDEXER_POLL_INTERVAL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(6),
-        })
-    }
-}
+mod config;
+use config::Config;
 
 // ── Soroban RPC types ─────────────────────────────────────────────────────────
 

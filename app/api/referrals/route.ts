@@ -13,6 +13,7 @@ import {
 } from '@/lib/services/referral-service';
 import { z } from 'zod';
 import { validateRequest, formatZodErrors } from '@/lib/validators';
+import { clientConfig } from '@/lib/config';
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ export async function GET(request: NextRequest) {
   switch (action) {
     case 'code': {
       const code = generateReferralCode(session.user.id);
-      const referralUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/auth/register?ref=${code.code}`;
+      const referralUrl = `${clientConfig.app.url}/auth/register?ref=${code.code}`;
       return NextResponse.json({ code, referralUrl });
     }
     case 'stats':

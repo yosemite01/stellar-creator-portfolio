@@ -9,6 +9,7 @@ import nodemailer, { type Transporter } from 'nodemailer'
 import Handlebars, { type TemplateDelegate } from 'handlebars'
 import fs from 'fs'
 import path from 'path'
+import { serverConfig } from '@/lib/config'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -96,7 +97,7 @@ function renderTemplate(template: EmailTemplate, variables: Record<string, unkno
   return baseTemplate({
     ...variables,
     content,
-    appUrl: process.env.NEXTAUTH_URL ?? 'http://localhost:3000',
+    appUrl: serverConfig.auth.nextAuthUrl,
     year: new Date().getFullYear(),
   })
 }
@@ -108,7 +109,7 @@ let _transporter: Transporter | null = null
 function getTransporter(): Transporter {
   if (_transporter) return _transporter
 
-  const emailServer = process.env.EMAIL_SERVER
+  const { server: emailServer, devUser, devPass } = serverConfig.email
 
   if (emailServer) {
     _transporter = nodemailer.createTransport(emailServer)
@@ -117,8 +118,8 @@ function getTransporter(): Transporter {
       host: 'smtp.ethereal.email',
       port: 587,
       auth: {
-        user: process.env.EMAIL_DEV_USER ?? '',
-        pass: process.env.EMAIL_DEV_PASS ?? '',
+        user: devUser ?? '',
+        pass: devPass ?? '',
       },
     })
   }
@@ -135,13 +136,13 @@ export async function deliverHtmlEmail(params: {
   subject: string
   html: string
 }): Promise<{ provider: string; messageId?: string }> {
-  const from = process.env.EMAIL_FROM ?? DEFAULT_FROM
+  const from = serverConfig.email.from ?? DEFAULT_FROM
 
-  if (process.env.RESEND_API_KEY) {
+  if (serverConfig.email.resendApiKey) {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        Authorization: `Bearer ${serverConfig.email.resendApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -155,7 +156,7 @@ export async function deliverHtmlEmail(params: {
     if (!res.ok) {
       throw new Error(data.message ?? `Resend error ${res.status}`)
     }
-    if (process.env.NODE_ENV !== 'production') {
+    if (serverConfig.app.nodeEnv !== 'production') {
       console.log(`[mailer] Resend id: ${data.id ?? 'unknown'}`)
     }
     return { provider: 'resend', messageId: data.id }
@@ -169,7 +170,7 @@ export async function deliverHtmlEmail(params: {
     html: params.html,
   })
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (serverConfig.app.nodeEnv !== 'production') {
     const previewUrl = nodemailer.getTestMessageUrl(info)
     if (previewUrl) {
       console.log(`[mailer] Preview email at: ${previewUrl}`)

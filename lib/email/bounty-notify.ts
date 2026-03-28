@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { submitQueuedEmail } from '@/lib/notifications'
+import { serverConfig } from '@/lib/config'
 
 export async function getEmailForUserId(userId: string): Promise<string | null> {
   const u = await prisma.user.findUnique({
@@ -15,7 +16,7 @@ export async function sendApplicantReceivedEmail(params: {
   bountyTitle: string
   userId: string | null
 }): Promise<void> {
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   await submitQueuedEmail({
     userId: params.userId,
     to: params.to,
@@ -41,7 +42,7 @@ export async function sendClientNewApplicationEmail(params: {
   bountyId: string
   userId: string | null
 }): Promise<void> {
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   await submitQueuedEmail({
     userId: params.userId,
     to: params.to,
@@ -66,7 +67,7 @@ export async function sendApplicantStatusEmail(params: {
   status: 'accepted' | 'rejected'
   userId: string | null
 }): Promise<void> {
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   const accepted = params.status === 'accepted'
   await submitQueuedEmail({
     userId: params.userId,
@@ -97,7 +98,7 @@ export async function sendThreadMessageEmail(params: {
   applicationId: string
   userId: string | null
 }): Promise<void> {
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   await submitQueuedEmail({
     userId: params.userId,
     to: params.to,

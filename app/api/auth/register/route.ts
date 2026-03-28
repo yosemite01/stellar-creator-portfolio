@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { sendEmail } from '@/lib/email/mailer';
+import { serverConfig } from '@/lib/config';
 
 const prisma = new PrismaClient();
 
@@ -61,7 +62,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const verificationUrl = `${process.env.NEXTAUTH_URL}/auth/verify?token=${verificationToken.token}`;
+    const verificationUrl = `${serverConfig.auth.nextAuthUrl}/auth/verify?token=${verificationToken.token}`;
 
     await sendEmail({
       to: email,

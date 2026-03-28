@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { renderEmail, type EmailTemplate } from '@/lib/email/mailer'
+import { serverConfig } from '@/lib/config'
 
 const PREVIEW_TEMPLATES: EmailTemplate[] = [
   'welcome',
@@ -12,7 +13,7 @@ const PREVIEW_TEMPLATES: EmailTemplate[] = [
 
 /** Dev-only HTML preview of built-in templates (open in browser). */
 export async function GET(request: NextRequest) {
-  if (process.env.NODE_ENV === 'production') {
+  if (serverConfig.app.nodeEnv === 'production') {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
@@ -24,7 +25,7 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   const samples: Record<EmailTemplate, Record<string, unknown>> = {
     welcome: {
       subject: 'Welcome to Stellar Creators',

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { deleteFile, getDownloadUrl, listFiles, uploadObject } from "@/lib/storage";
+import { serverConfig } from "@/lib/config";
 
 export const runtime = "nodejs";
 
@@ -14,7 +15,7 @@ const DEFAULT_ALLOWED_TYPES = [
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
 
-const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_SIZE_MB || 100);
+const MAX_UPLOAD_MB = serverConfig.upload.maxSizeMb;
 
 export function slugify(name: string) {
   return name
@@ -26,7 +27,7 @@ export function slugify(name: string) {
 }
 
 export function allowedTypes(): string[] {
-  const envTypes = process.env.ALLOWED_FILE_TYPES;
+  const envTypes = serverConfig.upload.allowedFileTypes;
   if (!envTypes) return DEFAULT_ALLOWED_TYPES;
   return envTypes.split(",").map((t) => t.trim());
 }

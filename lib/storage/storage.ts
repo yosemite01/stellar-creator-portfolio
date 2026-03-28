@@ -7,6 +7,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
+import { serverConfig } from "@/lib/config";
 
 export type StorageProvider = "s3" | "r2";
 
@@ -32,30 +33,24 @@ export type ListedObject = {
   signedUrl: string;
 };
 
-const requiredEnv = ["S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"];
-
-function assertEnv() {
-  const missing = requiredEnv.filter((k) => !process.env[k]);
-  if (missing.length) {
-    throw new Error(`Missing environment variables: ${missing.join(", ")}`);
-  }
-}
-
 let client: S3Client | null = null;
 
 function getClient(): S3Client {
   if (client) return client;
-  assertEnv();
 
-  const provider = (process.env.STORAGE_PROVIDER as StorageProvider) || "s3";
+  const { provider, region, endpoint, accessKeyId, secretAccessKey } = serverConfig.storage;
+
+  if (!accessKeyId || !secretAccessKey) {
+    throw new Error("S3 credentials are not configured");
+  }
 
   client = new S3Client({
-    region: process.env.S3_REGION || "us-east-1",
-    endpoint: process.env.S3_ENDPOINT,
+    region,
+    endpoint,
     forcePathStyle: provider === "r2",
     credentials: {
-      accessKeyId: process.env.S3_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!,
+      accessKeyId,
+      secretAccessKey,
     },
   });
 
@@ -63,7 +58,7 @@ function getClient(): S3Client {
 }
 
 export async function uploadObject(params: UploadParams): Promise<UploadedObject> {
-  const bucket = process.env.S3_BUCKET!;
+  const { bucket, signedUrlTtlSeconds, publicBaseUrl } = serverConfig.storage;
   const s3 = getClient();
 
   const put = new PutObjectCommand({
@@ -83,11 +78,10 @@ export async function uploadObject(params: UploadParams): Promise<UploadedObject
       Bucket: bucket,
       Key: params.key,
     }),
-    { expiresIn: Number(process.env.SIGNED_URL_TTL_SECONDS || 900) }
+    { expiresIn: signedUrlTtlSeconds }
   );
 
-  const publicBase = process.env.S3_PUBLIC_BASE_URL;
-  const url = publicBase ? `${publicBase.replace(/\/$/, "")}/${params.key}` : signedUrl;
+  const url = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, "")}/${params.key}` : signedUrl;
 
   return {
     key: params.key,
@@ -102,7 +96,7 @@ export async function getDownloadUrl(key: string, expiresInSeconds = 900): Promi
   return getSignedUrl(
     s3,
     new GetObjectCommand({
-      Bucket: process.env.S3_BUCKET!,
+      Bucket: serverConfig.storage.bucket,
       Key: key,
     }),
     { expiresIn: expiresInSeconds }
@@ -111,7 +105,7 @@ export async function getDownloadUrl(key: string, expiresInSeconds = 900): Promi
 
 export async function listFiles(prefix = ""): Promise<ListedObject[]> {
   const s3 = getClient();
-  const bucket = process.env.S3_BUCKET!;
+  const bucket = serverConfig.storage.bucket;
 
   const list = await s3.send(
     new ListObjectsV2Command({
@@ -141,7 +135,7 @@ export async function deleteFile(key: string) {
   const s3 = getClient();
   await s3.send(
     new DeleteObjectCommand({
-      Bucket: process.env.S3_BUCKET!,
+      Bucket: serverConfig.storage.bucket,
       Key: key,
     })
   );

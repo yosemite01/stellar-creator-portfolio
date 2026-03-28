@@ -6,6 +6,7 @@
  */
 
 import Redis from 'ioredis'
+import { serverConfig } from '@/lib/config'
 
 // ── TTLs (seconds) ────────────────────────────────────────────────────────────
 export const TTL = {
@@ -29,7 +30,7 @@ let client: Redis | null = null
 function getClient(): Redis | null {
   if (client) return client
 
-  const url = process.env.REDIS_URL
+  const url = serverConfig.cache.redisUrl
   if (!url) {
     // No Redis configured — fall back to in-memory cache in lib/db.ts
     return null

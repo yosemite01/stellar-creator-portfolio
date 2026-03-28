@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { serverConfig } from '@/lib/config'
 
 const putSchema = z.object({
   emailBountyAlerts: z.boolean().optional(),
@@ -17,7 +18,7 @@ export async function GET() {
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  if (!process.env.DATABASE_URL) {
+  if (!serverConfig.db.databaseUrl) {
     return NextResponse.json(
       { error: 'Notification preferences require a configured database' },
       { status: 503 },
@@ -40,7 +41,7 @@ export async function PUT(request: NextRequest) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  if (!process.env.DATABASE_URL) {
+  if (!serverConfig.db.databaseUrl) {
     return NextResponse.json(
       { error: 'Notification preferences require a configured database' },
       { status: 503 },

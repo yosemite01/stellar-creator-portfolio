@@ -5,19 +5,20 @@
 
 import express from "express";
 import { createSecureApp, setupExampleRoutes } from "./app/api/middleware";
+import { config } from "./lib/config";
 
 async function main() {
   // Create secure Express app
   const { app, stack } = createSecureApp({
     rateLimit: {
-      enabled: true,
-      windowMs: 60000,
-      maxRequests: 100,
-      blockDurationMs: 300000,
+      enabled: config.rateLimit.enabled,
+      windowMs: config.rateLimit.windowMs,
+      maxRequests: config.rateLimit.maxRequests,
+      blockDurationMs: config.rateLimit.blockDurationMs,
     },
-    cors: { enabled: true },
-    authentication: { enabled: true },
-    monitoring: { enabled: true },
+    cors: { enabled: config.cors.enabled },
+    authentication: { enabled: config.auth.enabled },
+    monitoring: { enabled: config.monitoring.enabled },
   });
 
   // Setup example routes
@@ -80,7 +81,7 @@ async function main() {
   });
 
   // Start server
-  const PORT = process.env.PORT || 3000;
+  const PORT = config.port;
   app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
@@ -110,7 +111,7 @@ async function main() {
 
 📝 Configuration:
   - PORT: ${PORT}
-  - NODE_ENV: ${process.env.NODE_ENV || "development"}
+  - NODE_ENV: ${config.nodeEnv}
     `);
   });
 }

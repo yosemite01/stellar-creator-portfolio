@@ -6,14 +6,15 @@ import { ThemeProvider } from 'next-themes'
 import { SessionProvider } from '@/components/providers/session-provider'
 import { Toaster } from '@/components/ui/sonner'
 import AnalyticsClient from './providers/AnalyticsClient'
+import { clientConfig } from '@/lib/config'
 import './globals.css'
 
 const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
 
-const PLAUSIBLE_DOMAIN = process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN || 'example.com'
-const PLAUSIBLE_SRC = process.env.NEXT_PUBLIC_PLAUSIBLE_SRC || 'https://plausible.io/js/plausible.js'
-const PLAUSIBLE_API_ENDPOINT = process.env.NEXT_PUBLIC_PLAUSIBLE_API || 'https://plausible.io/api/event'
+const PLAUSIBLE_DOMAIN = clientConfig.analytics.plausibleDomain
+const PLAUSIBLE_SRC = clientConfig.analytics.plausibleSrc
+const PLAUSIBLE_API_ENDPOINT = clientConfig.analytics.plausibleApi
 
 export const viewport: Viewport = {
   width: 'device-width',

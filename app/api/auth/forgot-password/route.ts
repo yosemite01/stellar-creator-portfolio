@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { sendEmail } from '@/lib/email/mailer';
+import { serverConfig } from '@/lib/config';
 
 const prisma = new PrismaClient();
 
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const resetUrl = `${process.env.NEXTAUTH_URL}/auth/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
+    const resetUrl = `${serverConfig.auth.nextAuthUrl}/auth/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
 
     await sendEmail({
       to: email,

@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { deliverTemplatedEmail, type EmailTemplate } from '@/lib/email/mailer'
 import { getRedisClient } from '@/lib/storage/redis'
+import { serverConfig } from '@/lib/config'
 
 const QUEUE_KEY = 'notifications:email:queue'
 
@@ -70,7 +71,7 @@ export async function getOrCreateUnsubscribeToken(userId: string): Promise<strin
 
 async function buildUnsubscribeUrl(userId: string): Promise<string> {
   const token = await getOrCreateUnsubscribeToken(userId)
-  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  const appUrl = serverConfig.auth.nextAuthUrl
   return `${appUrl}/api/notifications/unsubscribe?token=${encodeURIComponent(token)}`
 }
 
@@ -106,7 +107,7 @@ export async function submitQueuedEmail(input: {
   variables: Record<string, unknown>
   category: NotificationEmailCategory
 }): Promise<string | null> {
-  const hasDb = Boolean(process.env.DATABASE_URL)
+  const hasDb = Boolean(serverConfig.db.databaseUrl)
 
   if (!hasDb) {
     await deliverTemplatedEmail({
@@ -233,7 +234,7 @@ export async function persistInAppNotification(record: {
   bountyId?: string
   createdAt: string
 }): Promise<void> {
-  if (!process.env.DATABASE_URL) return
+  if (!serverConfig.db.databaseUrl) return
   try {
     const pref = await prisma.notificationPreference.findUnique({
       where: { userId: record.userId },
@@ -261,7 +262,7 @@ export async function persistInAppNotification(record: {
 }
 
 export async function fetchInAppNotifications(userId: string) {
-  if (!process.env.DATABASE_URL) return null
+  if (!serverConfig.db.databaseUrl) return null
   return prisma.inAppNotification.findMany({
     where: { userId },
     orderBy: { createdAt: 'desc' },
@@ -270,7 +271,7 @@ export async function fetchInAppNotifications(userId: string) {
 }
 
 export async function markInAppNotificationRead(id: string, userId: string): Promise<number> {
-  if (!process.env.DATABASE_URL) return 0
+  if (!serverConfig.db.databaseUrl) return 0
   const r = await prisma.inAppNotification.updateMany({
     where: { id, userId },
     data: { read: true },
@@ -279,7 +280,7 @@ export async function markInAppNotificationRead(id: string, userId: string): Pro
 }
 
 export async function markAllInAppNotificationsRead(userId: string): Promise<number> {
-  if (!process.env.DATABASE_URL) return 0
+  if (!serverConfig.db.databaseUrl) return 0
   const r = await prisma.inAppNotification.updateMany({
     where: { userId, read: false },
     data: { read: true },
@@ -288,7 +289,7 @@ export async function markAllInAppNotificationsRead(userId: string): Promise<num
 }
 
 export async function getEmailDeliveryStats() {
-  if (!process.env.DATABASE_URL) return null
+  if (!serverConfig.db.databaseUrl) return null
   const [sent, failed, skipped, queued] = await Promise.all([
     prisma.emailDeliveryLog.count({ where: { status: 'SENT' } }),
     prisma.emailDeliveryLog.count({ where: { status: 'FAILED' } }),
@@ -301,7 +302,7 @@ export async function getEmailDeliveryStats() {
 }
 
 export async function listEmailHistoryForUser(userId: string, take = 40) {
-  if (!process.env.DATABASE_URL) return []
+  if (!serverConfig.db.databaseUrl) return []
   return prisma.emailDeliveryLog.findMany({
     where: { userId },
     orderBy: { createdAt: 'desc' },

@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { serverConfig } from '@/lib/config'
 
 /** One-click unsubscribe from non-transactional product emails (linked from message footer). */
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get('token')
-  const appOrigin = process.env.NEXTAUTH_URL ?? request.nextUrl.origin
+  const appOrigin = serverConfig.auth.nextAuthUrl ?? request.nextUrl.origin
   const redirectBase = new URL(appOrigin)
 
-  if (!process.env.DATABASE_URL) {
+  if (!serverConfig.db.databaseUrl) {
     redirectBase.pathname = '/'
     redirectBase.searchParams.set('unsub', 'unavailable')
     return NextResponse.redirect(redirectBase)

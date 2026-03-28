@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { processEmailQueue } from '@/lib/notifications'
+import { serverConfig } from '@/lib/config'
 
 /** Drain queued emails — call from Vercel Cron with `Authorization: Bearer $CRON_SECRET`. */
 export async function POST(request: NextRequest) {
-  const secret = process.env.CRON_SECRET
+  const secret = serverConfig.notifications.cronSecret
   if (!secret) {
     return NextResponse.json({ error: 'CRON_SECRET is not configured' }, { status: 503 })
   }
