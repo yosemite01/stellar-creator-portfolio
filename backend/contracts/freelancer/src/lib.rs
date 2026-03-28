@@ -146,7 +146,7 @@ impl FreelancerContract {
             .storage()
             .persistent()
             .get(&key)
-            .expect(\"Freelancer not registered\");
+            .expect("Freelancer not registered");
 
         profile.completed_projects += 1;
         env.storage().persistent().set(&key, &profile);
