@@ -7,7 +7,7 @@ import {
   markFailed,
   markFundedAuthorized,
   markRefunded,
-} from '@/lib/escrow-service'
+} from '@/lib/payments/escrow-service'
 
 export const runtime = 'nodejs'
 

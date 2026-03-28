@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { paymentPostBodySchema } from '@/lib/payment-validators'
+import { paymentPostBodySchema } from '@/lib/payments/payment-validators'
 
 describe('paymentPostBodySchema', () => {
   it('accepts bounty_escrow', () => {

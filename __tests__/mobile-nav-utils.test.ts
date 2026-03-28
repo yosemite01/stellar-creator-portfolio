@@ -4,7 +4,7 @@ import {
   shouldCloseMenuOnHorizontalSwipe,
   nextFocusIndex,
   collectFocusableElements,
-} from '@/lib/mobile-nav-utils'
+} from '@/lib/utils/mobile-nav-utils'
 
 describe('mobile-nav-utils', () => {
   it('exports 44px minimum touch target constant', () => {

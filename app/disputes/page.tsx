@@ -3,8 +3,8 @@
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { useEffect, useReducer, useState } from 'react';
-import { Header } from '@/components/header';
-import { DisputeForm } from '@/components/dispute-form';
+import { Header } from '@/components/layout/header';
+import { DisputeForm } from '@/components/forms/dispute-form';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,7 @@ import {
   listDisputesForUser,
   computeDisputeAnalytics,
   type DisputeRecord,
-} from '@/lib/dispute-service';
+} from '@/lib/services/dispute-service';
 import { Scale, Shield, History } from 'lucide-react';
 
 const STATUS_LABEL: Record<DisputeRecord['status'], string> = {

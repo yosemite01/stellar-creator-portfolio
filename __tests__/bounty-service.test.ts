@@ -8,8 +8,8 @@ import {
   canViewApplication,
   getApplicantCountsForBounties,
   listApplicationsForBounty,
-} from '@/lib/bounty-service'
-import { getBountyById } from '@/lib/creators-data'
+} from '@/lib/services/bounty-service'
+import { getBountyById } from '@/lib/services/creators-data'
 
 describe('bounty-service', () => {
   beforeEach(() => {

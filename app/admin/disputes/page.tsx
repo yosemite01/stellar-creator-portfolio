@@ -23,7 +23,7 @@ import {
   computeDisputeAnalytics,
   DISPUTE_RESOLUTION_TEMPLATES,
   type DisputeRecord,
-} from '@/lib/dispute-service';
+} from '@/lib/services/dispute-service';
 import { Gavel, Users, BarChart3, ArrowLeft } from 'lucide-react';
 
 const STATUS_LABEL: Record<DisputeRecord['status'], string> = {

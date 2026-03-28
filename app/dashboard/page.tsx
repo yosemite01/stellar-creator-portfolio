@@ -3,7 +3,7 @@
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Header } from '@/components/header';
+import { Header } from '@/components/layout/header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -53,7 +53,7 @@ export default function DashboardPage() {
     return null;
   }
 
-  const userRole = session.user.role;
+  const userRole = (session?.user as any)?.role || 'USER';
 
   return (
     <div className="min-h-screen bg-background">
@@ -63,7 +63,7 @@ export default function DashboardPage() {
         {/* Welcome Section */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">
-            Welcome back, {session.user.name || session.user.email}!
+            Welcome back, {session?.user?.name || session?.user?.email || 'User'}!
           </h1>
           <p className="text-muted-foreground">
             Here&apos;s what&apos;s happening with your account today.

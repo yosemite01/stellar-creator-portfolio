@@ -1,12 +1,12 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Header } from '@/components/header';
-import { Footer } from '@/components/footer';
-import { CreatorCard } from '@/components/creator-card';
+import { Header } from '@/components/layout/header';
+import { Footer } from '@/components/layout/footer';
+import { CreatorCard } from '@/components/cards/creator-card';
 import { Button } from '@/components/ui/button';
 import { ArrowRight, Sparkles, Users, Target } from 'lucide-react';
-import { creators } from '@/lib/creators-data';
+import { creators } from '@/lib/services/creators-data';
 
 export default function Home() {
   const router = useRouter();

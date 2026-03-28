@@ -13,7 +13,7 @@ import {
   closeDispute,
   getDisputeSnapshot,
   DISPUTE_RESOLUTION_TEMPLATES,
-} from '@/lib/dispute-service';
+} from '@/lib/services/dispute-service';
 
 describe('E2E dispute resolution (simulated)', () => {
   beforeEach(() => {

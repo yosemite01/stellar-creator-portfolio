@@ -4,18 +4,18 @@ import { useSession } from 'next-auth/react'
 import { useRouter, useParams } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Header } from '@/components/header'
+import { Header } from '@/components/layout/header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { getBountyById } from '@/lib/creators-data'
+import { getBountyById } from '@/lib/services/creators-data'
 import type {
   BountyApplicationRecord,
   ApplicationThreadMessage,
   TimelineEntry,
-} from '@/lib/bounty-service'
+} from '@/lib/services/bounty-service'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import {
   AlertDialog,

@@ -8,7 +8,7 @@ import {
   getPendingReviews,
   moderateReview,
   voteOnReview,
-} from '@/lib/review-service'
+} from '@/lib/services/review-service'
 import { z } from 'zod'
 import { validateRequest, formatZodErrors } from '@/lib/validators'
 

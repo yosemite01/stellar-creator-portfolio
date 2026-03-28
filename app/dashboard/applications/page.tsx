@@ -4,20 +4,20 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Header } from '@/components/header'
+import { Header } from '@/components/layout/header'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { getBountyById } from '@/lib/creators-data'
+import { getBountyById } from '@/lib/services/creators-data'
 import type {
   BountyApplicationRecord,
   ApplicationThreadMessage,
   TimelineEntry,
   BountyNotificationRecord,
-} from '@/lib/bounty-service'
+} from '@/lib/services/bounty-service'
 import { Loader2, Bell } from 'lucide-react'
 
 export default function DashboardApplicationsPage() {
@@ -38,7 +38,7 @@ export default function DashboardApplicationsPage() {
   const loadAll = useCallback(async () => {
     const [aRes, nRes] = await Promise.all([
       fetch('/api/bounty-applications?applicant=me'),
-      fetch('/api/bounty-notifications'),
+      fetch('/api/notifications'),
     ])
     if (aRes.ok) {
       const data = await aRes.json()
@@ -108,7 +108,7 @@ export default function DashboardApplicationsPage() {
   }
 
   async function markRead(nid: string) {
-    await fetch('/api/bounty-notifications', {
+    await fetch('/api/notifications', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: nid }),

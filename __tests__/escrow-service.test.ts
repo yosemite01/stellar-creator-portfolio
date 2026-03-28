@@ -9,7 +9,7 @@ import {
   markReleased,
   markRefunded,
   getEscrow,
-} from '@/lib/escrow-service'
+} from '@/lib/payments/escrow-service'
 
 describe('escrow-service', () => {
   beforeEach(() => {

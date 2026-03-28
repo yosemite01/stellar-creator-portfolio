@@ -14,8 +14,8 @@ import {
   getApplicantCountsForBounties,
   clientCanManageBounty,
   pushNotification,
-} from '@/lib/bounty-service'
-import { getBountyById, bounties } from '@/lib/creators-data'
+} from '@/lib/services/bounty-service'
+import { getBountyById, bounties } from '@/lib/services/creators-data'
 import {
   sendApplicantReceivedEmail,
   sendClientNewApplicationEmail,
@@ -143,6 +143,7 @@ export async function POST(request: NextRequest) {
           to: session.user.email,
           name: session.user.name || 'there',
           bountyTitle: bounty.title,
+          userId: session.user.id,
         })
       }
     } catch (e) {
@@ -166,6 +167,7 @@ export async function POST(request: NextRequest) {
           bountyTitle: bounty.title,
           applicantName: application.applicantName,
           bountyId: bounty.id,
+          userId: bounty.ownerUserId ?? null,
         })
       }
     } catch (e) {

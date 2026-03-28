@@ -1,256 +1,359 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
-
-#[contracttype]
-pub struct GovernanceConfig {
-    pub platform_fee_percent: u32,
-    pub min_bounty_budget: i128,
-    pub max_bounty_budget: i128,
-    pub dispute_resolution_period: u64,
-    pub admin_address: Address,
-    pub last_updated: u64,
-}
-
-#[contracttype]
-pub struct Proposal {
-    pub id: u64,
-    pub proposer: Address,
-    pub title: String,
-    pub description: String,
-    pub yes_votes: u64,
-    pub no_votes: u64,
-    pub approved: bool,
-    pub executed: bool,
-    pub created_at: u64,
-    pub voting_deadline: u64,
-}
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
 #[contracttype]
 pub enum DataKey {
-    Config,
+	Owner,
+	Admin(Address),
     ProposalCounter,
     Proposal(u64),
-    Vote(u64, Address),
+    HasVoted(u64, Address),
 }
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProposalType {
+    AddAdmin(Address),
+    RemoveAdmin(Address),
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ProposalStatus {
+    Pending = 0,
+    Executed = 1,
+    Rejected = 2,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Proposal {
+    pub id: u64,
+    pub creator: Address,
+    pub prop_type: ProposalType,
+    pub status: ProposalStatus,
+    pub votes_for: u32,
+    pub votes_against: u32,
+    pub created_at: u64,
+}
+
+// =============================================================================
+// SECURITY INVARIANTS (for formal verification / audit reference)
+// =============================================================================
+// INV-1: Only the stored owner may add or remove admins.
+// INV-2: Only admins may create proposals or vote.
+// INV-3: An admin may vote at most once per proposal (HasVoted key enforces this).
+// INV-4: Proposal status transitions: Pending → Executed | Rejected only.
+//        Terminal states never revert.
+// INV-5: execute_proposal applies state changes only when votes_for > votes_against
+//        AND votes_for > 0; otherwise marks Rejected.
+// INV-6: ProposalCounter is monotonically increasing; proposal IDs are unique.
+// =============================================================================
 
 #[contract]
 pub struct GovernanceContract;
 
+const GOVERNANCE: Symbol = symbol_short!("gov");
+
 #[contractimpl]
 impl GovernanceContract {
-    pub fn initialize(env: Env, admin: Address) {
-        admin.require_auth();
-        assert!(
-            !env.storage().persistent().has(&DataKey::Config),
-            "Already initialized"
-        );
+	/// Initialize the governance contract owner. Owner must authenticate.
+	pub fn init(env: Env, owner: Address) -> bool {
+		owner.require_auth();
+		env.storage().persistent().set(&DataKey::Owner, &owner);
+		true
+	}
 
-        let config = GovernanceConfig {
-            platform_fee_percent: 50,
-            min_bounty_budget: 100,
-            max_bounty_budget: 1_000_000,
-            dispute_resolution_period: 7 * 24 * 3600,
-            admin_address: admin,
-            last_updated: env.ledger().timestamp(),
-        };
-        env.storage().persistent().set(&DataKey::Config, &config);
-    }
+	/// Add an admin. Only the owner may add admins.
+	pub fn add_admin(env: Env, owner: Address, admin: Address) -> bool {
+		owner.require_auth();
+		let stored_owner: Address = env
+			.storage()
+			.persistent()
+			.get(&DataKey::Owner)
+			.expect("Governance not initialized");
+		if stored_owner != owner {
+			panic!("Only owner can add admins");
+		}
+		env.storage()
+			.persistent()
+			.set(&DataKey::Admin(admin.clone()), &true);
+		// Event: admin added
+		env.events().publish((GOVERNANCE, symbol_short!("adm_added"), admin), (owner,));
+		true
+	}
 
-    pub fn get_config(env: Env) -> GovernanceConfig {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Config)
-            .expect("Not initialized")
-    }
+	/// Remove an admin. Only the owner may remove admins.
+	pub fn remove_admin(env: Env, owner: Address, admin: Address) -> bool {
+		owner.require_auth();
+		let stored_owner: Address = env
+			.storage()
+			.persistent()
+			.get(&DataKey::Owner)
+			.expect("Governance not initialized");
+		if stored_owner != owner {
+			panic!("Only owner can remove admins");
+		}
+		env.storage().persistent().remove(&DataKey::Admin(admin.clone()));
+		env.events().publish((GOVERNANCE, symbol_short!("adm_rmvd"), admin), (owner,));
+		true
+	}
 
-    pub fn set_platform_fee(env: Env, admin: Address, fee_percent: u32) -> bool {
-        admin.require_auth();
-        assert!(fee_percent <= 1000, "Fee cannot exceed 10%");
+	/// Check whether an address is an admin.
+	pub fn is_admin(env: Env, addr: Address) -> bool {
+		env.storage()
+			.persistent()
+			.get::<DataKey, bool>(&DataKey::Admin(addr))
+			.unwrap_or(false)
+	}
 
-        let mut config: GovernanceConfig = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Config)
-            .expect("Not initialized");
+	// -------------------------------------------------------------------------
+	// Proposal logic (Issue #192)
+	// -------------------------------------------------------------------------
 
-        assert!(admin == config.admin_address, "Only admin can update fee");
+	/// Creates a new governance proposal.
+	/// Only an active admin can create a proposal.
+	pub fn create_proposal(env: Env, creator: Address, prop_type: ProposalType) -> u64 {
+		creator.require_auth();
+		if !Self::is_admin(env.clone(), creator.clone()) {
+			panic!("Only admins can create proposals");
+		}
 
-        config.platform_fee_percent = fee_percent;
-        config.last_updated = env.ledger().timestamp();
-        env.storage().persistent().set(&DataKey::Config, &config);
-        true
-    }
+		let mut counter: u64 = env.storage().instance().get(&DataKey::ProposalCounter).unwrap_or(0);
+		counter += 1;
 
-    pub fn set_bounty_limits(env: Env, admin: Address, min_budget: i128, max_budget: i128) -> bool {
-        admin.require_auth();
+		let proposal = Proposal {
+			id: counter,
+			creator: creator.clone(),
+			prop_type,
+			status: ProposalStatus::Pending,
+			votes_for: 0,
+			votes_against: 0,
+			created_at: env.ledger().timestamp(),
+		};
 
-        let mut config: GovernanceConfig = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Config)
-            .expect("Not initialized");
+		env.storage().persistent().set(&DataKey::Proposal(counter), &proposal);
+		env.storage().instance().set(&DataKey::ProposalCounter, &counter);
 
-        assert!(
-            admin == config.admin_address,
-            "Only admin can update limits"
-        );
-        assert!(min_budget > 0, "Min budget must be positive");
-        assert!(max_budget > min_budget, "Max must be greater than min");
+		env.events().publish(
+			(GOVERNANCE, symbol_short!("prop_crt"), counter),
+			(creator.clone(),),
+		);
 
-        config.min_bounty_budget = min_budget;
-        config.max_bounty_budget = max_budget;
-        config.last_updated = env.ledger().timestamp();
-        env.storage().persistent().set(&DataKey::Config, &config);
-        true
-    }
+		counter
+	}
 
-    pub fn create_proposal(
-        env: Env,
-        proposer: Address,
-        title: String,
-        description: String,
-        voting_period: u64,
-    ) -> u64 {
-        proposer.require_auth();
+	/// Cast a vote on a Pending proposal.
+	/// Only admins can vote. An admin can only vote once per proposal.
+	pub fn vote(env: Env, voter: Address, proposal_id: u64, support: bool) -> bool {
+		voter.require_auth();
+		if !Self::is_admin(env.clone(), voter.clone()) {
+			panic!("Only admins can vote");
+		}
 
-        let mut counter: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ProposalCounter)
-            .unwrap_or(0);
-        counter += 1;
+		let key = DataKey::Proposal(proposal_id);
+		let mut proposal: Proposal = env
+			.storage()
+			.persistent()
+			.get(&key)
+			.expect("Proposal not found");
 
-        let proposal = Proposal {
-            id: counter,
-            proposer,
-            title,
-            description,
-            yes_votes: 0,
-            no_votes: 0,
-            approved: false,
-            executed: false,
-            created_at: env.ledger().timestamp(),
-            voting_deadline: env.ledger().timestamp() + voting_period,
-        };
+		if proposal.status != ProposalStatus::Pending {
+			panic!("Proposal is not in Pending status");
+		}
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Proposal(counter), &proposal);
-        env.storage()
-            .persistent()
-            .set(&DataKey::ProposalCounter, &counter);
-        counter
-    }
+		let voted_key = DataKey::HasVoted(proposal_id, voter.clone());
+		if env.storage().persistent().has(&voted_key) {
+			panic!("Already voted");
+		}
 
-    pub fn vote(env: Env, voter: Address, proposal_id: u64, vote_yes: bool) -> bool {
-        voter.require_auth();
+		if support {
+			proposal.votes_for += 1;
+		} else {
+			proposal.votes_against += 1;
+		}
 
-        let vote_key = DataKey::Vote(proposal_id, voter.clone());
-        assert!(!env.storage().persistent().has(&vote_key), "Already voted");
+		env.storage().persistent().set(&key, &proposal);
+		env.storage().persistent().set(&voted_key, &true);
 
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("Proposal not found");
+		env.events().publish(
+			(GOVERNANCE, symbol_short!("voted"), proposal_id),
+			(voter.clone(), support),
+		);
 
-        assert!(!proposal.executed, "Proposal already executed");
-        assert!(
-            env.ledger().timestamp() < proposal.voting_deadline,
-            "Voting period has ended"
-        );
+		true
+	}
 
-        if vote_yes {
-            proposal.yes_votes += 1;
-        } else {
-            proposal.no_votes += 1;
-        }
+	/// Executes a proposal.
+	/// Only admins can trigger execution, and the proposal must be Pending.
+	/// If `votes_for > votes_against` and `votes_for > 0`, it executes the specific State Change Action.
+	/// Otherwise, it marks the proposal as Rejected.
+	pub fn execute_proposal(env: Env, caller: Address, proposal_id: u64) -> bool {
+		caller.require_auth();
+		if !Self::is_admin(env.clone(), caller.clone()) {
+			panic!("Only admins can execute proposals");
+		}
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Proposal(proposal_id), &proposal);
-        env.storage().persistent().set(&vote_key, &true);
-        true
-    }
+		let key = DataKey::Proposal(proposal_id);
+		let mut proposal: Proposal = env
+			.storage()
+			.persistent()
+			.get(&key)
+			.expect("Proposal not found");
 
-    pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("Proposal not found")
-    }
+		if proposal.status != ProposalStatus::Pending {
+			panic!("Proposal is not in Pending status");
+		}
 
-    pub fn execute_proposal(env: Env, proposal_id: u64) -> bool {
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("Proposal not found");
+		// Execution condition
+		if proposal.votes_for > proposal.votes_against && proposal.votes_for > 0 {
+			proposal.status = ProposalStatus::Executed;
 
-        assert!(
-            env.ledger().timestamp() >= proposal.voting_deadline,
-            "Voting still in progress"
-        );
-        assert!(!proposal.executed, "Already executed");
+			// Apply State Changes directly mapped to enum
+			match &proposal.prop_type {
+				ProposalType::AddAdmin(new_admin) => {
+					env.storage()
+						.persistent()
+						.set(&DataKey::Admin(new_admin.clone()), &true);
+					env.events().publish(
+						(GOVERNANCE, symbol_short!("adm_added"), new_admin.clone()),
+						(Symbol::new(&env, "proposal"),),
+					);
+				}
+				ProposalType::RemoveAdmin(old_admin) => {
+					env.storage().persistent().remove(&DataKey::Admin(old_admin.clone()));
+					env.events().publish(
+						(GOVERNANCE, symbol_short!("adm_rmvd"), old_admin.clone()),
+						(Symbol::new(&env, "proposal"),),
+					);
+				}
+			}
+		} else {
+			proposal.status = ProposalStatus::Rejected;
+		}
 
-        proposal.approved = proposal.yes_votes > proposal.no_votes;
-        proposal.executed = true;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Proposal(proposal_id), &proposal);
-        true
-    }
+		env.storage().persistent().set(&key, &proposal);
+
+		env.events().publish(
+			(GOVERNANCE, symbol_short!("prop_exec"), proposal_id),
+			(proposal.status as u32,),
+		);
+
+		true
+	}
+
+	/// Retrieves the full details of a proposal by ID.
+	pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
+		env.storage()
+			.persistent()
+			.get(&DataKey::Proposal(proposal_id))
+			.expect("Proposal not found")
+	}
 }
+
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
+	use super::*;
+	use soroban_sdk::testutils::Address as _;
+	use soroban_sdk::Env;
 
-    #[test]
-    fn test_initialize_and_get_config() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(GovernanceContract, ());
-        let client = GovernanceContractClient::new(&env, &contract_id);
+	#[test]
+	fn test_add_and_check_admin() {
+		let env = Env::default();
+		env.mock_all_auths();
+		let contract_id = env.register(GovernanceContract, ());
+		let client = GovernanceContractClient::new(&env, &contract_id);
 
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
+		let owner = Address::generate(&env);
+		// Initialize
+		assert!(client.init(&owner));
 
-        let config = client.get_config();
-        assert_eq!(config.platform_fee_percent, 50);
-        assert_eq!(config.admin_address, admin);
-    }
+		let admin = Address::generate(&env);
+		assert!(client.add_admin(&owner, &admin));
+		assert!(client.is_admin(&admin));
 
-    #[test]
-    fn test_create_and_execute_proposal() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(GovernanceContract, ());
-        let client = GovernanceContractClient::new(&env, &contract_id);
+		assert!(client.remove_admin(&owner, &admin));
+		assert!(!client.is_admin(&admin));
+	}
+#[test]
+fn test_proposal_lifecycle() {
+let env = Env::default();
+env.mock_all_auths();
+let contract_id = env.register(GovernanceContract, ());
+let client = GovernanceContractClient::new(&env, &contract_id);
 
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
+let owner = Address::generate(&env);
+let admin1 = Address::generate(&env);
+let admin2 = Address::generate(&env);
+let new_admin = Address::generate(&env);
 
-        let proposer = Address::generate(&env);
-        let id = client.create_proposal(
-            &proposer,
-            &String::from_str(&env, "Reduce fees"),
-            &String::from_str(&env, "Lower platform fee to 3%"),
-            &100u64,
-        );
-        assert_eq!(id, 1);
+// Initialize & setup admins
+client.init(&owner);
+client.add_admin(&owner, &admin1);
+client.add_admin(&owner, &admin2);
 
-        let voter = Address::generate(&env);
-        client.vote(&voter, &id, &true);
+// admin1 creates proposal to add new_admin
+let prop_id = client.create_proposal(&admin1, &ProposalType::AddAdmin(new_admin.clone()));
+assert_eq!(prop_id, 1);
 
-        env.ledger().with_mut(|l| l.timestamp += 101);
-        client.execute_proposal(&id);
+let prop = client.get_proposal(&prop_id);
+assert_eq!(prop.status, ProposalStatus::Pending);
+assert_eq!(prop.votes_for, 0);
 
-        let proposal = client.get_proposal(&id);
-        assert!(proposal.approved);
-        assert!(proposal.executed);
-    }
+// admin1 votes FOR
+assert!(client.vote(&admin1, &prop_id, &true));
+
+let prop_after_vote = client.get_proposal(&prop_id);
+assert_eq!(prop_after_vote.votes_for, 1);
+
+// admin2 executes the proposal (1 vote for > 0 against)
+assert!(client.execute_proposal(&admin2, &prop_id));
+
+let prop_executed = client.get_proposal(&prop_id);
+assert_eq!(prop_executed.status, ProposalStatus::Executed);
+
+// Verify effect: new_admin is now an admin
+assert!(client.is_admin(&new_admin));
+}
+
+#[test]
+#[should_panic(expected = "Already voted")]
+fn test_double_vote_panic() {
+let env = Env::default();
+env.mock_all_auths();
+let contract_id = env.register(GovernanceContract, ());
+let client = GovernanceContractClient::new(&env, &contract_id);
+
+let owner = Address::generate(&env);
+let admin = Address::generate(&env);
+let new_admin = Address::generate(&env);
+
+client.init(&owner);
+client.add_admin(&owner, &admin);
+
+let prop_id = client.create_proposal(&admin, &ProposalType::AddAdmin(new_admin.clone()));
+
+client.vote(&admin, &prop_id, &true);
+// Should panic here
+client.vote(&admin, &prop_id, &true);
+}
+
+#[test]
+#[should_panic(expected = "Only admins can create proposals")]
+fn test_unauthorized_propose_panic() {
+let env = Env::default();
+env.mock_all_auths();
+let contract_id = env.register(GovernanceContract, ());
+let client = GovernanceContractClient::new(&env, &contract_id);
+
+let owner = Address::generate(&env);
+let rando = Address::generate(&env);
+let new_admin = Address::generate(&env);
+
+client.init(&owner);
+// rando is NOT an admin
+client.create_proposal(&rando, &ProposalType::AddAdmin(new_admin));
+}
 }

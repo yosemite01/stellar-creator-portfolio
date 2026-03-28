@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { messageCrypto } from '@/hooks/useMessages'
-import { RealtimeWebSocket } from '@/lib/websocket'
+import { RealtimeWebSocket } from '@/lib/websocket/index'
 
 declare const global: typeof globalThis & { WebSocket: any }
 

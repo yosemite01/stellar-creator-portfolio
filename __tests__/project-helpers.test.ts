@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { Project } from '@/lib/creators-data'
+import type { Project } from '@/lib/services/creators-data'
 import {
   filterProjectsByCategory,
   getProjectDetail,
   getProjectStatus,
   getProjectTechStack,
   projectCategoryOptions,
-} from '@/lib/project-helpers'
+} from '@/lib/utils/project-helpers'
 
 const sample: Project[] = [
   {

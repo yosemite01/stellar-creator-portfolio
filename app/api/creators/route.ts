@@ -7,7 +7,7 @@ import {
   setCacheAsync,
   invalidateCacheAsync,
 } from '@/lib/db'
-import { TTL } from '@/lib/redis'
+import { TTL } from '@/lib/storage/redis'
 import {
   creatorSchema,
   creatorUpdateSchema,

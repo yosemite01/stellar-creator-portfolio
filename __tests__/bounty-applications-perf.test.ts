@@ -3,7 +3,7 @@ import {
   __resetBountyStoreForTests,
   submitApplication,
   getApplicantCountsForBounties,
-} from '@/lib/bounty-service'
+} from '@/lib/services/bounty-service'
 
 describe('bounty applications performance', () => {
   beforeEach(() => {

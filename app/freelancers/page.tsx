@@ -2,13 +2,13 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Header } from '@/components/header';
-import { Footer } from '@/components/footer';
-import { CreatorCard } from '@/components/creator-card';
+import { Header } from '@/components/layout/header';
+import { Footer } from '@/components/layout/footer';
+import { CreatorCard } from '@/components/cards/creator-card';
 import { Button } from '@/components/ui/button';
-import { creators, disciplines } from '@/lib/creators-data';
+import { creators, disciplines } from '@/lib/services/creators-data';
 import { ArrowRight, Search, Star, UserX } from 'lucide-react';
-import { EmptyState } from '@/components/empty-state';
+import { EmptyState } from '@/components/common/empty-state';
 
 export default function FreelancersPage() {
   const [selectedDiscipline, setSelectedDiscipline] = useState('All');

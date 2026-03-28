@@ -70,6 +70,12 @@ services:
       consul:
         condition: service_healthy
     command: cargo run --bin stellar-api
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3001/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   indexer:
     image: rust:1.81-slim
@@ -90,6 +96,12 @@ services:
       consul:
         condition: service_healthy
     command: cargo run --bin stellar-indexer
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h postgres -U stellar -d stellar_db || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   pgadmin:
     image: dpage/pgadmin4:latest

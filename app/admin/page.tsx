@@ -11,7 +11,7 @@ import {
 import {
   mockStats, mockAuditLogs, mockReports,
   type AuditLog,
-} from '@/lib/admin-service';
+} from '@/lib/services/admin-service';
 
 const ACTION_LABELS: Record<string, string> = {
   'user.suspend': 'Suspended user',

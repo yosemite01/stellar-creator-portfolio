@@ -5,7 +5,7 @@ import {
   parseFileDisputeInput,
   disputeFormInputSchema,
   toFileDisputeInput,
-} from '@/lib/dispute-service';
+} from '@/lib/services/dispute-service';
 
 describe('dispute validation', () => {
   it('accepts a valid filing payload', () => {

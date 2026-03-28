@@ -3,24 +3,24 @@
 import { notFound } from 'next/navigation';
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import type { AggregateRating } from '@/lib/review-service';
-import { Header } from '@/components/header';
-import { Footer } from '@/components/footer';
-import { ProjectCard } from '@/components/project-card';
+import type { AggregateRating } from '@/lib/services/review-service';
+import { Header } from '@/components/layout/header';
+import { Footer } from '@/components/layout/footer';
+import { ProjectCard } from '@/components/cards/project-card';
 import { Button } from '@/components/ui/button';
-import { creators, type Project } from '@/lib/creators-data';
+import { creators, type Project } from '@/lib/services/creators-data';
 import {
   projectCategoryOptions,
   filterProjectsByCategory,
-} from '@/lib/project-helpers';
+} from '@/lib/utils/project-helpers';
 import { ArrowLeft, Linkedin, Twitter, ExternalLink, Star, Settings2, LayoutGrid, List } from 'lucide-react';
 import { useSession } from 'next-auth/react';
-import { AggregateRatingDisplay } from '@/components/rating-display';
-import { SocialShare } from '@/components/social-share';
+import { AggregateRatingDisplay } from '@/components/widgets/rating-display';
+import { SocialShare } from '@/components/common/social-share';
 import Image from 'next/image';
-import { buildOptimizationProps, buildSizes } from '@/lib/image-utils';
+import { buildOptimizationProps, buildSizes } from '@/lib/utils/image-utils';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { ProjectModal } from '@/components/project-modal';
+import { ProjectModal } from '@/components/widgets/project-modal';
 
 interface CreatorProfilePageProps {
   params: {

@@ -7,7 +7,7 @@ import {
   verifyEvidenceDigest,
   canViewDispute,
   hashEvidenceBytes,
-} from '@/lib/dispute-service';
+} from '@/lib/services/dispute-service';
 
 describe('dispute security', () => {
   beforeEach(() => {

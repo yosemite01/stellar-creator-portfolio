@@ -10,8 +10,8 @@ import {
   listEscrowsForUser,
   markReleased,
   markRefunded,
-} from '@/lib/escrow-service'
-import { paymentPostBodySchema } from '@/lib/payment-validators'
+} from '@/lib/payments/escrow-service'
+import { paymentPostBodySchema } from '@/lib/payments/payment-validators'
 import { validateRequest, formatZodErrors } from '@/lib/validators'
 
 export const runtime = 'nodejs'

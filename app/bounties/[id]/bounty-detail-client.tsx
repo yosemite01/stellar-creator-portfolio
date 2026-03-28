@@ -4,11 +4,11 @@ import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { BountyApplicationForm } from '@/components/bounty-application-form'
+import { BountyApplicationForm } from '@/components/forms/bounty-application-form'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import type { BountyApplicationRecord } from '@/lib/bounty-service'
+import type { BountyApplicationRecord } from '@/lib/services/bounty-service'
 
 export function BountyDetailClient({
   bountyId,

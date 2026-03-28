@@ -71,6 +71,7 @@ export const serverConfig = {
       from: env.EMAIL_FROM,
       devUser: env.EMAIL_DEV_USER,
       devPass: env.EMAIL_DEV_PASS,
+      resendApiKey: env.RESEND_API_KEY,
     }
   },
 
@@ -129,6 +130,7 @@ export const serverConfig = {
     const env = getServerEnv()
     return {
       bountyNotifyEmail: env.BOUNTY_NOTIFY_EMAIL,
+      cronSecret: env.CRON_SECRET,
     }
   },
 

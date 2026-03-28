@@ -23,6 +23,7 @@ export const serverEnvSchema = z
     EMAIL_FROM: z.string().default('"Stellar Creators" <noreply@stellar-creators.com>'),
     EMAIL_DEV_USER: z.string().optional(),
     EMAIL_DEV_PASS: z.string().optional(),
+    RESEND_API_KEY: z.string().optional(),
 
     // Storage (S3 / R2)
     STORAGE_PROVIDER: z.enum(['s3', 'r2']).default('s3'),
@@ -57,6 +58,7 @@ export const serverEnvSchema = z
 
     // Notifications
     BOUNTY_NOTIFY_EMAIL: z.string().email().optional(),
+    CRON_SECRET: z.string().optional(),
 
     // App
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),

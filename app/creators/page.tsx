@@ -1,14 +1,14 @@
 'use client';
 
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { Header } from '@/components/header';
-import { Footer } from '@/components/footer';
-import { CreatorCard } from '@/components/creator-card';
-import { disciplines, searchCreators, ALL_SKILLS } from '@/lib/creators-data';
+import { Header } from '@/components/layout/header';
+import { Footer } from '@/components/layout/footer';
+import { CreatorCard } from '@/components/cards/creator-card';
+import { disciplines, searchCreators, ALL_SKILLS } from '@/lib/services/creators-data';
 import { Button } from '@/components/ui/button';
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyContent, EmptyMedia } from '@/components/ui/empty';
 import { Pagination, parsePaginationParams } from '@/components/pagination';
-import { SearchInput } from '@/components/search-input';
+import { SearchInput } from '@/components/common/search-input';
 import { useCreatorFilters, EXPERIENCE_RANGES, SortOption } from '@/hooks/useCreatorFilters';
 import { Users, SlidersHorizontal, X } from 'lucide-react';
 

@@ -1,8 +1,8 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { CreatorCard } from '../components/creator-card';
-import { creators } from '../lib/creators-data';
+import { CreatorCard } from '@/components/cards/creator-card';
+import { creators } from '@/lib/services/creators-data';
 
 type RouterMock = { push: ReturnType<typeof vi.fn> };
 

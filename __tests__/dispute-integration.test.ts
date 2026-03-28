@@ -9,7 +9,7 @@ import {
   submitAppeal,
   getDisputeSnapshot,
   DISPUTE_RESOLUTION_TEMPLATES,
-} from '@/lib/dispute-service';
+} from '@/lib/services/dispute-service';
 
 describe('dispute workflow + escrow integration', () => {
   beforeEach(() => {

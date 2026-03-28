@@ -18,3 +18,18 @@ node_modules/
 
 # Uploaded files
 backend/uploads/
+
+# Build artifacts
+backend/target/
+target/
+dist/
+.next/
+
+# Test results
+results/
+
+# TypeScript
+*.tsbuildinfo
+
+#Agents
+GEMINI.md

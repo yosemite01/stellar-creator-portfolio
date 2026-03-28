@@ -21,3 +21,4 @@ dotenvy.workspace = true
 sqlx.workspace = true
 reqwest.workspace = true
 stellar-discovery = { path = "../discovery" }
+stellar-common = { path = "../common" }

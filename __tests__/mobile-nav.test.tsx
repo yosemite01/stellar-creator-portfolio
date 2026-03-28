@@ -1,7 +1,7 @@
 import React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { MobileNav, MOBILE_NAV_PANEL_ID } from '@/components/mobile-nav'
+import { MobileNav, MOBILE_NAV_PANEL_ID } from '@/components/layout/mobile-nav'
 
 vi.mock('next/link', () => ({
   default ({

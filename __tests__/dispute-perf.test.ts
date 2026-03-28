@@ -3,7 +3,7 @@ import {
   replaceDisputeSnapshotForTests,
   fileDispute,
   getDisputeSnapshot,
-} from '@/lib/dispute-service';
+} from '@/lib/services/dispute-service';
 
 describe('dispute performance', () => {
   beforeEach(() => {

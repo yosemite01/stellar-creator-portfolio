@@ -7,7 +7,7 @@ import {
   attachPaymentIntent,
   getEscrow,
   findEscrowByPaymentIntent,
-} from '@/lib/escrow-service'
+} from '@/lib/payments/escrow-service'
 
 describe('processStripeWebhookEvent', () => {
   beforeEach(() => {

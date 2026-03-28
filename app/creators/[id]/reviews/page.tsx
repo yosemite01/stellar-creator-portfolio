@@ -3,15 +3,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { Header } from '@/components/header';
-import { Footer } from '@/components/footer';
+import { Header } from '@/components/layout/header';
+import { Footer } from '@/components/layout/footer';
 import { Button } from '@/components/ui/button';
-import { ReviewCard } from '@/components/review-card';
-import { ReviewForm } from '@/components/review-form';
-import { AggregateRatingDisplay } from '@/components/rating-display';
-import { creators } from '@/lib/creators-data';
+import { ReviewCard } from '@/components/cards/review-card';
+import { ReviewForm } from '@/components/forms/review-form';
+import { AggregateRatingDisplay } from '@/components/widgets/rating-display';
+import { creators } from '@/lib/services/creators-data';
 import { ArrowLeft, PenLine } from 'lucide-react';
-import type { Review, AggregateRating, ReviewVote } from '@/lib/review-service';
+import type { Review, AggregateRating, ReviewVote } from '@/lib/services/review-service';
 
 type SortOption = 'recent' | 'helpful' | 'rating_high' | 'rating_low';
 

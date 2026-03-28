@@ -29,3 +29,4 @@ hex.workspace = true
 oauth2 = { version = "4", features = ["reqwest"] }
 sqlx = { workspace = true, features = ["migrate", "chrono", "uuid"] }
 stellar-discovery = { path = "../discovery" }
+stellar-common = { path = "../common" }

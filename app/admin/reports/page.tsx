@@ -7,7 +7,7 @@ import { CheckCircle, XCircle, Flag, MessageSquare, User, Briefcase } from 'luci
 import {
   mockReports, mockAuditLogs, addAuditLog,
   type ContentReport, type ReportStatus, type AuditLog,
-} from '@/lib/admin-service';
+} from '@/lib/services/admin-service';
 
 const TYPE_ICON: Record<ContentReport['type'], React.ElementType> = {
   bounty: Briefcase,

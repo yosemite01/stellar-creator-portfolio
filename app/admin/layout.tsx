@@ -1,5 +1,5 @@
-import { Header } from '@/components/header';
-import { AdminSidebar } from '@/components/admin-sidebar';
+import { Header } from '@/components/layout/header';
+import { AdminSidebar } from '@/components/layout/admin-sidebar';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (

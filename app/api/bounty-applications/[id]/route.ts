@@ -11,8 +11,8 @@ import {
   updateApplicationStatus,
   clientCanManageBounty,
   pushNotification,
-} from '@/lib/bounty-service'
-import { getBountyById } from '@/lib/creators-data'
+} from '@/lib/services/bounty-service'
+import { getBountyById } from '@/lib/services/creators-data'
 import { sendApplicantStatusEmail } from '@/lib/bounty-notify-email'
 
 type RouteParams = { params: Promise<{ id: string }> }
@@ -85,6 +85,7 @@ export async function PATCH(request: NextRequest, context: RouteParams) {
           name: application.applicantName,
           bountyTitle: bounty.title,
           status,
+          userId: application.applicantId,
         })
       }
     } catch (e) {

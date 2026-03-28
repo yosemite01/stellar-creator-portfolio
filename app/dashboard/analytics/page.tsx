@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Header } from '@/components/header'
+import { Header } from '@/components/layout/header'
 import {
   Card,
   CardContent,
@@ -22,7 +22,7 @@ import {
   PerformanceRadar,
   PeerComparisonBar,
   TrendSparkline,
-} from '@/components/analytics-chart'
+} from '@/components/widgets/analytics-chart'
 import {
   ArrowLeft,
   TrendingUp,

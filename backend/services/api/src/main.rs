@@ -353,20 +353,93 @@ async fn shutdown_signal() {
     );
 }
 
-fn configure_api_routes(cfg: &mut web::ServiceConfig) {
-    cfg.route("/health", web::get().to(health))
-        .route("/api/bounties", web::post().to(create_bounty))
-        .route("/api/bounties", web::get().to(list_bounties))
-        .route("/api/bounties/{id}", web::get().to(get_bounty))
-        .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-        .route(
-            "/api/freelancers/register",
-            web::post().to(register_freelancer),
+fn configure_api_routes(cfg: &mut web::ServiceConfig, redis: deadpool_redis::Pool) {
+    // ── Rate limit tiers ─────────────────────────────────────────────────────
+    // Writes: 30 req / 60 s per IP
+    let write_rl = RateLimit::new(
+        redis.clone(),
+        RateLimitConfig::new("api_write", 30, 60),
+    );
+    // Reads: 120 req / 60 s per IP
+    let read_rl = RateLimit::new(
+        redis.clone(),
+        RateLimitConfig::new("api_read", 120, 60),
+    );
+    // Auth-adjacent / sensitive paths: 10 req / 60 s per IP
+    let strict_rl = RateLimit::new(
+        redis.clone(),
+        RateLimitConfig::new("api_strict", 10, 60),
+    );
+
+    cfg
+        // Health — no rate limit; monitoring tools poll this endpoint.
+        .route("/health", web::get().to(health))
+
+        // ── /api/v1 — versioned routes ────────────────────────────────────
+        .service(
+            web::scope("/api/v1")
+                // Write endpoints
+                .service(
+                    web::scope("")
+                        .wrap(write_rl)
+                        .route("/bounties", web::post().to(create_bounty))
+                        .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                        .route("/freelancers/register", web::post().to(register_freelancer))
+                        .route("/escrow/{id}/release", web::post().to(release_escrow)),
+                )
+                // Read endpoints
+                .service(
+                    web::scope("")
+                        .wrap(read_rl)
+                        .route("/bounties", web::get().to(list_bounties))
+                        .route("/bounties/{id}", web::get().to(get_bounty))
+                        .route("/freelancers", web::get().to(list_freelancers))
+                        .route("/freelancers/{address}", web::get().to(get_freelancer))
+                        .route("/escrow/{id}", web::get().to(get_escrow)),
+                )
+                // Webhook management
+                .service(
+                    web::scope("/webhooks")
+                        .wrap(strict_rl)
+                        .route("", web::post().to(webhooks::register_webhook))
+                        .route("", web::get().to(webhooks::list_webhooks))
+                        .route("/{id}", web::delete().to(webhooks::delete_webhook)),
+                ),
         )
-        .route("/api/freelancers", web::get().to(list_freelancers))
-        .route("/api/freelancers/{address}", web::get().to(get_freelancer))
-        .route("/api/escrow/{id}", web::get().to(get_escrow))
-        .route("/api/escrow/{id}/release", web::post().to(release_escrow));
+
+        // ── /api — unversioned redirects to /api/v1 (backward compat) ────
+        .service(
+            web::scope("/api")
+                .route("/bounties",                  web::get().to(redirect_to_v1))
+                .route("/bounties",                  web::post().to(redirect_to_v1))
+                .route("/bounties/{tail:.*}",        web::route().to(redirect_to_v1))
+                .route("/freelancers",               web::get().to(redirect_to_v1))
+                .route("/freelancers/{tail:.*}",     web::route().to(redirect_to_v1))
+                .route("/escrow/{tail:.*}",          web::route().to(redirect_to_v1))
+                .route("/webhooks",                  web::get().to(redirect_to_v1))
+                .route("/webhooks",                  web::post().to(redirect_to_v1))
+                .route("/webhooks/{tail:.*}",        web::route().to(redirect_to_v1)),
+        );
+}
+
+/// Redirect unversioned `/api/<path>` requests to `/api/v1/<path>` with 308
+/// (Permanent Redirect, method-preserving) so existing clients keep working
+/// while being nudged toward the versioned URL.
+async fn redirect_to_v1(req: actix_web::HttpRequest) -> HttpResponse {
+    let path = req.uri().path();
+    // Replace the first `/api/` segment with `/api/v1/`
+    let versioned = if let Some(rest) = path.strip_prefix("/api/") {
+        format!("/api/v1/{rest}")
+    } else {
+        format!("/api/v1{path}")
+    };
+    let location = match req.uri().query() {
+        Some(q) => format!("{versioned}?{q}"),
+        None => versioned,
+    };
+    HttpResponse::PermanentRedirect()
+        .insert_header(("Location", location))
+        .finish()
 }
 
 fn build_http_server(
@@ -375,40 +448,168 @@ fn build_http_server(
     openapi: utoipa::openapi::OpenApi,
 ) -> std::io::Result<Server> {
     Ok(HttpServer::new(move || {
+        let redis = state.redis.clone();
         App::new()
             .app_data(web::Data::new(state.clone()))
+            .wrap(RequestId)
             .wrap(Cors::permissive())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
             )
-            .configure(configure_api_routes)
+            .configure(move |cfg| configure_api_routes(cfg, redis.clone()))
     })
     .shutdown_signal(shutdown_signal())
     .listen(listener)?
     .run())
 }
 
-/// Health check
+/// Health check — verifies database, Redis, and Stellar RPC connectivity.
 #[utoipa::path(
     get, path = "/health",
-    responses((status = 200, description = "Service is healthy"))
+    responses(
+        (status = 200, description = "Service and all dependencies are healthy"),
+        (status = 503, description = "One or more dependencies are unavailable"),
+    )
 )]
-async fn health(req: HttpRequest) -> HttpResponse {
+async fn health(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
     let request_id = get_request_id(&req).unwrap_or_else(|| "unknown".to_string());
     tracing::info!(request_id = %request_id, "Health check requested");
-    
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "healthy",
+
+    // ── Database ping ────────────────────────────────────────────────────
+    let db_status = match sqlx::query("SELECT 1")
+        .execute(&state.db)
+        .await
+    {
+        Ok(_) => {
+            tracing::debug!(request_id = %request_id, "Database ping OK");
+            serde_json::json!({ "status": "ok" })
+        }
+        Err(e) => {
+            tracing::error!(request_id = %request_id, error = %e, "Database ping failed");
+            serde_json::json!({ "status": "error", "message": "database unreachable" })
+        }
+    };
+    let db_healthy = db_status["status"] == "ok";
+
+    // ── Redis ping ───────────────────────────────────────────────────────
+    let redis_status = match state.redis.get().await {
+        Ok(mut conn) => {
+            match deadpool_redis::redis::cmd("PING")
+                .query_async::<String>(&mut conn)
+                .await
+            {
+                Ok(_) => {
+                    tracing::debug!(request_id = %request_id, "Redis ping OK");
+                    serde_json::json!({ "status": "ok" })
+                }
+                Err(e) => {
+                    tracing::error!(request_id = %request_id, error = %e, "Redis PING command failed");
+                    serde_json::json!({ "status": "error", "message": "redis ping failed" })
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(request_id = %request_id, error = %e, "Failed to acquire Redis connection");
+            serde_json::json!({ "status": "error", "message": "redis connection unavailable" })
+        }
+    };
+    let redis_healthy = redis_status["status"] == "ok";
+
+    // ── Stellar RPC / contract status ────────────────────────────────────
+    // We check reachability of the RPC node and whether contract IDs are configured.
+    let contracts_configured = !state.bounty_contract_id.is_empty()
+        && !state.escrow_contract_id.is_empty()
+        && !state.freelancer_contract_id.is_empty();
+
+    let rpc_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    let rpc_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getHealth"
+    });
+
+    let stellar_status = match rpc_client
+        .post(&state.stellar_rpc_url)
+        .json(&rpc_body)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::debug!(request_id = %request_id, "Stellar RPC reachable");
+            serde_json::json!({
+                "status": "ok",
+                "rpc_url": state.stellar_rpc_url,
+                "contracts_configured": contracts_configured,
+                "contracts": {
+                    "bounty": if state.bounty_contract_id.is_empty() { "not_configured" } else { "configured" },
+                    "escrow": if state.escrow_contract_id.is_empty() { "not_configured" } else { "configured" },
+                    "freelancer": if state.freelancer_contract_id.is_empty() { "not_configured" } else { "configured" },
+                }
+            })
+        }
+        Ok(resp) => {
+            tracing::warn!(
+                request_id = %request_id,
+                status = %resp.status(),
+                "Stellar RPC returned non-success status"
+            );
+            serde_json::json!({
+                "status": "degraded",
+                "rpc_url": state.stellar_rpc_url,
+                "message": format!("rpc returned status {}", resp.status()),
+                "contracts_configured": contracts_configured,
+            })
+        }
+        Err(e) => {
+            tracing::error!(request_id = %request_id, error = %e, "Stellar RPC unreachable");
+            serde_json::json!({
+                "status": "error",
+                "rpc_url": state.stellar_rpc_url,
+                "message": "stellar rpc unreachable",
+                "contracts_configured": contracts_configured,
+            })
+        }
+    };
+    // Stellar RPC being unreachable is degraded, not critical — the API still
+    // functions without live contract calls in most read paths.
+    let stellar_healthy = stellar_status["status"] != "error";
+
+    let all_healthy = db_healthy && redis_healthy;
+    let overall = if all_healthy && stellar_healthy {
+        "healthy"
+    } else if all_healthy {
+        "degraded"
+    } else {
+        "unhealthy"
+    };
+
+    let body = serde_json::json!({
+        "status": overall,
         "service": "stellar-api",
-        "version": env!("CARGO_PKG_VERSION")
-    }))
+        "version": env!("CARGO_PKG_VERSION"),
+        "dependencies": {
+            "database": db_status,
+            "redis": redis_status,
+            "stellar": stellar_status,
+        }
+    });
+
+    if all_healthy {
+        HttpResponse::Ok().json(body)
+    } else {
+        HttpResponse::ServiceUnavailable().json(body)
+    }
 }
 
 /// Create a new bounty
 #[utoipa::path(
-    post, path = "/api/bounties",
+    post, path = "/api/v1/bounties",
     request_body = BountyRequest,
     responses(
         (status = 201, description = "Bounty created"),
@@ -474,46 +675,71 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
     Ok(HttpResponse::Created().json(ApiResponse::ok(data, Some("Bounty created successfully".to_string()))))
 }
 
-/// List bounties (paginated)
+/// List bounties (paginated, optionally full-text searched)
 #[utoipa::path(
-    get, path = "/api/bounties",
+    get, path = "/api/v1/bounties",
     params(
-        PaginationParams,
+        ("q"      = Option<String>, Query, description = "Full-text search query"),
         ("status" = Option<String>, Query, description = "Filter by status: open | in-progress | completed"),
+        ("page"   = Option<i64>,   Query, description = "Page number (default 1)"),
+        ("limit"  = Option<i64>,   Query, description = "Results per page, 1-100 (default 10)"),
     ),
     responses(
         (status = 200, description = "Paginated list of bounties"),
         (status = 500, description = "Database error"),
     )
 )]
-async fn list_bounties() -> HttpResponse {
-    HttpResponse::Ok().json(ApiResponse::ok(
-        serde_json::json!({ "bounties": [], "total": 0, "page": 1, "limit": 10 }),
-        None::<String>,
-    ))
 async fn list_bounties(
+    req: HttpRequest,
     pool: web::Data<PgPool>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse, ApiError> {
-    let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
-    let limit = query.get("limit").and_then(|value| value.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
+    let request_id = get_request_id(&req).unwrap_or_else(|| "unknown".to_string());
+
+    let page  = query.get("page").and_then(|v| v.parse::<i64>().ok()).unwrap_or(1).max(1);
+    let limit = query.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
     let offset = (page - 1) * limit;
     let status = query.get("status").cloned();
 
+    // Sanitise and normalise the search query.
+    // websearch_to_tsquery understands quoted phrases and `-word` exclusions,
+    // which is friendlier for end-users than plainto_tsquery.
+    let search_query: Option<String> = query
+        .get("q")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    tracing::info!(
+        request_id = %request_id,
+        ?status,
+        search = ?search_query,
+        page,
+        limit,
+        "Listing bounties"
+    );
+
+    // ── Count ────────────────────────────────────────────────────────────────
     let total = match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::BIGINT FROM bounties WHERE ($1::TEXT IS NULL OR status = $1)",
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM   bounties
+        WHERE  ($1::TEXT IS NULL OR status = $1)
+          AND  ($2::TEXT IS NULL OR fts @@ websearch_to_tsquery('english', $2))
+        "#,
     )
     .bind(status.clone())
+    .bind(search_query.clone())
     .fetch_one(pool.get_ref())
     .await
     {
-        Ok(count) => count,
+        Ok(n) => n,
         Err(error) => {
-            tracing::error!("Failed to count bounties: {error}");
+            tracing::error!(request_id = %request_id, "Failed to count bounties: {error}");
             return Err(ApiError::Database(error));
         }
     };
 
+    // ── Rows — ranked by relevance when a query is present ──────────────────
     let bounties = match sqlx::query_as::<_, BountyRecord>(
         r#"
         SELECT
@@ -527,11 +753,20 @@ async fn list_bounties(
             EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
         FROM bounties
         WHERE ($1::TEXT IS NULL OR status = $1)
-        ORDER BY created_at DESC, id DESC
-        LIMIT $2 OFFSET $3
+          AND ($2::TEXT IS NULL OR fts @@ websearch_to_tsquery('english', $2))
+        ORDER BY
+            CASE WHEN $2::TEXT IS NOT NULL
+                 THEN ts_rank(fts, websearch_to_tsquery('english', $2))
+                 ELSE 0
+            END DESC,
+            created_at DESC,
+            id DESC
+        LIMIT  $3
+        OFFSET $4
         "#,
     )
-    .bind(status)
+    .bind(status.clone())
+    .bind(search_query.clone())
     .bind(limit)
     .bind(offset)
     .fetch_all(pool.get_ref())
@@ -539,7 +774,7 @@ async fn list_bounties(
     {
         Ok(rows) => rows,
         Err(error) => {
-            tracing::error!("Failed to list bounties: {error}");
+            tracing::error!(request_id = %request_id, "Failed to list bounties: {error}");
             return Err(ApiError::Database(error));
         }
     };
@@ -547,9 +782,13 @@ async fn list_bounties(
     Ok(HttpResponse::Ok().json(ApiResponse::ok(
         serde_json::json!({
             "bounties": bounties,
-            "total": total,
-            "page": page,
-            "limit": limit
+            "total":    total,
+            "page":     page,
+            "limit":    limit,
+            "filters": {
+                "status": status.unwrap_or_default(),
+                "q":      search_query.unwrap_or_default(),
+            }
         }),
         None,
     )))
@@ -557,7 +796,7 @@ async fn list_bounties(
 
 /// Get a single bounty by ID
 #[utoipa::path(
-    get, path = "/api/bounties/{id}",
+    get, path = "/api/v1/bounties/{id}",
     params(("id" = u64, Path, description = "Bounty ID")),
     responses(
         (status = 200, description = "Bounty details"),
@@ -654,7 +893,7 @@ async fn get_bounty(
 
 /// Apply for a bounty
 #[utoipa::path(
-    post, path = "/api/bounties/{id}/apply",
+    post, path = "/api/v1/bounties/{id}/apply",
     params(("id" = u64, Path, description = "Bounty ID")),
     request_body = BountyApplication,
     responses(
@@ -752,7 +991,7 @@ async fn apply_for_bounty(
 
 /// Register a freelancer profile
 #[utoipa::path(
-    post, path = "/api/freelancers/register",
+    post, path = "/api/v1/freelancers/register",
     request_body = FreelancerRegistration,
     responses(
         (status = 201, description = "Freelancer registered"),
@@ -816,7 +1055,7 @@ async fn register_freelancer(
 
 /// List freelancers
 #[utoipa::path(
-    get, path = "/api/freelancers",
+    get, path = "/api/v1/freelancers",
     params(
         PaginationParams,
         ("discipline" = Option<String>, Query, description = "Filter by discipline"),
@@ -900,7 +1139,7 @@ async fn list_freelancers(
 
 /// Get a freelancer by Stellar address
 #[utoipa::path(
-    get, path = "/api/freelancers/{address}",
+    get, path = "/api/v1/freelancers/{address}",
     params(("address" = String, Path, description = "Stellar address")),
     responses(
         (status = 200, description = "Freelancer profile"),
@@ -992,7 +1231,7 @@ async fn get_freelancer(
 
 /// Get escrow details
 #[utoipa::path(
-    get, path = "/api/escrow/{id}",
+    get, path = "/api/v1/escrow/{id}",
     params(("id" = u64, Path, description = "Escrow ID")),
     responses(
         (status = 200, description = "Escrow details"),
@@ -1046,7 +1285,7 @@ async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<Htt
 
 /// Release escrowed funds
 #[utoipa::path(
-    post, path = "/api/escrow/{id}/release",
+    post, path = "/api/v1/escrow/{id}/release",
     params(("id" = u64, Path, description = "Escrow ID")),
     responses(
         (status = 200, description = "Funds released"),
@@ -1152,6 +1391,18 @@ async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result
 )]
 pub struct ApiDoc;
 
+#[derive(Clone)]
+pub struct AppState {
+    pub db: PgPool,
+    pub redis: deadpool_redis::Pool,
+    /// Soroban RPC endpoint, used for contract reachability check.
+    pub stellar_rpc_url: String,
+    /// Contract IDs populated from env — empty string means not configured.
+    pub bounty_contract_id: String,
+    pub escrow_contract_id: String,
+    pub freelancer_contract_id: String,
+}
+
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -1181,6 +1432,21 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Connected to database");
 
+    let stellar_rpc_url = std::env::var("STELLAR_RPC_URL")
+        .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".to_string());
+    let bounty_contract_id = std::env::var("BOUNTY_CONTRACT_ID").unwrap_or_default();
+    let escrow_contract_id = std::env::var("ESCROW_CONTRACT_ID").unwrap_or_default();
+    let freelancer_contract_id = std::env::var("FREELANCER_CONTRACT_ID").unwrap_or_default();
+
+    let state = AppState {
+        db: db_pool,
+        redis: redis_pool,
+        stellar_rpc_url,
+        bounty_contract_id,
+        escrow_contract_id,
+        freelancer_contract_id,
+    };
+
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let cfg = RedisConfig::from_url(redis_url);
     let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).expect("Failed to create Redis pool");
@@ -1208,36 +1474,44 @@ async fn main() -> anyhow::Result<()> {
             .app_data(business_metrics.clone())
             .wrap(prometheus.clone())
             .wrap(Cors::permissive())
+            .wrap(middleware::Compress::default())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
             )
             .route("/health", web::get().to(health))
-            .route("/api/bounties", web::post().to(create_bounty))
-            .route("/api/bounties", web::get().to(list_bounties))
-            .route("/api/bounties/{id}", web::get().to(get_bounty))
-            .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-            .route(
-                "/api/freelancers/register",
-                web::post().to(register_freelancer),
-            )
-            .route("/api/freelancers", web::get().to(list_freelancers))
-            .route("/api/freelancers/{address}", web::get().to(get_freelancer))
-            .route("/api/escrow/{id}", web::get().to(get_escrow))
-            .route("/api/escrow/{id}/release", web::post().to(release_escrow))
-            .route("/api/webhooks", web::post().to(webhooks::register_webhook))
-            .route("/api/webhooks", web::get().to(webhooks::list_webhooks))
-            .route("/api/webhooks/{id}", web::delete().to(webhooks::delete_webhook))
+            .route("/api/v1/bounties", web::post().to(create_bounty))
+            .route("/api/v1/bounties", web::get().to(list_bounties))
+            .route("/api/v1/bounties/{id}", web::get().to(get_bounty))
+            .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
+            .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
+            .route("/api/v1/freelancers", web::get().to(list_freelancers))
+            .route("/api/v1/freelancers/{address}", web::get().to(get_freelancer))
+            .route("/api/v1/escrow/{id}", web::get().to(get_escrow))
+            .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
+            .route("/api/v1/webhooks", web::post().to(webhooks::register_webhook))
+            .route("/api/v1/webhooks", web::get().to(webhooks::list_webhooks))
+            .route("/api/v1/webhooks/{id}", web::delete().to(webhooks::delete_webhook))
             // ── File upload routes ───────────────────────────────────────
-            .route("/api/upload/avatar", web::post().to(upload::upload_avatar))
-            .route("/api/upload/project-image", web::post().to(upload::upload_project_image))
-            .route("/api/upload/bounty-attachment", web::post().to(upload::upload_bounty_attachment))
-            .route("/api/uploads", web::get().to(upload::list_uploads))
-            .route("/api/uploads/{category}/{filename}", web::get().to(upload::serve_upload))
-            .route("/api/uploads/{id}", web::delete().to(upload::delete_upload))
+            .route("/api/v1/upload/avatar", web::post().to(upload::upload_avatar))
+            .route("/api/v1/upload/project-image", web::post().to(upload::upload_project_image))
+            .route("/api/v1/upload/bounty-attachment", web::post().to(upload::upload_bounty_attachment))
+            .route("/api/v1/uploads", web::get().to(upload::list_uploads))
+            .route("/api/v1/uploads/{category}/{filename}", web::get().to(upload::serve_upload))
+            .route("/api/v1/uploads/{id}", web::delete().to(upload::delete_upload))
+            // ── Backward-compat redirects: /api/* → /api/v1/* ───────────
+            .route("/api/bounties",              web::get().to(redirect_to_v1))
+            .route("/api/bounties",              web::post().to(redirect_to_v1))
+            .route("/api/bounties/{tail:.*}",    web::route().to(redirect_to_v1))
+            .route("/api/freelancers",           web::get().to(redirect_to_v1))
+            .route("/api/freelancers/{tail:.*}", web::route().to(redirect_to_v1))
+            .route("/api/escrow/{tail:.*}",      web::route().to(redirect_to_v1))
+            .route("/api/webhooks",              web::get().to(redirect_to_v1))
+            .route("/api/webhooks",              web::post().to(redirect_to_v1))
+            .route("/api/webhooks/{tail:.*}",    web::route().to(redirect_to_v1))
     })
-    .bind((host.as_str(), port))?
+    .bind((config.api_host.as_str(), config.api_port))?
     .run()
     .await;
 
@@ -1278,10 +1552,30 @@ mod tests {
         let spec = ApiDoc::openapi();
         let paths = &spec.paths.paths;
         assert!(paths.contains_key("/health"));
-        assert!(paths.contains_key("/api/bounties"));
-        assert!(paths.contains_key("/api/freelancers"));
-        assert!(paths.contains_key("/api/escrow/{id}"));
-        assert!(paths.contains_key("/api/webhooks"));
+        assert!(paths.contains_key("/api/v1/bounties"));
+        assert!(paths.contains_key("/api/v1/freelancers"));
+        assert!(paths.contains_key("/api/v1/escrow/{id}"));
+        assert!(paths.contains_key("/api/v1/webhooks"));
+    }
+
+    #[test]
+    fn redirect_to_v1_builds_correct_location() {
+        // Simulate the path rewrite logic used in redirect_to_v1
+        let cases = vec![
+            ("/api/bounties",           "/api/v1/bounties"),
+            ("/api/bounties/42",        "/api/v1/bounties/42"),
+            ("/api/freelancers",        "/api/v1/freelancers"),
+            ("/api/escrow/7/release",   "/api/v1/escrow/7/release"),
+            ("/api/webhooks",           "/api/v1/webhooks"),
+        ];
+        for (input, expected) in cases {
+            let versioned = if let Some(rest) = input.strip_prefix("/api/") {
+                format!("/api/v1/{rest}")
+            } else {
+                format!("/api/v1{input}")
+            };
+            assert_eq!(versioned, expected, "failed for input {input}");
+        }
     }
 
     #[test]

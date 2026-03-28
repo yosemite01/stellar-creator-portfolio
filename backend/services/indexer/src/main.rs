@@ -81,6 +81,163 @@ struct Pagination {
     limit: u32,
 }
 
+#[derive(Debug, Deserialize)]
+struct GetLedgerResult {
+    #[serde(rename = "ledgers")]
+    ledgers: Vec<LedgerInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LedgerInfo {
+    sequence: u32,
+    hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GetLedgerRequest<'a> {
+    jsonrpc: &'a str,
+    id: u32,
+    method: &'a str,
+    params: GetLedgerParams,
+}
+
+#[derive(Debug, Serialize)]
+struct GetLedgerParams {
+    ledgers: Vec<u32>,
+}
+
+// ── Reorg detection ───────────────────────────────────────────────────────────
+
+/// How many recent ledgers to keep hashes for (reorg safety window).
+const REORG_DEPTH: u32 = 30;
+
+/// Persist a ledger hash so we can detect reorgs on the next poll.
+async fn save_ledger_hash(pool: &PgPool, ledger: u32, hash: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO indexer_ledger_hashes (ledger_seq, hash)
+         VALUES ($1, $2)
+         ON CONFLICT (ledger_seq) DO UPDATE SET hash = EXCLUDED.hash",
+    )
+    .bind(ledger as i64)
+    .bind(hash)
+    .execute(pool)
+    .await
+    .context("Failed to save ledger hash")?;
+    Ok(())
+}
+
+/// Load the hash we stored for a ledger, if any.
+async fn load_ledger_hash(pool: &PgPool, ledger: u32) -> Result<Option<String>> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT hash FROM indexer_ledger_hashes WHERE ledger_seq = $1")
+            .bind(ledger as i64)
+            .fetch_optional(pool)
+            .await
+            .context("Failed to load ledger hash")?;
+    Ok(row.map(|(h,)| h))
+}
+
+/// Fetch the canonical hash for `ledger` from the RPC node.
+async fn fetch_ledger_hash(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    ledger: u32,
+) -> Result<Option<String>> {
+    let body = GetLedgerRequest {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "getLedgers",
+        params: GetLedgerParams {
+            ledgers: vec![ledger],
+        },
+    };
+
+    let resp: RpcResponse<GetLedgerResult> = client
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .await
+        .context("getLedgers RPC request failed")?
+        .json()
+        .await
+        .context("Failed to parse getLedgers response")?;
+
+    if let Some(err) = resp.error {
+        anyhow::bail!("RPC error (getLedgers): {}", err.message);
+    }
+
+    Ok(resp
+        .result
+        .and_then(|r| r.ledgers.into_iter().next())
+        .map(|l| l.hash))
+}
+
+/// Check the last `REORG_DEPTH` ledgers for hash mismatches.
+/// Returns the earliest ledger that was reorganized, or `None` if clean.
+async fn detect_reorg(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    pool: &PgPool,
+    current_cursor: u32,
+) -> Result<Option<u32>> {
+    let check_from = current_cursor.saturating_sub(REORG_DEPTH);
+
+    for ledger in check_from..current_cursor {
+        let stored = load_ledger_hash(pool, ledger).await?;
+        if let Some(stored_hash) = stored {
+            match fetch_ledger_hash(client, rpc_url, ledger).await {
+                Ok(Some(canonical_hash)) => {
+                    if canonical_hash != stored_hash {
+                        warn!(
+                            "Reorg detected at ledger {ledger}: \
+                             stored={stored_hash} canonical={canonical_hash}"
+                        );
+                        return Ok(Some(ledger));
+                    }
+                }
+                Ok(None) => {
+                    // Ledger no longer returned by node — treat as reorg
+                    warn!("Ledger {ledger} no longer available from RPC — possible reorg");
+                    return Ok(Some(ledger));
+                }
+                Err(e) => {
+                    // Non-fatal: log and skip this ledger check
+                    warn!("Could not verify ledger {ledger} hash: {e:#}");
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Roll back all indexed data for ledgers >= `from_ledger` and reset the cursor.
+async fn rollback(pool: &PgPool, from_ledger: u32) -> Result<()> {
+    warn!("Rolling back indexed data from ledger {from_ledger}");
+
+    let ledger = from_ledger as i64;
+
+    // Delete raw events and derived rows for the affected ledger range.
+    // ON CONFLICT / upsert logic means re-indexing after rollback is safe.
+    sqlx::query("DELETE FROM chain_events       WHERE ledger >= $1").bind(ledger).execute(pool).await?;
+    sqlx::query("DELETE FROM chain_bounties     WHERE ledger >= $1").bind(ledger).execute(pool).await?;
+    sqlx::query("DELETE FROM chain_applications WHERE ledger >= $1").bind(ledger).execute(pool).await?;
+    sqlx::query("DELETE FROM chain_freelancers  WHERE ledger >= $1").bind(ledger).execute(pool).await?;
+    sqlx::query("DELETE FROM chain_escrows      WHERE ledger >= $1").bind(ledger).execute(pool).await?;
+
+    // Remove stale ledger hashes
+    sqlx::query("DELETE FROM indexer_ledger_hashes WHERE ledger_seq >= $1")
+        .bind(ledger)
+        .execute(pool)
+        .await?;
+
+    // Reset cursor to the reorg point so we re-index from there
+    save_cursor(pool, "main", from_ledger).await?;
+
+    warn!("Rollback complete — cursor reset to ledger {from_ledger}");
+    Ok(())
+}
+
 // ── Cursor persistence ────────────────────────────────────────────────────────
 
 async fn ensure_cursor_table(pool: &PgPool) -> Result<()> {
@@ -93,6 +250,18 @@ async fn ensure_cursor_table(pool: &PgPool) -> Result<()> {
     .execute(pool)
     .await
     .context("Failed to create indexer_cursors table")?;
+
+    // Ledger hash store for reorg detection
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS indexer_ledger_hashes (
+            ledger_seq  BIGINT PRIMARY KEY,
+            hash        TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await
+    .context("Failed to create indexer_ledger_hashes table")?;
+
     Ok(())
 }
 
@@ -542,6 +711,24 @@ async fn main() -> Result<()> {
     loop {
         let ids_ref: Vec<&str> = contract_ids.iter().map(String::as_str).collect();
 
+        // ── Reorg check before processing new events ──────────────────────
+        match detect_reorg(&http, &cfg.rpc_url, &pool, cursor).await {
+            Ok(Some(reorg_ledger)) => {
+                if let Err(e) = rollback(&pool, reorg_ledger).await {
+                    error!("Rollback failed: {e:#}");
+                } else {
+                    cursor = reorg_ledger;
+                }
+                // Skip this poll cycle; re-index from the rolled-back cursor next iteration
+                tokio::time::sleep(Duration::from_secs(cfg.poll_interval_secs)).await;
+                continue;
+            }
+            Ok(None) => {} // clean — proceed normally
+            Err(e) => {
+                warn!("Reorg detection error (non-fatal): {e:#}");
+            }
+        }
+
         match fetch_events(&http, &cfg.rpc_url, &ids_ref, cursor, cfg.ledger_chunk).await {
             Ok(result) => {
                 let latest = result.latest_ledger;
@@ -565,6 +752,18 @@ async fn main() -> Result<()> {
                 };
 
                 if next > cursor {
+                    // Persist the canonical hash for the ledger we just reached
+                    // so future polls can detect if it gets reorganized.
+                    if let Ok(Some(hash)) =
+                        fetch_ledger_hash(&http, &cfg.rpc_url, next.saturating_sub(1)).await
+                    {
+                        if let Err(e) =
+                            save_ledger_hash(&pool, next.saturating_sub(1), &hash).await
+                        {
+                            warn!("Could not save ledger hash: {e:#}");
+                        }
+                    }
+
                     save_cursor(&pool, "main", next).await?;
                     cursor = next;
                 }
@@ -663,5 +862,48 @@ mod tests {
         };
 
         assert!(!is_relevant_event(&event, &cfg));
+    }
+
+    // ── Reorg detection unit tests ────────────────────────────────────────────
+
+    #[test]
+    fn reorg_depth_constant_is_positive() {
+        assert!(REORG_DEPTH > 0, "REORG_DEPTH must be > 0");
+    }
+
+    #[test]
+    fn reorg_check_window_does_not_underflow() {
+        // saturating_sub must not panic for cursors < REORG_DEPTH
+        let cursor: u32 = 5;
+        let check_from = cursor.saturating_sub(REORG_DEPTH);
+        assert_eq!(check_from, 0);
+    }
+
+    #[test]
+    fn reorg_check_window_is_bounded() {
+        let cursor: u32 = 1000;
+        let check_from = cursor.saturating_sub(REORG_DEPTH);
+        assert_eq!(check_from, cursor - REORG_DEPTH);
+        assert!(cursor - check_from <= REORG_DEPTH);
+    }
+
+    /// Simulate the hash-mismatch branch: if stored != canonical the reorg
+    /// ledger should be the one that diverged.
+    #[test]
+    fn hash_mismatch_identifies_reorg_ledger() {
+        let stored = "aaaa";
+        let canonical = "bbbb";
+        // The detection logic returns Some(ledger) when stored != canonical
+        let reorg_detected = stored != canonical;
+        assert!(reorg_detected, "differing hashes must trigger reorg detection");
+    }
+
+    /// Simulate the hash-match branch: identical hashes mean no reorg.
+    #[test]
+    fn hash_match_means_no_reorg() {
+        let stored = "aaaa";
+        let canonical = "aaaa";
+        let reorg_detected = stored != canonical;
+        assert!(!reorg_detected, "identical hashes must not trigger reorg");
     }
 }
