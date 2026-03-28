@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 #[contracttype]
@@ -37,6 +37,15 @@ pub struct BountyApplication {
 }
 
 #[contracttype]
+pub struct WorkSubmission {
+    pub freelancer: Address,
+    pub work_url: String,
+    pub notes: String,
+    pub submitted_at: u64,
+    pub approved: bool,
+}
+
+#[contracttype]
 pub enum DataKey {
     BountyCounter,
     AppCounter,
@@ -50,6 +59,25 @@ pub struct BountyContract;
 
 #[contractimpl]
 impl BountyContract {
+    /// Creates a new bounty posted by a creator.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `creator`: Address of the bounty creator (must authenticate).
+    /// - `title`: Short title of the bounty.
+    /// - `description`: Detailed description of the work required.
+    /// - `budget`: Budget amount in native token or specified token.
+    /// - `deadline`: Unix timestamp deadline for bounty completion.
+    ///
+    /// # Returns
+    /// - `u64`: Unique bounty ID.
+    ///
+    /// # Errors
+    /// - Panics if creator fails authentication.
+    ///
+    /// # State Changes
+    /// - Increments bounty counter.
+    /// - Stores new Bounty with status `Open`.
     pub fn create_bounty(
         env: Env,
         creator: Address,
@@ -88,13 +116,39 @@ impl BountyContract {
         counter
     }
 
+    /// Retrieves bounty details by ID.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `bounty_id`: Unique ID of the bounty.
+    ///
+    /// # Returns
+    /// - `Bounty`: Full bounty details.
+    ///
+    /// # Errors
+    /// - Panics with \"Bounty not found\" if ID doesn't exist.
     pub fn get_bounty(env: Env, bounty_id: u64) -> Bounty {
         env.storage()
             .persistent()
             .get(&DataKey::Bounty(bounty_id))
-            .expect("Bounty not found")
+            .expect(\"Bounty not found\")
     }
 
+    /// Allows freelancer to apply to a bounty.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `bounty_id`: ID of bounty to apply for.
+    /// - `freelancer`: Freelancer address (must authenticate).
+    /// - `proposal`: Freelancer's proposal text.
+    /// - `proposed_budget`: Freelancer's budget suggestion.
+    /// - `timeline`: Proposed completion timeline.
+    ///
+    /// # Returns
+    /// - `u64`: Unique application ID.
+    ///
+    /// # Errors
+    /// - Panics if freelancer fails authentication.
     pub fn apply_for_bounty(
         env: Env,
         bounty_id: u64,
@@ -132,19 +186,49 @@ impl BountyContract {
         counter
     }
 
+    /// Retrieves application details by ID.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `application_id`: Unique application ID.
+    ///
+    /// # Returns
+    /// - `BountyApplication`: Full application details.
+    ///
+    /// # Errors
+    /// - Panics with \"Application not found\" if ID doesn't exist.
     pub fn get_application(env: Env, application_id: u64) -> BountyApplication {
         env.storage()
             .persistent()
             .get(&DataKey::Application(application_id))
-            .expect("Application not found")
+            .expect(\"Application not found\")
     }
 
+    /// Bounty creator selects a freelancer application.
+    /// Transitions bounty to InProgress status.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `bounty_id`: Bounty ID.
+    /// - `application_id`: Selected application ID.
+    ///
+    /// # Returns  
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors
+    /// - Panics if bounty/ application not found.
+    /// - Panics if application doesn't match bounty.
+    /// - Panics if bounty creator not authenticated.
+    ///
+    /// # State Changes
+    /// - Sets selected freelancer.
+    /// - Updates bounty status to `InProgress`.
     pub fn select_freelancer(env: Env, bounty_id: u64, application_id: u64) -> bool {
         let mut bounty: Bounty = env
             .storage()
             .persistent()
             .get(&DataKey::Bounty(bounty_id))
-            .expect("Bounty not found");
+            .expect(\"Bounty not found\");
 
         bounty.creator.require_auth();
 
@@ -152,11 +236,11 @@ impl BountyContract {
             .storage()
             .persistent()
             .get(&DataKey::Application(application_id))
-            .expect("Application not found");
+            .expect(\"Application not found\");
 
         assert!(
             application.bounty_id == bounty_id,
-            "Application does not match bounty"
+            \"Application does not match bounty\"
         );
 
         env.storage().persistent().set(
@@ -174,20 +258,34 @@ impl BountyContract {
 
     /// Called by the selected freelancer to signal work is done.
     /// Transitions the bounty from InProgress -> PendingCompletion.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `bounty_id`: Bounty ID.
+    ///
+    /// # Returns
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors  
+    /// - Panics if bounty not found or not InProgress.
+    /// - Panics if no freelancer selected or fails auth.
+    ///
+    /// # State Changes
+    /// - Updates bounty status to `PendingCompletion`.
     pub fn submit_completion(env: Env, bounty_id: u64) -> bool {
         let mut bounty: Bounty = env
             .storage()
             .persistent()
             .get(&DataKey::Bounty(bounty_id))
-            .expect("Bounty not found");
+            .expect(\"Bounty not found\");
 
-        assert!(bounty.status == BountyStatus::InProgress, "Bounty not in progress");
+        assert!(bounty.status == BountyStatus::InProgress, \"Bounty not in progress\");
 
         let freelancer: Address = env
             .storage()
             .persistent()
             .get(&DataKey::SelectedFreelancer(bounty_id))
-            .expect("No freelancer selected");
+            .expect(\"No freelancer selected\");
 
         freelancer.require_auth();
 
@@ -199,23 +297,38 @@ impl BountyContract {
 
     /// Called by the bounty creator to approve the freelancer's completion submission.
     /// Transitions the bounty from PendingCompletion -> Completed.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `bounty_id`: Bounty ID.
+    ///
+    /// # Returns
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors
+    /// - Panics if bounty not found.
+    /// - Panics if bounty creator not authenticated.
+    /// - Panics if bounty not InProgress or PendingCompletion.
+    ///
+    /// # State Changes  
+    /// - Marks work submission as approved (if exists).
+    /// - Updates bounty status to `Completed`.
     pub fn complete_bounty(env: Env, bounty_id: u64) -> bool {
         let mut bounty: Bounty = env
             .storage()
             .persistent()
             .get(&DataKey::Bounty(bounty_id))
-            .expect("Bounty not found");
+            .expect(\"Bounty not found\");
 
         bounty.creator.require_auth();
         assert!(
-            bounty.status == BountyStatus::InProgress,
-            "Bounty not in progress"
+            bounty.status == BountyStatus::InProgress || 
             bounty.status == BountyStatus::PendingCompletion,
-            "Bounty not pending completion"
+            \"Bounty not ready for completion\"
         );
 
         // Verify work was submitted before allowing completion
-        let submission_key = Symbol::new(&env, &format!("work_submission_{}", bounty_id));
+        let submission_key = Symbol::new(&env, &format!(\"work_submission_{}\", bounty_id));
         let submission: Option<WorkSubmission> = env.storage().persistent().get(&submission_key);
 
         if let Some(mut sub) = submission {
@@ -235,17 +348,33 @@ impl BountyContract {
         true
     }
 
+    /// Cancels an open bounty (creator only).
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `bounty_id`: Bounty ID.
+    ///
+    /// # Returns
+    /// - `bool`: Always `true` on success.
+    ///
+    /// # Errors
+    /// - Panics if bounty not found.
+    /// - Panics if bounty creator not authenticated.
+    /// - Panics if bounty not Open.
+    ///
+    /// # State Changes
+    /// - Updates status to `Cancelled`.
     pub fn cancel_bounty(env: Env, bounty_id: u64) -> bool {
         let mut bounty: Bounty = env
             .storage()
             .persistent()
             .get(&DataKey::Bounty(bounty_id))
-            .expect("Bounty not found");
+            .expect(\"Bounty not found\");
 
         bounty.creator.require_auth();
         assert!(
             bounty.status == BountyStatus::Open,
-            "Only open bounties can be cancelled"
+            \"Only open bounties can be cancelled\"
         );
 
         bounty.status = BountyStatus::Cancelled;
@@ -256,6 +385,13 @@ impl BountyContract {
         true
     }
 
+    /// Gets the total count of created bounties.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    ///
+    /// # Returns
+    /// - `u64`: Number of bounties.
     pub fn get_bounties_count(env: Env) -> u64 {
         env.storage()
             .persistent()
@@ -280,8 +416,8 @@ mod tests {
         let creator = Address::generate(&env);
         let bounty_id = client.create_bounty(
             &creator,
-            &String::from_str(&env, "Test Bounty"),
-            &String::from_str(&env, "Test Description"),
+            &String::from_str(&env, \"Test Bounty\"),
+            &String::from_str(&env, \"Test Description\"),
             &5000i128,
             &100u64,
         );
@@ -304,8 +440,8 @@ mod tests {
 
         let bounty_id = client.create_bounty(
             &creator,
-            &String::from_str(&env, "Test Bounty"),
-            &String::from_str(&env, "Test Description"),
+            &String::from_str(&env, \"Test Bounty\"),
+            &String::from_str(&env, \"Test Description\"),
             &5000i128,
             &100u64,
         );
@@ -313,7 +449,8 @@ mod tests {
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
-            &String::from_str(&env, "I can do this!"),
+            &String::from_str(&env, \"I can do this!\"),
+
             &4500i128,
             &30u64,
         );
@@ -335,21 +472,10 @@ mod tests {
 
         let bounty_id = client.create_bounty(
             &creator,
-            &String::from_str(&env, "Test Bounty"),
-            &String::from_str(&env, "Test Description"),
-    fn test_submit_work_and_complete() {
-        let env = Env::default();
-        let contract =
-            BountyContractClient::new(&env, &env.register_contract(None, BountyContract));
+            &String::from_str(&env, \"Test Bounty\"),
 
-        let creator = Address::random(&env);
-        let freelancer = Address::random(&env);
+            &String::from_str(&env, \"Test Description\"),
 
-        // Create bounty
-        let bounty_id = contract.create_bounty(
-            &creator,
-            &String::from_slice(&env, "Test Bounty"),
-            &String::from_slice(&env, "Test Description"),
             &5000i128,
             &100u64,
         );
@@ -357,12 +483,8 @@ mod tests {
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
-            &String::from_str(&env, "I can do this!"),
-        // Apply for bounty
-        let app_id = contract.apply_for_bounty(
-            &bounty_id,
-            &freelancer,
-            &String::from_slice(&env, "I can do this!"),
+            &String::from_str(&env, \"I can do this!\"),
+
             &4500i128,
             &30u64,
         );
@@ -380,33 +502,5 @@ mod tests {
         assert!(result);
         let bounty = client.get_bounty(&bounty_id);
         assert_eq!(bounty.status, BountyStatus::Completed);
-        // Select freelancer
-        contract.select_freelancer(&bounty_id, &app_id);
-
-        // Submit work (freelancer)
-        let work_url = String::from_slice(&env, "https://github.com/freelancer/project/pull/1");
-        let notes = String::from_slice(&env, "Completed all requirements");
-        let result = contract.submit_work(&bounty_id, &work_url, &notes);
-        assert_eq!(result, true);
-
-        // Verify submission
-        let submission = contract.get_work_submission(&bounty_id);
-        assert!(submission.is_some());
-        let sub = submission.unwrap();
-        assert_eq!(sub.freelancer, freelancer);
-        assert_eq!(sub.approved, false);
-
-        // Complete bounty (creator)
-        let result = contract.complete_bounty(&bounty_id);
-        assert_eq!(result, true);
-
-        // Verify completion
-        let bounty = contract.get_bounty(&bounty_id);
-        assert_eq!(bounty.status, BountyStatus::Completed);
-
-        // Verify submission approved
-        let submission = contract.get_work_submission(&bounty_id);
-        let sub = submission.unwrap();
-        assert_eq!(sub.approved, true);
     }
 }

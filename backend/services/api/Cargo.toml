@@ -27,11 +27,11 @@ dotenvy.workspace = true
 futures.workspace = true
 jsonwebtoken.workspace = true
 redis.workspace = true
+uuid.workspace = true
 deadpool-redis.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
 reqwest.workspace = true
-uuid.workspace = true
 actix-web-prom.workspace = true
 prometheus.workspace = true
 stellar-common = { path = "../common" }
