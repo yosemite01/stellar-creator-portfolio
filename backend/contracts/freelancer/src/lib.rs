@@ -237,14 +237,33 @@ impl FreelancerContract {
     /// - Panics if admin fails authentication.
     /// - Panics if freelancer not registered.
     pub fn verify_freelancer(env: Env, admin: Address, freelancer: Address) -> bool {
+        // Require the caller to authenticate as the admin address passed in.
         admin.require_auth();
+
+        // If a governance contract is configured, delegate the admin-role check to it.
+        // This keeps verification meaningful: only addresses that the governance
+        // contract recognizes as admins can verify freelancers. If no governance
+        // contract is configured, fall back to the legacy behaviour (auth only).
+        if let Some(gov) = env.storage().persistent().get::<DataKey, Address>(&DataKey::Governance) {
+                // Call governance contract's `is_admin` entrypoint. If it returns
+                // false, reject. We expect the governance contract to expose a
+                // method named `is_admin` that takes an Address and returns bool.
+                // If the governance contract is not present or doesn't expose the
+                // method, this will trap at runtime — that's intentional to make
+                // misconfiguration visible.
+                let is_admin: bool = env.invoke_contract(&gov, &symbol_short!("is_admin"), (admin.clone(),));
+                if !is_admin {
+                    panic!("Admin role required");
+                }
+            }
+        }
 
         let key = DataKey::Profile(freelancer.clone());
         let mut profile: FreelancerProfile = env
             .storage()
             .persistent()
             .get(&key)
-            .expect(\"Freelancer not registered\");
+            .expect("Freelancer not registered");
 
         profile.verified = true;
         env.storage().persistent().set(&key, &profile);
@@ -255,6 +274,32 @@ impl FreelancerContract {
             (admin, true),
         );
 
+        true
+    }
+
+    /// Sets the governance contract address used for admin role checks.
+    /// Can be called by any address that authenticates; this is intentionally
+    /// permissive to allow initial configuration. Operators should set this
+    /// to the governance contract address and then manage admin roles via the
+    /// governance contract itself.
+    pub fn set_governance_contract(env: Env, setter: Address, governance: Address) -> bool {
+        setter.require_auth();
+
+        // If deployer not set yet, record the first setter as the deployer.
+        let maybe_deployer: Option<Address> = env.storage().persistent().get(&DataKey::Deployer);
+        if let Some(deployer) = maybe_deployer {
+            // Only the recorded deployer can change the governance address
+            if deployer != setter {
+                panic!("Only deployer may set governance contract");
+            }
+        } else {
+            // Record the setter as deployer on first-time configuration
+            env.storage().persistent().set(&DataKey::Deployer, &setter);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Governance, &governance);
         true
     }
 
