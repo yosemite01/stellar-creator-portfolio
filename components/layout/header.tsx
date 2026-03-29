@@ -18,6 +18,8 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { MobileNav, MOBILE_NAV_PANEL_ID } from '@/components/layout/mobile-nav';
 import { NotificationBell } from '@/components/notification-bell';
+import { LanguageSwitcher } from '@/components/language-switcher';
+import { useI18n } from '@/components/i18n-provider';
 import { cn } from '@/lib/utils';
 
 const touchIconButtonClass =
@@ -26,6 +28,7 @@ const touchIconButtonClass =
 export function Header() {
   const { theme, setTheme } = useTheme();
   const { data: session } = useSession();
+  const { t } = useI18n();
   const [mounted, setMounted] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -86,26 +89,26 @@ export function Header() {
               priority
             />
             <span className="font-bold text-lg text-foreground hidden sm:inline">
-              Stellar
+              {t('common.appName')}
             </span>
           </Link>
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center gap-1">
             <Link href="/" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Home
+              {t('nav.home')}
             </Link>
             <Link href="/creators" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Creators
+              {t('nav.creators')}
             </Link>
             <Link href="/freelancers" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Hire
+              {t('nav.hire')}
             </Link>
             <Link href="/bounties" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Bounties
+              {t('nav.bounties')}
             </Link>
             <Link href="/about" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              About
+              {t('nav.about')}
             </Link>
             {session && (
               <>
@@ -114,10 +117,10 @@ export function Header() {
                   className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50 inline-flex items-center gap-1.5"
                 >
                   <Sparkles size={15} className="text-primary shrink-0" aria-hidden />
-                  Matches
+                  {t('nav.matches')}
                 </Link>
                 <Link href="/disputes" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-                  Disputes
+                  {t('nav.disputes')}
                 </Link>
               </>
             )}
@@ -125,6 +128,7 @@ export function Header() {
 
           {/* Right Actions */}
           <div className="flex items-center gap-1 sm:gap-2">
+            <LanguageSwitcher />
             {mounted && (
               <span className="hidden md:inline-flex">{themeToggle}</span>
             )}
@@ -155,31 +159,31 @@ export function Header() {
                     <DropdownMenuSeparator />
                     <DropdownMenuItem asChild>
                       <Link href="/dashboard" className="flex items-center">
-                        <LayoutDashboard className="mr-2 h-4 w-4" />
-                        Dashboard
+                        <LayoutDashboard className="me-2 h-4 w-4" />
+                        {t('nav.dashboard')}
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuItem asChild>
                       <Link href="/matches" className="flex items-center">
-                        <Sparkles className="mr-2 h-4 w-4 text-primary" />
-                        Matches
+                        <Sparkles className="me-2 h-4 w-4 text-primary" />
+                        {t('nav.matches')}
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuItem asChild>
                       <Link href="/dashboard" className="flex items-center">
-                        <User className="mr-2 h-4 w-4" />
-                        Profile
+                        <User className="me-2 h-4 w-4" />
+                        {t('nav.profile')}
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuItem asChild>
                       <Link href="/dashboard/settings/notifications" className="flex items-center">
-                        Notifications
+                        {t('nav.notifications')}
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={handleSignOut}>
-                      <LogOut className="mr-2 h-4 w-4" />
-                      Log out
+                      <LogOut className="me-2 h-4 w-4" />
+                      {t('nav.logOut')}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -188,12 +192,12 @@ export function Header() {
               <div className="hidden md:flex items-center gap-2">
                 <Link href="/auth/login">
                   <Button variant="ghost" size="sm">
-                    Sign In
+                    {t('auth.signIn')}
                   </Button>
                 </Link>
                 <Link href="/auth/register">
                   <Button size="sm">
-                    Sign Up
+                    {t('auth.signUp')}
                   </Button>
                 </Link>
               </div>
@@ -208,7 +212,7 @@ export function Header() {
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               )}
               onClick={() => setIsMenuOpen((o) => !o)}
-              aria-label={isMenuOpen ? 'Close menu' : 'Open menu'}
+              aria-label={isMenuOpen ? t('nav.closeMenu') : t('nav.openMenu')}
               aria-expanded={isMenuOpen}
               aria-controls={MOBILE_NAV_PANEL_ID}
             >
@@ -229,45 +233,46 @@ export function Header() {
         {isMenuOpen && (
           <nav className="md:hidden pb-4 border-t border-border">
             <Link href="/" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Home
+              {t('nav.home')}
             </Link>
             <Link href="/creators" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Creators
+              {t('nav.creators')}
             </Link>
             <Link href="/freelancers" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Hire
+              {t('nav.hire')}
             </Link>
             <Link href="/bounties" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Bounties
+              {t('nav.bounties')}
             </Link>
             <Link href="/about" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              About
+              {t('nav.about')}
             </Link>
             {session && (
               <Link href="/disputes" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-                Disputes
+                {t('nav.disputes')}
               </Link>
             )}
             
             {session ? (
               <>
                 <Link href="/dashboard" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-                  Dashboard
+                  {t('nav.dashboard')}
                 </Link>
                 <button
+                  type="button"
                   onClick={handleSignOut}
-                  className="w-full text-left px-4 py-2 text-sm font-medium text-destructive hover:text-destructive transition-colors"
+                  className="w-full text-start px-4 py-2 text-sm font-medium text-destructive hover:text-destructive transition-colors"
                 >
-                  Sign Out
+                  {t('nav.logOut')}
                 </button>
               </>
             ) : (
               <>
                 <Link href="/auth/login" className="block px-4 py-2 text-sm font-medium text-primary hover:text-primary transition-colors">
-                  Sign In
+                  {t('auth.signIn')}
                 </Link>
                 <Link href="/auth/register" className="block px-4 py-2 text-sm font-medium text-primary hover:text-primary transition-colors">
-                  Sign Up
+                  {t('auth.signUp')}
                 </Link>
               </>
             )}

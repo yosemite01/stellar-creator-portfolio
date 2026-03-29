@@ -261,3 +261,12 @@ p {
     @apply bg-background text-foreground border-border placeholder:text-muted-foreground;
   }
 }
+
+/* i18n: RTL layout (dir set on <html> by I18nProvider) */
+html[dir='rtl'] {
+  direction: rtl;
+}
+
+html[dir='ltr'] {
+  direction: ltr;
+}
