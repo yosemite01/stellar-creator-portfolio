@@ -34,20 +34,42 @@ const getState = (): ServerState => {
   return globalRef.__messageState
 }
 
-const upgradeWebSocket = (request: Request) => {
-  const denoUpgrade = (globalThis as any)?.Deno?.upgradeWebSocket
-  if (denoUpgrade) {
+/**
+ * upgradeWebSocket — runtime-aware WebSocket upgrade helper.
+ *
+ * Supported runtimes:
+ *  1. Deno Deploy / Deno-based edge  — uses `Deno.upgradeWebSocket(request)`.
+ *  2. Cloudflare Workers / WinterCG  — some runtimes expose `request.webSocket`;
+ *     we call `.accept()` and synthesise a 101 response.
+ *  3. Node.js (standard Next.js)     — raw socket hijacking is NOT available
+ *     inside route handlers. Handle upgrades in a custom server (e.g. the `ws`
+ *     package) and proxy messages to this handler's business logic instead.
+ *     This path throws so the caller can return a 501 to the client.
+ *
+ * Adding a new runtime:
+ *  - Detect a unique global or request property for that runtime.
+ *  - Implement the upgrade and return `{ socket, response }`.
+ *  - Document it here.
+ */
+const upgradeWebSocket = (request: Request): { socket: WebSocket; response: Response } => {
+  // --- Deno Deploy / Deno edge runtime ---
+  const denoUpgrade = (globalThis as unknown as { Deno?: { upgradeWebSocket: (r: Request) => { socket: WebSocket; response: Response } } })?.Deno?.upgradeWebSocket
+  if (typeof denoUpgrade === 'function') {
     return denoUpgrade(request)
   }
 
-  const anyRequest = request as any
+  // --- WinterCG / runtimes that attach webSocket directly to the request ---
+  const anyRequest = request as unknown as { webSocket?: WebSocket & { accept(): void } }
   if (anyRequest?.webSocket) {
-    const { webSocket } = anyRequest
-    webSocket.accept()
-    return { socket: webSocket as WebSocket, response: new Response(null, { status: 101 }) }
+    anyRequest.webSocket.accept()
+    return { socket: anyRequest.webSocket as WebSocket, response: new Response(null, { status: 101 }) }
   }
 
-  throw new Error('WebSocket upgrade is not supported in this runtime')
+  // --- Unsupported runtime (e.g. standard Node.js Next.js) ---
+  throw new Error(
+    'WebSocket upgrade is not supported in this runtime. ' +
+    'Use a custom Node.js server with the `ws` package, or deploy to a Deno-compatible edge runtime.'
+  )
 }
 
 const broadcast = (data: unknown) => {
@@ -143,8 +165,13 @@ export async function GET(request: NextRequest) {
 
       return response
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'WebSocket upgrade failed'
+      const isUnsupportedRuntime = message.includes('not supported in this runtime')
       console.error('WebSocket upgrade failed', err)
-      return NextResponse.json({ error: 'WebSocket upgrade failed' }, { status: 400 })
+      return NextResponse.json(
+        { error: message },
+        { status: isUnsupportedRuntime ? 501 : 400 }
+      )
     }
   }
 
