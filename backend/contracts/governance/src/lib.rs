@@ -195,6 +195,13 @@ impl GovernanceContract {
         Self::admin_list(env)
     }
 
+    /// Returns a stored governance parameter value, if configured.
+    pub fn get_parameter(env: Env, parameter: Symbol) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Parameter(parameter))
+    }
+
     /// Delegate the caller's voting power to another admin.
     pub fn delegate_vote(env: Env, delegator: Address, delegatee: Address) -> bool {
         delegator.require_auth();
@@ -555,7 +562,7 @@ impl GovernanceContract {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Events};
-    use soroban_sdk::{Env, IntoVal, symbol_short, Symbol, Address, Val, FromVal};
+    use soroban_sdk::{symbol_short, Address, Env, FromVal, Symbol, Val};
 
     struct TestEnv {
         env: Env,
@@ -577,7 +584,7 @@ mod tests {
             }
         }
 
-        fn client(&self) -> GovernanceContractClient {
+        fn client(&self) -> GovernanceContractClient<'_> {
             GovernanceContractClient::new(&self.env, &self.contract_id)
         }
     }
@@ -641,7 +648,8 @@ mod tests {
         let client = t.client();
         let admin = Address::generate(&t.env);
         client.add_admin(&t.owner, &admin);
-        let prop_id = client.create_proposal(&admin, &ProposalType::AddAdmin(Address::generate(&t.env)));
+        let prop_id =
+            client.create_proposal(&admin, &ProposalType::AddAdmin(Address::generate(&t.env)));
         client.vote(&admin, &prop_id, &true);
         client.vote(&admin, &prop_id, &true);
     }
@@ -660,12 +668,17 @@ mod tests {
     // Events verification helper
     // -----------------------------------------------------------------------
 
-    fn verify_gov_event(env: &Env, gov_sym: &Symbol, topic1: &Symbol, captured_events: &soroban_sdk::Vec<(soroban_sdk::Address, soroban_sdk::Vec<Val>, Val)>) -> bool {
+    fn verify_gov_event(
+        env: &Env,
+        gov_sym: &Symbol,
+        topic1: &Symbol,
+        captured_events: &soroban_sdk::Vec<(soroban_sdk::Address, soroban_sdk::Vec<Val>, Val)>,
+    ) -> bool {
         captured_events.iter().any(|e| {
             let (_, topics, _) = e;
-            topics.len() >= 2 && 
-            Symbol::from_val(env, &topics.get(0).unwrap()) == *gov_sym &&
-            Symbol::from_val(env, &topics.get(1).unwrap()) == *topic1
+            topics.len() >= 2
+                && Symbol::from_val(env, &topics.get(0).unwrap()) == *gov_sym
+                && Symbol::from_val(env, &topics.get(1).unwrap()) == *topic1
         })
     }
 
@@ -675,24 +688,39 @@ mod tests {
         let client = t.client();
         let admin = Address::generate(&t.env);
         let target = Address::generate(&t.env);
-        let gov_sym = symbol_short!("gov");
+        let gov_sym = symbol_short!("GOV");
 
         client.add_admin(&t.owner, &admin);
-        
+
         // 1. Proposal Created
         let prop_id = client.create_proposal(&admin, &ProposalType::AddAdmin(target.clone()));
         let events = t.env.events().all();
-        assert!(verify_gov_event(&t.env, &gov_sym, &symbol_short!("prop_new"), &events));
+        assert!(verify_gov_event(
+            &t.env,
+            &gov_sym,
+            &symbol_short!("prop_new"),
+            &events
+        ));
 
         // 2. Vote Cast
         client.vote(&admin, &prop_id, &true);
         let events = t.env.events().all();
-        assert!(verify_gov_event(&t.env, &gov_sym, &symbol_short!("voted"), &events));
+        assert!(verify_gov_event(
+            &t.env,
+            &gov_sym,
+            &symbol_short!("voted"),
+            &events
+        ));
 
         // 3. Executed
         client.execute_proposal(&admin, &prop_id);
         let events = t.env.events().all();
-        assert!(verify_gov_event(&t.env, &gov_sym, &symbol_short!("prop_exec"), &events));
+        assert!(verify_gov_event(
+            &t.env,
+            &gov_sym,
+            &symbol_short!("prop_exec"),
+            &events
+        ));
     }
 
     #[test]
@@ -732,13 +760,21 @@ mod tests {
         let prop_id = client.create_proposal(&admin, &ProposalType::FeeChange(500));
         client.vote(&admin, &prop_id, &true);
         client.execute_proposal(&admin, &prop_id);
-        assert_eq!(client.get_proposal(&prop_id).status, ProposalStatus::Executed);
+        assert_eq!(
+            client.get_proposal(&prop_id).status,
+            ProposalStatus::Executed
+        );
 
         // Parameter Update
         let param = symbol_short!("limit");
-        let prop_id2 = client.create_proposal(&admin, &ProposalType::ParameterUpdate(param.clone(), 100));
+        let prop_id2 =
+            client.create_proposal(&admin, &ProposalType::ParameterUpdate(param.clone(), 100));
         client.vote(&admin, &prop_id2, &true);
         client.execute_proposal(&admin, &prop_id2);
-        assert_eq!(client.get_proposal(&prop_id2).status, ProposalStatus::Executed);
+        assert_eq!(
+            client.get_proposal(&prop_id2).status,
+            ProposalStatus::Executed
+        );
+        assert_eq!(client.get_parameter(&param), Some(100));
     }
 }
