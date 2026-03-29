@@ -28,8 +28,8 @@ soroban-sdk = { version = "23.5.2" }
 stellar-governance-contract = { path = "contracts/governance" }
 
 # Web & HTTP
-actix-web = "4.13"
-actix-rt = "2.11"
+actix-web = "4.4"
+actix-rt = "2.9"
 tracing-actix-web = "0.7"
 tokio = { version = "1.35", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -67,9 +67,9 @@ actix-web-prom = "0.9"
 prometheus = "0.13"
 
 # Tracing / OpenTelemetry
-opentelemetry = { version = "0.31", features = ["metrics", "logs"] }
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
+opentelemetry = { version = "0.24", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = "0.15"
 tracing-opentelemetry = "0.25"
 

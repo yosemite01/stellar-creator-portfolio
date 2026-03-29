@@ -72,7 +72,7 @@ pub struct Proposal {
 
 // ── Events ───────────────────────────────────────────────────────────────────
 
-#[soroban_sdk::contractevent]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdminAddedEvent {
     pub admin: Address,
@@ -80,7 +80,7 @@ pub struct AdminAddedEvent {
     pub timestamp: u64,
 }
 
-#[soroban_sdk::contractevent]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdminRemovedEvent {
     pub admin: Address,
@@ -88,7 +88,7 @@ pub struct AdminRemovedEvent {
     pub timestamp: u64,
 }
 
-#[soroban_sdk::contractevent]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProposalCreatedEvent {
     pub proposal_id: u64,
@@ -96,7 +96,7 @@ pub struct ProposalCreatedEvent {
     pub timestamp: u64,
 }
 
-#[soroban_sdk::contractevent]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoteCastEvent {
     pub proposal_id: u64,
@@ -106,7 +106,7 @@ pub struct VoteCastEvent {
     pub timestamp: u64,
 }
 
-#[soroban_sdk::contractevent]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProposalExecutedEvent {
     pub proposal_id: u64,
