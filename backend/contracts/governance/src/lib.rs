@@ -9,6 +9,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, E
 #[contracttype]
 pub enum DataKey {
     Owner,
+    PendingOwner,
     Admin(Address),
     AdminList,
     Delegate(Address),
@@ -391,6 +392,12 @@ impl GovernanceContract {
                     );
                 }
                 ProposalType::FeeChange(new_fee) => {
+                    let max_fee: u32 = env
+                        .storage()
+                        .persistent()
+                        .get(&DataKey::Parameter(Symbol::new(&env, "max_fee")))
+                        .unwrap_or(1000); // default cap: 10%
+                    assert!(*new_fee <= max_fee, "Fee exceeds maximum allowed");
                     env.storage()
                         .persistent()
                         .set(&DataKey::PlatformFee, &new_fee);
@@ -428,6 +435,48 @@ impl GovernanceContract {
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
             .expect("Proposal not found")
+    }
+
+    /// Returns the current platform fee in basis points (e.g. 500 = 5%).
+    pub fn get_fee(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlatformFee)
+            .unwrap_or(0)
+    }
+
+    /// Step 1: Current owner nominates a new owner.
+    /// The transfer is not effective until the pending owner calls `accept_ownership`.
+    pub fn transfer_ownership(env: Env, owner: Address, new_owner: Address) -> bool {
+        owner.require_auth();
+        let stored_owner: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Owner)
+            .expect("Governance not initialized");
+        assert!(owner == stored_owner, "Only owner can transfer ownership");
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingOwner, &new_owner);
+        true
+    }
+
+    /// Step 2: Pending owner accepts and becomes the new owner.
+    pub fn accept_ownership(env: Env, new_owner: Address) -> bool {
+        new_owner.require_auth();
+        let pending: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingOwner)
+            .expect("No pending owner");
+        assert!(new_owner == pending, "Caller is not the pending owner");
+        env.storage()
+            .persistent()
+            .set(&DataKey::Owner, &new_owner);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingOwner);
+        true
     }
 
     fn add_admin_internal(env: Env, admin: Address) {

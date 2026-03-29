@@ -229,10 +229,10 @@ impl FreelancerContract {
             .get(&key)
             .expect("Freelancer not registered");
 
-        let total = (profile.rating as u64) * (profile.total_rating_count as u64);
+        let total = (profile.rating as i128) * (profile.total_rating_count as i128);
         profile.total_rating_count += 1;
         profile.rating =
-            ((total + new_rating as u64) / profile.total_rating_count as u64) as u32;
+            ((total + new_rating as i128) / profile.total_rating_count as i128) as u32;
 
         env.storage().persistent().set(&key, &profile);
 
