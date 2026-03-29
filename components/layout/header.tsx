@@ -4,7 +4,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useTheme } from 'next-themes';
 import { Moon, Sun, Menu, X, User, LogOut, LayoutDashboard, Sparkles } from 'lucide-react';
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
+import { useIsMounted } from '@/hooks/useIsMounted';
 import { useSession, signOut } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
 import {
@@ -29,13 +30,9 @@ export function Header() {
   const { theme, setTheme } = useTheme();
   const { data: session } = useSession();
   const { t } = useI18n();
-  const [mounted, setMounted] = useState(false);
+  const mounted = useIsMounted();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    setMounted(true); // eslint-disable-line react-hooks/set-state-in-effect
-  }, []);
 
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
