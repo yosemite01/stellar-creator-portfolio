@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, IntoVal, String, Symbol, Vec};
 
 #[derive(Clone)]
 #[contracttype]
@@ -506,7 +506,7 @@ impl BountyContract {
                 bounty.budget,
                 bounty.token.clone(),
                 ReleaseCondition::OnCompletion,
-            ),
+            ).into_val(&env),
         );
 
         // Use instance storage for active workflow state
@@ -596,10 +596,12 @@ impl BountyContract {
             .expect("Bounty not found");
 
         bounty.creator.require_auth();
+        // #160: Require the freelancer to have submitted completion first.
+        // complete_bounty now only accepts PendingCompletion status, ensuring
+        // the freelancer's submit_completion step is mandatory before approval.
         assert!(
-            bounty.status == BountyStatus::InProgress ||
             bounty.status == BountyStatus::PendingCompletion,
-            "Bounty not ready for completion"
+            "Freelancer must submit completion before creator can approve"
         );
 
         // Note: Work submission tracking can be added via separate function
@@ -614,8 +616,8 @@ impl BountyContract {
                 
             env.invoke_contract::<bool>(
                 &escrow_contract,
-                &soroban_sdk::symbol_short!("release_funds"),
-                (escrow_id, bounty.creator.clone()),
+                &soroban_sdk::symbol_short!("rel_funds"),
+                (escrow_id, bounty.creator.clone()).into_val(&env),
             );
         }
 
@@ -996,6 +998,31 @@ impl BountyContract {
             (bounty.deadline, env.ledger().timestamp()),
         );
 
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mock escrow contract used in tests to satisfy invoke_contract calls
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[contract]
+pub struct MockEscrowContract;
+
+#[cfg(test)]
+#[contractimpl]
+impl MockEscrowContract {
+    pub fn deposit(
+        _env: Env,
+        _payer: Address,
+        _payee: Address,
+        _amount: i128,
+        _token: Address,
+        _condition: ReleaseCondition,
+    ) -> u64 {
+        1u64
+    }
+    pub fn rel_funds(_env: Env, _escrow_id: u64, _caller: Address) -> bool {
         true
     }
 }
@@ -1533,25 +1560,30 @@ mod tests {
 
     // ===== Deadline Enforcement Tests =====
 
+    fn setup_with_escrow(env: &Env) -> (BountyContractClient, Address) {
+        let contract_id = env.register(BountyContract, ());
+        let client = BountyContractClient::new(env, &contract_id);
+        let deployer = Address::generate(env);
+        let escrow = env.register(MockEscrowContract, ());
+        client.set_escrow_contract(&deployer, &escrow);
+        (client, Address::generate(env)) // returns (client, dummy_token)
+    }
+
     #[test]
     #[should_panic(expected = "Deadline must be in the future")]
     fn test_create_bounty_deadline_in_past() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_escrow(&env);
         let creator = Address::generate(&env);
-
-        // Set ledger timestamp to 1000, try deadline of 500 (in the past)
         env.ledger().set_timestamp(1000);
-
         client.create_bounty(
             &creator,
             &String::from_str(&env, "Late Bounty"),
             &String::from_str(&env, "Should fail"),
             &5000i128,
             &500u64,
+            &token,
         );
     }
 
@@ -1560,25 +1592,18 @@ mod tests {
     fn test_apply_after_deadline() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_escrow(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
-        // Create bounty with deadline at 1000
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        // Should fail - deadline passed
         client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1593,20 +1618,17 @@ mod tests {
     fn test_select_freelancer_after_deadline() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_escrow(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1614,11 +1636,7 @@ mod tests {
             &4500i128,
             &30u64,
         );
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        // Should fail - deadline passed
         client.select_freelancer(&bounty_id, &app_id);
     }
 
@@ -1627,20 +1645,17 @@ mod tests {
     fn test_submit_completion_after_deadline() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_escrow(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1648,13 +1663,8 @@ mod tests {
             &4500i128,
             &30u64,
         );
-
         client.select_freelancer(&bounty_id, &app_id);
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        // Should fail - deadline passed
         client.submit_completion(&bounty_id);
     }
 
@@ -1662,47 +1672,36 @@ mod tests {
     fn test_expire_open_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_escrow(&env);
         let creator = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        let result = client.expire_bounty(&bounty_id);
-        assert!(result);
-
-        let bounty = client.get_bounty(&bounty_id);
-        assert_eq!(bounty.status, BountyStatus::Expired);
+        assert!(client.expire_bounty(&bounty_id));
+        assert_eq!(client.get_bounty(&bounty_id).status, BountyStatus::Expired);
     }
 
     #[test]
     fn test_expire_in_progress_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_escrow(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1710,17 +1709,10 @@ mod tests {
             &4500i128,
             &30u64,
         );
-
         client.select_freelancer(&bounty_id, &app_id);
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        let result = client.expire_bounty(&bounty_id);
-        assert!(result);
-
-        let bounty = client.get_bounty(&bounty_id);
-        assert_eq!(bounty.status, BountyStatus::Expired);
+        assert!(client.expire_bounty(&bounty_id));
+        assert_eq!(client.get_bounty(&bounty_id).status, BountyStatus::Expired);
     }
 
     #[test]
@@ -1728,20 +1720,16 @@ mod tests {
     fn test_expire_bounty_before_deadline() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_escrow(&env);
         let creator = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
-        // Try to expire before deadline
         client.expire_bounty(&bounty_id);
     }
 
@@ -1750,20 +1738,17 @@ mod tests {
     fn test_expire_completed_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_escrow(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
