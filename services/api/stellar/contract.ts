@@ -28,7 +28,7 @@ export class ContractService {
       return null;
     }
 
-    return scValToNative(result.val as xdr.ScVal);
+    return scValToNative(result.val as unknown as xdr.ScVal);
   }
 
   /**
@@ -47,11 +47,12 @@ export class ContractService {
     // 1. Get source account details
     const sourcePublicKey = signer.publicKey();
     const sourceAccount = await rpcServer.getAccount(sourcePublicKey);
+    const sequence = (sourceAccount as any).sequence || (sourceAccount as any).sequenceNumber;
 
     // 2. Build the initial transaction
     const call = contract.call(method, ...args.map((arg) => nativeToScVal(arg)));
     let tx = new TransactionBuilder(
-      new Account(sourcePublicKey, sourceAccount.sequence),
+      new Account(sourcePublicKey, sequence),
       {
         fee: '100',
         networkPassphrase,
@@ -82,8 +83,7 @@ export class ContractService {
     // 7. Poll for status
     let statusResponse = await rpcServer.getTransaction(response.hash);
     while (
-      statusResponse.status === rpc.Api.GetTransactionStatus.NOT_FOUND ||
-      statusResponse.status === rpc.Api.GetTransactionStatus.PENDING
+      statusResponse.status === rpc.Api.GetTransactionStatus.NOT_FOUND
     ) {
       // If pending or not found yet, wait and retry
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -95,10 +95,10 @@ export class ContractService {
     }
 
     if (statusResponse.status === rpc.Api.GetTransactionStatus.FAILED) {
-      throw new Error(`Transaction failed: ${JSON.stringify(statusResponse.resultXdr)}`);
+      throw new Error(`Transaction failed: ${JSON.stringify((statusResponse as any).resultXdr)}`);
     }
 
-    throw new Error(`Unknown transaction status: ${statusResponse.status}`);
+    throw new Error(`Unknown transaction status: ${(statusResponse as any).status}`);
   }
 }
 

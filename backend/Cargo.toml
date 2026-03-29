@@ -68,9 +68,9 @@ actix-web-prom = "0.9"
 prometheus = "0.13"
 
 # Tracing / OpenTelemetry
-opentelemetry = { version = "0.24", features = ["metrics", "logs"] }
-opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.24", features = ["grpc-tonic"] }
+opentelemetry = { version = "0.31", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = "0.15"
 tracing-opentelemetry = "0.25"
 
