@@ -62,6 +62,7 @@ model User {
   clientProfile  ClientProfile?
   bounties       Bounty[]
   applications   BountyApplication[]
+  notifications  Notification[]
   notificationPreference NotificationPreference?
   inAppNotifications     InAppNotification[]
   emailDeliveryLogs      EmailDeliveryLog[]
@@ -215,6 +216,38 @@ enum ReviewStatus {
   REJECTED
 }
 
+model Notification {
+  id          String             @id @default(cuid())
+  messageId   String?            @unique
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  body        String
+  type        String
+  status      NotificationStatus @default(PENDING)
+  priority    String             @default("normal")
+  channels    String[]
+  metadata    Json?
+  readAt      DateTime?
+  openedAt    DateTime?
+  sentAt      DateTime?
+  failedAt    DateTime?
+  error       String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  OPENED
+  READ
+  ARCHIVED
+  DELETED
 // ── Notifications & email delivery ───────────────────────────────────────────
 
 model NotificationPreference {

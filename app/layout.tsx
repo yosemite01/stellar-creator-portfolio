@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { ThemeProvider } from 'next-themes'
 import { SessionProvider } from '@/components/providers/session-provider'
+import { I18nProvider } from '@/components/i18n-provider'
 import { Toaster } from '@/components/ui/sonner'
 import AnalyticsClient from './providers/AnalyticsClient'
 import './globals.css'
@@ -65,12 +66,14 @@ export default function RootLayout({
       </head>
       <body className="font-sans antialiased">
         <SessionProvider>
-          <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-            <AnalyticsClient plausibleDomain={PLAUSIBLE_DOMAIN} />
-            {children}
-            <Toaster richColors closeButton position="top-right" />
-            <Analytics />
-          </ThemeProvider>
+          <I18nProvider>
+            <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+              <AnalyticsClient plausibleDomain={PLAUSIBLE_DOMAIN} />
+              {children}
+              <Toaster richColors closeButton position="top-right" />
+              <Analytics />
+            </ThemeProvider>
+          </I18nProvider>
         </SessionProvider>
       </body>
     </html>

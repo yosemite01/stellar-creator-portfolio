@@ -26,6 +26,7 @@ uuid.workspace = true
 rand.workspace = true
 sha2.workspace = true
 hex.workspace = true
+reqwest.workspace = true
 oauth2 = { version = "4", features = ["reqwest"] }
 sqlx = { workspace = true, features = ["migrate", "chrono", "uuid"] }
 stellar-discovery = { path = "../discovery" }

@@ -40,7 +40,7 @@ fn build_oauth_client(
     config: &OAuthProviderConfig,
     redirect_uri: &str,
 ) -> Result<BasicClient, AuthError> {
-    let (auth_url, token_url, scopes) = match provider {
+    let (auth_url, token_url, _scopes) = match provider {
         OAuthProvider::Google => (
             "https://accounts.google.com/o/oauth2/v2/auth",
             "https://oauth2.googleapis.com/token",
@@ -58,7 +58,7 @@ fn build_oauth_client(
         ),
     };
 
-    let mut client = BasicClient::new(
+    let client = BasicClient::new(
         ClientId::new(config.client_id.clone()),
         Some(ClientSecret::new(config.client_secret.clone())),
         AuthUrl::new(auth_url.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
@@ -67,10 +67,6 @@ fn build_oauth_client(
     .set_redirect_uri(
         RedirectUrl::new(redirect_uri.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
     );
-
-    for scope in scopes {
-        client = client.add_scope(Scope::new(scope.to_string()));
-    }
 
     Ok(client)
 }
@@ -82,6 +78,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
             #[derive(serde::Deserialize)]
             struct GoogleProfile {
                 sub: String,
+                #[allow(dead_code)]
                 email: Option<String>,
             }
             let profile: GoogleProfile = client
@@ -92,7 +89,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
                 .error_for_status()
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
-                .json()
+                .json::<GoogleProfile>()
                 .await
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?;
             Ok(format!("google:{}", profile.sub))
@@ -101,6 +98,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
             #[derive(serde::Deserialize)]
             struct GitHubProfile {
                 id: u64,
+                #[allow(dead_code)]
                 login: Option<String>,
             }
             let profile: GitHubProfile = client
@@ -113,7 +111,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
                 .error_for_status()
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
-                .json()
+                .json::<GitHubProfile>()
                 .await
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?;
             Ok(format!("github:{}", profile.id))
@@ -122,6 +120,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
             #[derive(serde::Deserialize)]
             struct TwitterData {
                 id: String,
+                #[allow(dead_code)]
                 username: Option<String>,
             }
             #[derive(serde::Deserialize)]
@@ -136,7 +135,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
                 .error_for_status()
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
-                .json()
+                .json::<TwitterProfile>()
                 .await
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?;
             Ok(format!("twitter:{}", profile.data.id))
@@ -233,13 +232,13 @@ pub async fn mint_tokens(
 }
 
 pub async fn oauth2_token_exchange(
-    provider: web::Path<String>,
+    provider_path: web::Path<String>,
     body: web::Json<OAuthTokenRequest>,
     config: web::Data<Config>,
     pool: web::Data<sqlx::PgPool>,
 ) -> Result<HttpResponse, AuthError> {
-    let provider = OAuthProvider::from_str(provider.as_str())
-        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider.into_inner()))?;
+    let provider = OAuthProvider::from_str(provider_path.as_str())
+        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider_path.into_inner()))?;
 
     let provider_config = config
         .oauth_provider_config(provider)
@@ -264,12 +263,12 @@ pub async fn oauth2_token_exchange(
 }
 
 pub async fn oauth2_authorize(
-    provider: web::Path<String>,
+    provider_path: web::Path<String>,
     query: web::Query<OAuthAuthorizeRequest>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, AuthError> {
-    let provider = OAuthProvider::from_str(provider.as_str())
-        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider.into_inner()))?;
+    let provider = OAuthProvider::from_str(provider_path.as_str())
+        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider_path.into_inner()))?;
 
     let provider_config = config
         .oauth_provider_config(provider)
@@ -281,7 +280,19 @@ pub async fn oauth2_authorize(
         .unwrap_or_else(|| provider_config.redirect_uri.clone());
 
     let client = build_oauth_client(provider, provider_config, redirect_uri.as_str())?;
-    let (authorize_url, csrf_state) = client.authorize_url(CsrfToken::new_random);
+
+    let scopes = match provider {
+        OAuthProvider::Google => vec!["openid", "email", "profile"],
+        OAuthProvider::GitHub => vec!["read:user", "user:email"],
+        OAuthProvider::Twitter => vec!["tweet.read", "users.read", "offline.access"],
+    };
+
+    let mut auth_request = client.authorize_url(CsrfToken::new_random);
+    for scope in scopes {
+        auth_request = auth_request.add_scope(Scope::new(scope.to_string()));
+    }
+    
+    let (authorize_url, csrf_state) = auth_request.url();
 
     Ok(HttpResponse::Ok().json(json!({
         "authorization_url": authorize_url.to_string(),

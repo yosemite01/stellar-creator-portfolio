@@ -88,7 +88,11 @@ impl EscrowContract {
         payer.require_auth();
         assert!(amount > 0, "Amount must be positive");
 
+        // #179: Validate token implements the token interface by calling balance().
+        // This will trap if `token` is not a valid SEP-41 token contract,
+        // preventing funds from being locked with an unrecoverable address.
         let token_client = TokenClient::new(&env, &token);
+        let _ = token_client.balance(&payer); // panics if token is invalid
         token_client.transfer(&payer, &env.current_contract_address(), &amount);
 
         let mut counter: u64 = env

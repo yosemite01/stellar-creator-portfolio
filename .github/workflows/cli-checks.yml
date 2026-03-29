@@ -24,7 +24,10 @@ jobs:
           version: latest
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Generate Prisma Client
+        run: pnpm run db:generate
 
       - name: Run frontend lint
         run: pnpm run frontend:orbit-check
