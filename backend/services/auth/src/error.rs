@@ -11,16 +11,29 @@ pub enum AuthError {
     MintNotConfigured,
     #[error("unauthorized mint request")]
     MintUnauthorized,
-    #[error("database error: {0}")]
-    Db(#[from] sqlx::Error),
     #[error("jwt error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
     #[error("invalid OAuth provider: {0}")]
     InvalidOAuthProvider(String),
     #[error("OAuth provider not configured: {0}")]
     OAuthProviderNotConfigured(String),
-    #[error("OAuth flow failed: {0}")]
+    #[error("OAuth2 flow failed: {0}")]
     OAuthFlowFailed(String),
+
+    #[error("Email already in use")]
+    EmailAlreadyInUse,
+
+    #[error("Invalid email or password")]
+    InvalidCredentials,
+
+    #[error("User not found")]
+    UserNotFound,
+
+    #[error("Internal database error")]
+    DatabaseError(#[from] sqlx::Error),
+
+    #[error("Internal server error")]
+    InternalError,
 }
 
 impl ResponseError for AuthError {
@@ -36,7 +49,18 @@ impl ResponseError for AuthError {
             AuthError::MintUnauthorized => {
                 (actix_web::http::StatusCode::UNAUTHORIZED, self.to_string())
             }
-            AuthError::Db(_) => (
+            AuthError::EmailAlreadyInUse => {
+                (actix_web::http::StatusCode::CONFLICT, self.to_string())
+            }
+            AuthError::InvalidCredentials => {
+                (actix_web::http::StatusCode::UNAUTHORIZED, self.to_string())
+            }
+            AuthError::UserNotFound => (actix_web::http::StatusCode::NOT_FOUND, self.to_string()),
+            AuthError::DatabaseError(_) => (
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error".to_string(),
+            ),
+            AuthError::InternalError => (
                 actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "internal error".to_string(),
             ),

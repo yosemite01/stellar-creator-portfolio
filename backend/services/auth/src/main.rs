@@ -59,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             .route("/health", web::get().to(handlers::health))
+            .route("/auth/register", web::post().to(handlers::register))
+            .route("/auth/login", web::post().to(handlers::login))
             .route("/auth/token", web::post().to(handlers::mint_tokens))
             .route("/auth/refresh", web::post().to(handlers::refresh_tokens))
             .route(
@@ -69,6 +71,11 @@ async fn main() -> anyhow::Result<()> {
                 "/auth/oauth2/{provider}/token",
                 web::post().to(handlers::oauth2_token_exchange),
             )
+            .route("/auth/logout", web::post().to(handlers::logout))
+            .route("/auth/logout/all", web::post().to(handlers::logout_all))
+            .route("/auth/me", web::get().to(handlers::get_me))
+            .route("/auth/me", web::patch().to(handlers::update_profile))
+            .route("/auth/password/change", web::post().to(handlers::change_password))
     })
     .bind((host.as_str(), port))?
     .run()

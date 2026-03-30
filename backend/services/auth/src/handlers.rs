@@ -5,6 +5,7 @@ use oauth2::reqwest::async_http_client;
 use oauth2::{AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope, TokenResponse, TokenUrl};
 use serde::Deserialize;
 use serde_json::json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::config::{Config, OAuthProvider, OAuthProviderConfig};
@@ -30,6 +31,74 @@ pub struct OAuthTokenRequest {
 }
 
 #[derive(Deserialize)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateProfileRequest {
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+pub async fn register(
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    body: web::Json<RegisterRequest>,
+) -> Result<HttpResponse, AuthError> {
+    if db::find_user_by_email(pool.get_ref(), &body.email).await?.is_some() {
+        return Err(AuthError::EmailAlreadyInUse);
+    }
+
+    let salt = bcrypt::DEFAULT_COST;
+    let password_hash = bcrypt::hash(&body.password, salt).map_err(|_| AuthError::InternalError)?;
+
+    let user = db::create_user(
+        pool.get_ref(),
+        &body.email,
+        Some(&password_hash),
+        body.display_name.as_deref(),
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    mint_tokens_for_user(&user.id.to_string(), &config, pool.get_ref()).await
+}
+
+pub async fn login(
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    body: web::Json<LoginRequest>,
+) -> Result<HttpResponse, AuthError> {
+    let user = db::find_user_by_email(pool.get_ref(), &body.email)
+        .await?
+        .ok_or(AuthError::InvalidCredentials)?;
+
+    let password_hash = user.password_hash.ok_or(AuthError::InvalidCredentials)?;
+    if !bcrypt::verify(&body.password, &password_hash).map_err(|_| AuthError::InternalError)? {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    mint_tokens_for_user(&user.id.to_string(), &config, pool.get_ref()).await
+}
+
+#[derive(Deserialize)]
 pub struct OAuthAuthorizeRequest {
     #[serde(default)]
     pub redirect_uri: Option<String>,
@@ -40,7 +109,7 @@ fn build_oauth_client(
     config: &OAuthProviderConfig,
     redirect_uri: &str,
 ) -> Result<BasicClient, AuthError> {
-    let (auth_url, token_url, scopes) = match provider {
+    let (auth_url, token_url, _scopes) = match provider {
         OAuthProvider::Google => (
             "https://accounts.google.com/o/oauth2/v2/auth",
             "https://oauth2.googleapis.com/token",
@@ -58,7 +127,7 @@ fn build_oauth_client(
         ),
     };
 
-    let mut client = BasicClient::new(
+    let client = BasicClient::new(
         ClientId::new(config.client_id.clone()),
         Some(ClientSecret::new(config.client_secret.clone())),
         AuthUrl::new(auth_url.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
@@ -68,10 +137,7 @@ fn build_oauth_client(
         RedirectUrl::new(redirect_uri.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
     );
 
-    for scope in scopes {
-        client = client.add_scope(Scope::new(scope.to_string()));
-    }
-
+    // No add_scope here, we'll add them when building the authorize_url
     Ok(client)
 }
 
@@ -82,7 +148,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
             #[derive(serde::Deserialize)]
             struct GoogleProfile {
                 sub: String,
-                email: Option<String>,
+                _email: Option<String>,
             }
             let profile: GoogleProfile = client
                 .get("https://openidconnect.googleapis.com/v1/userinfo")
@@ -101,7 +167,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
             #[derive(serde::Deserialize)]
             struct GitHubProfile {
                 id: u64,
-                login: Option<String>,
+                _login: Option<String>,
             }
             let profile: GitHubProfile = client
                 .get("https://api.github.com/user")
@@ -122,7 +188,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
             #[derive(serde::Deserialize)]
             struct TwitterData {
                 id: String,
-                username: Option<String>,
+                _username: Option<String>,
             }
             #[derive(serde::Deserialize)]
             struct TwitterProfile {
@@ -148,6 +214,21 @@ fn extract_mint_header(req: &HttpRequest) -> Option<&str> {
     req.headers()
         .get("x-mint-secret")
         .and_then(|v| v.to_str().ok())
+}
+
+fn extract_auth_claims(req: &HttpRequest, config: &Config) -> Result<crate::tokens::AccessClaims, AuthError> {
+    let auth_header = req.headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or(AuthError::InternalError)?; // Or a more specific error
+
+    if !auth_header.starts_with("Bearer ") {
+        return Err(AuthError::InternalError);
+    }
+
+    let token = &auth_header[7..];
+    crate::tokens::verify_access_token(token, &config.jwt_secret)
+        .map_err(|_| AuthError::InternalError)
 }
 
 async fn mint_tokens_for_user(
@@ -258,9 +339,29 @@ pub async fn oauth2_token_exchange(
         .await
         .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?;
 
-    let user_id = fetch_oauth_user_id(provider, token.access_token().secret()).await?;
+    let oauth_id = fetch_oauth_user_id(provider, token.access_token().secret()).await?;
 
-    mint_tokens_for_user(&user_id, &config, pool.get_ref()).await
+    // Check if user exists, if not create one
+    let provider_name = provider.to_string();
+    let user = match db::find_user_by_oauth(pool.get_ref(), &provider_name, &oauth_id).await? {
+        Some(u) => u,
+        None => {
+            // For OAuth users, we might not have an email immediately or we use the oauth_id as email placeholder
+            // Ideally we should fetch email from the profile if available
+            db::create_user(
+                pool.get_ref(),
+                &format!("{}@{}", oauth_id, provider_name),
+                None,
+                None,
+                None,
+                Some(&provider_name),
+                Some(&oauth_id),
+            )
+            .await?
+        }
+    };
+
+    mint_tokens_for_user(&user.id.to_string(), &config, pool.get_ref()).await
 }
 
 pub async fn oauth2_authorize(
@@ -281,7 +382,21 @@ pub async fn oauth2_authorize(
         .unwrap_or_else(|| provider_config.redirect_uri.clone());
 
     let client = build_oauth_client(provider, provider_config, redirect_uri.as_str())?;
-    let (authorize_url, csrf_state) = client.authorize_url(CsrfToken::new_random);
+    
+    let mut request = client.authorize_url(CsrfToken::new_random);
+    
+    // Add scopes here based on the provider
+    let scopes = match provider {
+        OAuthProvider::Google => vec!["openid", "email", "profile"],
+        OAuthProvider::GitHub => vec!["read:user", "user:email"],
+        OAuthProvider::Twitter => vec!["tweet.read", "users.read", "offline.access"],
+    };
+    
+    for scope in scopes {
+        request = request.add_scope(Scope::new(scope.to_string()));
+    }
+
+    let (authorize_url, csrf_state) = request.url();
 
     Ok(HttpResponse::Ok().json(json!({
         "authorization_url": authorize_url.to_string(),
@@ -316,4 +431,86 @@ pub async fn refresh_tokens(
         "token_type": "Bearer",
         "expires_in": config.access_ttl_secs
     })))
+}
+
+pub async fn logout(
+    pool: web::Data<PgPool>,
+    body: web::Json<RefreshRequest>,
+) -> Result<HttpResponse, AuthError> {
+    let hash = hash_refresh_token(&body.refresh_token);
+    db::delete_refresh_token(pool.get_ref(), &hash).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+pub async fn logout_all(
+    req: HttpRequest,
+    config: web::Data<Config>,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AuthError> {
+    let claims = extract_auth_claims(&req, &config)?;
+    db::delete_all_user_refresh_tokens(pool.get_ref(), &claims.sub).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+pub async fn get_me(
+    req: HttpRequest,
+    config: web::Data<Config>,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AuthError> {
+    let claims = extract_auth_claims(&req, &config)?;
+    let user_uuid = Uuid::parse_str(&claims.sub).map_err(|_| AuthError::InternalError)?;
+    let user = db::find_user_by_id(pool.get_ref(), user_uuid)
+        .await?
+        .ok_or(AuthError::UserNotFound)?;
+
+    Ok(HttpResponse::Ok().json(user))
+}
+
+pub async fn update_profile(
+    req: HttpRequest,
+    config: web::Data<Config>,
+    pool: web::Data<PgPool>,
+    body: web::Json<UpdateProfileRequest>,
+) -> Result<HttpResponse, AuthError> {
+    let claims = extract_auth_claims(&req, &config)?;
+    let user_uuid = Uuid::parse_str(&claims.sub).map_err(|_| AuthError::InternalError)?;
+    
+    let user = db::update_user_profile(
+        pool.get_ref(),
+        user_uuid,
+        body.display_name.as_deref(),
+        body.avatar_url.as_deref(),
+    )
+    .await?;
+
+    Ok(HttpResponse::Ok().json(user))
+}
+
+pub async fn change_password(
+    req: HttpRequest,
+    config: web::Data<Config>,
+    pool: web::Data<PgPool>,
+    body: web::Json<ChangePasswordRequest>,
+) -> Result<HttpResponse, AuthError> {
+    let claims = extract_auth_claims(&req, &config)?;
+    let user_uuid = Uuid::parse_str(&claims.sub).map_err(|_| AuthError::InternalError)?;
+    
+    let user = db::find_user_by_id(pool.get_ref(), user_uuid)
+        .await?
+        .ok_or(AuthError::UserNotFound)?;
+
+    let password_hash = user.password_hash.ok_or(AuthError::InvalidCredentials)?;
+    if !bcrypt::verify(&body.current_password, &password_hash).map_err(|_| AuthError::InternalError)? {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    let salt = bcrypt::DEFAULT_COST;
+    let new_hash = bcrypt::hash(&body.new_password, salt).map_err(|_| AuthError::InternalError)?;
+
+    db::update_user_password(pool.get_ref(), user_uuid, &new_hash).await?;
+    
+    // Invalidate all sessions on password change for security
+    db::delete_all_user_refresh_tokens(pool.get_ref(), &claims.sub).await?;
+
+    Ok(HttpResponse::Ok().json(json!({ "message": "password changed successfully" })))
 }
