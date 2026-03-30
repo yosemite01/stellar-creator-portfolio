@@ -2,7 +2,8 @@
 
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
-import { useEffect, useReducer, useState } from 'react';
+import { useReducer } from 'react';
+import { useIsMounted } from '@/hooks/useIsMounted';
 import { Header } from '@/components/layout/header';
 import { DisputeForm } from '@/components/forms/dispute-form';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,11 +31,7 @@ const STATUS_LABEL: Record<DisputeRecord['status'], string> = {
 export default function DisputesPage() {
   const { data: session, status } = useSession();
   const [, bump] = useReducer((x: number) => x + 1, 0);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true); // eslint-disable-line react-hooks/set-state-in-effect
-  }, []);
+  const mounted = useIsMounted();
 
   const snapshot =
     mounted && typeof window !== 'undefined'
