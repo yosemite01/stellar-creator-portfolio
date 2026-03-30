@@ -1,0 +1,611 @@
+
+> my-project@0.1.0 lint /Users/mac/STELLAR CREATOR -PORTFOLIO 2
+> eslint .
+
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/__tests__/auth.test.ts
+   7:32  warning  'beforeEach' is defined but never used       @typescript-eslint/no-unused-vars
+  15:13  warning  'isAuth' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/__tests__/creator-card.test.tsx
+  18:36  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                 @typescript-eslint/no-explicit-any
+  18:44  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/__tests__/creator-hero.test.tsx
+  18:36  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                 @typescript-eslint/no-explicit-any
+  18:44  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/__tests__/messages.test.ts
+   1:32  warning  'vi' is defined but never used            @typescript-eslint/no-unused-vars
+   5:56  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  42:41  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  51:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/__tests__/notifications.test.ts
+  18:31  warning  'UserPreferences' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/__tests__/portfolio-customization.test.ts
+   1:44  warning  'afterEach' is defined but never used     @typescript-eslint/no-unused-vars
+   1:55  warning  'vi' is defined but never used            @typescript-eslint/no-unused-vars
+  42:70  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  47:67  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/__tests__/reviews.test.ts
+   1:32  warning  'beforeEach' is defined but never used    @typescript-eslint/no-unused-vars
+  21:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  37:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  48:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/__tests__/storage.test.ts
+   4:3   warning  'GetObjectCommand' is defined but never used  @typescript-eslint/no-unused-vars
+   6:3   warning  'PutObjectCommand' is defined but never used  @typescript-eslint/no-unused-vars
+   7:3   warning  'S3Client' is defined but never used          @typescript-eslint/no-unused-vars
+  13:12  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+  14:25  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+  25:33  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+  28:33  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+  31:33  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+  34:33  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/about/page.tsx
+   23:17   warning  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+   23:39   warning  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+   38:107  warning  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+  156:147  warning  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/admin/analytics/page.tsx
+   92:31  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  115:33  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/admin/audit/page.tsx
+  7:30  warning  'AuditLog' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/admin/bounties/page.tsx
+  23:10  warning  'logs' is assigned a value but never used                              @typescript-eslint/no-unused-vars
+  72:7   warning  Expected an assignment or function call and instead saw an expression  @typescript-eslint/no-unused-expressions
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/admin/page.tsx
+   3:10  warning  'useState' is defined but never used  @typescript-eslint/no-unused-vars
+   9:3   warning  'UserPlus' is defined but never used  @typescript-eslint/no-unused-vars
+  13:8   warning  'AuditLog' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/admin/reports/page.tsx
+   6:32  warning  'Flag' is defined but never used           @typescript-eslint/no-unused-vars
+  26:10  warning  'logs' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/admin/users/page.tsx
+   7:10  warning  'Badge' is defined but never used                                      @typescript-eslint/no-unused-vars
+   9:37  warning  'ShieldCheck' is defined but never used                                @typescript-eslint/no-unused-vars
+   9:50  warning  'ChevronDown' is defined but never used                                @typescript-eslint/no-unused-vars
+  25:10  warning  'logs' is assigned a value but never used                              @typescript-eslint/no-unused-vars
+  82:7   warning  Expected an assignment or function call and instead saw an expression  @typescript-eslint/no-unused-expressions
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/admin/verifications/page.tsx
+  8:10  warning  'Badge' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/api/auth/register/route.ts
+  77:23  warning  '_' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/api/contract/invoke/route.ts
+  34:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/api/contract/read/route.ts
+  18:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/api/messages/route.ts
+  38:38  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  43:33  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  74:70  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/api/upload/route.ts
+  3:22  warning  'getDownloadUrl' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/auth/forgot-password/page.tsx
+  37:14  warning  'err' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/auth/login/page.tsx
+  39:14  warning  'err' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/auth/register/page.tsx
+  15:9   warning  'router' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  67:14  warning  'err' is defined but never used              @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/auth/reset-password/page.tsx
+  67:14  warning  'err' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/creators/[id]/customize/page.tsx
+   27:17  warning  'session' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              @typescript-eslint/no-unused-vars
+   45:5   warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/creators/[id]/customize/page.tsx:45:5
+  43 |     if (!creator) return;
+  44 |     const loaded = loadCustomization(creator.id);
+> 45 |     setConfig(loaded);
+     |     ^^^^^^^^^ Avoid calling setState() directly within an effect
+  46 |   }, [creator]);
+  47 |
+  48 |   // Apply theme preview live  react-hooks/set-state-in-effect
+   53:6   warning  React Hook useEffect has a missing dependency: 'config'. Either include it or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 react-hooks/exhaustive-deps
+  182:78  warning  `"` can be escaped with `&quot;`, `&ldquo;`, `&#34;`, `&rdquo;`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           react/no-unescaped-entities
+  182:96  warning  `"` can be escaped with `&quot;`, `&ldquo;`, `&#34;`, `&rdquo;`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           react/no-unescaped-entities
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/creators/[id]/page.tsx
+  133:19  warning  `"` can be escaped with `&quot;`, `&ldquo;`, `&#34;`, `&rdquo;`  react/no-unescaped-entities
+  133:37  warning  `"` can be escaped with `&quot;`, `&ldquo;`, `&#34;`, `&rdquo;`  react/no-unescaped-entities
+  361:56  warning  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/creators/page.tsx
+  3:10  warning  'useRouter' is defined but never used    @typescript-eslint/no-unused-vars
+  3:21  warning  'usePathname' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/dashboard/analytics/page.tsx
+  100:17  warning  'session' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/dashboard/files/page.tsx
+  26:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/dashboard/page.tsx
+  32:7   warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/dashboard/page.tsx:32:7
+  30 |       router.push('/auth/login');
+  31 |     } else if (status === 'authenticated') {
+> 32 |       setIsLoading(false);
+     |       ^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  33 |     }
+  34 |   }, [status, router]);
+  35 |  react-hooks/set-state-in-effect
+  56:38  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/freelancers/page.tsx
+   10:36  warning  'UserX' is defined but never used                                @typescript-eslint/no-unused-vars
+   11:10  warning  'EmptyState' is defined but never used                           @typescript-eslint/no-unused-vars
+  206:18  warning  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/layout.tsx
+  12:7  warning  '_geist' is assigned a value but never used      @typescript-eslint/no-unused-vars
+  13:7  warning  '_geistMono' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/profile/page.tsx
+  57:14  warning  'err' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/providers/AnalyticsClient.tsx
+  66:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/lighthouse-pwa.test.ts
+  1:1  warning  Do not use "@ts-nocheck" because it alters compilation errors  @typescript-eslint/ban-ts-comment
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/network-status.tsx
+   1:1  warning  Do not use "@ts-nocheck" because it alters compilation errors                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  @typescript-eslint/ban-ts-comment
+  18:7  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/network-status.tsx:18:7
+  16 |   useEffect(() => {
+  17 |     if (isOnline !== wasOnline) {
+> 18 |       setShowNotification(true);
+     |       ^^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  19 |       setWasOnline(isOnline);
+  20 |
+  21 |       // Auto-hide notification after 4 seconds  react-hooks/set-state-in-effect
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/pwa-e2e.spec.ts
+    1:1   warning  Do not use "@ts-nocheck" because it alters compilation errors  @typescript-eslint/ban-ts-comment
+  141:13  warning  'offlineStatus' is assigned a value but never used             @typescript-eslint/no-unused-vars
+  230:13  warning  'initialTime' is assigned a value but never used               @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/pwa-integration.test.ts
+    1:1   warning  Do not use "@ts-nocheck" because it alters compilation errors  @typescript-eslint/ban-ts-comment
+    2:44  warning  'afterEach' is defined but never used                          @typescript-eslint/no-unused-vars
+   34:10  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+  103:7   warning  'pwaManager' is assigned a value but never used                @typescript-eslint/no-unused-vars
+  116:10  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+  172:45  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+  235:7   warning  'pwaManager' is assigned a value but never used                @typescript-eslint/no-unused-vars
+  249:10  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+  252:41  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+  261:35  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+  273:10  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/pwa-provider.tsx
+   1:1  warning  Do not use "@ts-nocheck" because it alters compilation errors                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    @typescript-eslint/ban-ts-comment
+  31:5  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/pwa-provider.tsx:31:5
+  29 |   useEffect(() => {
+  30 |     // Check initial state
+> 31 |     setIsOnline(pwa.isOnline());
+     |     ^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  32 |     setIsInstallable(pwa.isInstallPromptAvailable());
+  33 |     setIsRunningAsApp(pwa.isRunningAsApp());
+  34 |  react-hooks/set-state-in-effect
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/pwa-utils.ts
+  162:28  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  345:63  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  346:53  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  347:18  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/service-worker.test.ts
+    1:1   warning  Do not use "@ts-nocheck" because it alters compilation errors  @typescript-eslint/ban-ts-comment
+    2:32  warning  'beforeEach' is defined but never used                         @typescript-eslint/no-unused-vars
+    2:44  warning  'afterEach' is defined but never used                          @typescript-eslint/no-unused-vars
+   19:37  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+   27:13  warning  'request' is assigned a value but never used                   @typescript-eslint/no-unused-vars
+   37:37  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+   44:13  warning  'request' is assigned a value but never used                   @typescript-eslint/no-unused-vars
+   50:37  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+   72:13  warning  'request' is assigned a value but never used                   @typescript-eslint/no-unused-vars
+   81:37  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+   98:37  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+  158:11  warning  'request' is assigned a value but never used                   @typescript-eslint/no-unused-vars
+  173:35  warning  Unexpected any. Specify a different type                       @typescript-eslint/no-explicit-any
+  233:11  warning  'methods' is assigned a value but never used                   @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/app/pwa/update-notification.tsx
+  1:1   warning  Do not use "@ts-nocheck" because it alters compilation errors  @typescript-eslint/ban-ts-comment
+  3:17  warning  'useState' is defined but never used                           @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/limit/app/api/middleware.ts
+   80:38  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  104:27  warning  A `require()` style import is forbidden                                 @typescript-eslint/no-require-imports
+  144:37  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  152:9   warning  A `require()` style import is forbidden                                 @typescript-eslint/no-require-imports
+  153:15  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  176:5   warning  'next' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  195:32  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  204:26  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  236:23  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  294:13  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  299:13  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/limit/index.ts
+   6:8   warning  'express' is defined but never used         @typescript-eslint/no-unused-vars
+  58:11  warning  'level' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  59:11  warning  'type' is assigned a value but never used   @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/limit/lib/api-monitoring.ts
+   50:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   90:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  237:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  275:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  288:30  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  300:28  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  319:31  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  536:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  539:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/limit/lib/security.ts
+  112:13  warning  'secret' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  146:11  warning  'token' is assigned a value but never used   @typescript-eslint/no-unused-vars
+  151:14  warning  'error' is defined but never used            @typescript-eslint/no-unused-vars
+  171:12  warning  Unexpected any. Specify a different type     @typescript-eslint/no-explicit-any
+  241:11  warning  Unexpected any. Specify a different type     @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/limit/middleware/rate-limit.ts
+  264:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  325:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  326:16  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  332:16  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/limit/tests/e2e/api-abuse.test.ts
+   16:31  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+   28:12  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+   41:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+   51:34  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+   82:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+   92:34  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  114:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  129:11  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  150:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  160:31  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  166:29  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  172:29  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  176:77  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  181:12  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  200:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  211:9   warning  'corsMiddleware' is assigned a value but never used             @typescript-eslint/no-unused-vars
+  213:11  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  226:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  236:15  warning  'securityHeadersMiddleware' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  236:45  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  241:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  251:33  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  261:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  280:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  290:31  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  302:12  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  307:12  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  319:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  337:9   warning  'LogLevel' is assigned a value but never used                   @typescript-eslint/no-unused-vars
+  338:9   warning  'EventType' is assigned a value but never used                  @typescript-eslint/no-unused-vars
+  339:11  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  362:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  372:35  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  382:12  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  383:31  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  401:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  416:11  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  440:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  455:31  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  456:34  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  470:69  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  488:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  498:31  warning  A `require()` style import is forbidden                         @typescript-eslint/no-require-imports
+  507:69  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+  515:14  warning  'error' is defined but never used                               @typescript-eslint/no-unused-vars
+  544:44  warning  Unexpected any. Specify a different type                        @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/limit/tests/integration/security.test.ts
+    6:8   warning  'express' is defined but never used                                    @typescript-eslint/no-unused-vars
+    6:19  warning  'Express' is defined but never used                                    @typescript-eslint/no-unused-vars
+   15:15  warning  'app' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+   26:13  warning  'mockReq' is assigned a value but never used                           @typescript-eslint/no-unused-vars
+   46:15  warning  'app' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+   84:15  warning  'app' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+   84:20  warning  'stack' is assigned a value but never used                             @typescript-eslint/no-unused-vars
+   91:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  101:15  warning  'app' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+  101:20  warning  'stack' is assigned a value but never used                             @typescript-eslint/no-unused-vars
+  114:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  124:33  warning  A `require()` style import is forbidden                                @typescript-eslint/no-require-imports
+  132:13  warning  'authHeader' is assigned a value but never used                        @typescript-eslint/no-unused-vars
+  139:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  149:15  warning  'app' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+  162:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  172:34  warning  A `require()` style import is forbidden                                @typescript-eslint/no-require-imports
+  202:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  212:20  warning  'stack' is assigned a value but never used                             @typescript-eslint/no-unused-vars
+  215:15  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+  215:40  warning  'req' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  215:54  warning  'res' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  220:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  230:20  warning  'stack' is assigned a value but never used                             @typescript-eslint/no-unused-vars
+  233:15  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+  234:35  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+  239:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  249:15  warning  'app' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+  249:20  warning  'stack' is assigned a value but never used                             @typescript-eslint/no-unused-vars
+  254:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  264:15  warning  'app' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+  264:20  warning  'stack' is assigned a value but never used                             @typescript-eslint/no-unused-vars
+  269:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  284:31  warning  A `require()` style import is forbidden                                @typescript-eslint/no-require-imports
+  304:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  314:34  warning  A `require()` style import is forbidden                                @typescript-eslint/no-require-imports
+  335:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  350:11  warning  A `require()` style import is forbidden                                @typescript-eslint/no-require-imports
+  371:14  warning  'error' is defined but never used                                      @typescript-eslint/no-unused-vars
+  396:44  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/limit/tests/unit/rate-limit.test.ts
+  122:9   warning  'status' is never reassigned. Use 'const' instead  prefer-const
+  229:32  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  252:32  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  265:32  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  278:32  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  290:32  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  329:31  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  347:31  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  366:31  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  391:45  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  410:45  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  437:7   warning  'EventType' is assigned a value but never used     @typescript-eslint/no-unused-vars
+  438:7   warning  'LogLevel' is assigned a value but never used      @typescript-eslint/no-unused-vars
+  439:9   warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  458:33  warning  A `require()` style import is forbidden            @typescript-eslint/no-require-imports
+  502:38  warning  Unexpected any. Specify a different type           @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/services/notifications/notification-center.tsx
+    9:3   warning  'Archive' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            @typescript-eslint/no-unused-vars
+   11:3   warning  'Settings' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           @typescript-eslint/no-unused-vars
+   12:3   warning  'Filter' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             @typescript-eslint/no-unused-vars
+   13:3   warning  'Clock' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              @typescript-eslint/no-unused-vars
+   16:3   warning  'CheckCircle' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        @typescript-eslint/no-unused-vars
+   33:29  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       @typescript-eslint/no-explicit-any
+   43:7   warning  'typeIcons' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 @typescript-eslint/no-unused-vars
+   51:7   warning  'typeColors' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                @typescript-eslint/no-unused-vars
+   59:7   warning  'typeTextColors' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            @typescript-eslint/no-unused-vars
+   67:7   warning  'typeBadgeColors' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           @typescript-eslint/no-unused-vars
+   78:10  warning  'activeFilter' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              @typescript-eslint/no-unused-vars
+   78:24  warning  'setActiveFilter' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           @typescript-eslint/no-unused-vars
+   79:18  warning  'setSortBy' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 @typescript-eslint/no-unused-vars
+   80:10  warning  'selectedNotifications' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     @typescript-eslint/no-unused-vars
+   80:33  warning  'setSelectedNotifications' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  @typescript-eslint/no-unused-vars
+   97:5   warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/services/notifications/notification-center.tsx:97:5
+   95 |       },
+   96 |     ];
+>  97 |     setNotifications(mockNotifications);
+      |     ^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+   98 |   }, []);
+   99 |
+  100 |   useEffect(() => {  react-hooks/set-state-in-effect
+  119:9   warning  'filtered' is never reassigned. Use 'const' instead                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            prefer-const
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/services/notifications/notification-logger.ts
+    7:28  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   17:11  warning  'DeliveryLog' is defined but never used   @typescript-eslint/no-unused-vars
+   87:69  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  131:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/services/notifications/notification-settings-page.tsx
+    8:27  warning  'useEffect' is defined but never used  @typescript-eslint/no-unused-vars
+  166:14  warning  'error' is defined but never used      @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/services/notifications/notification-types.ts
+   27:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   71:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   92:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  200:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/services/notifications/notification-validators.ts
+  10:54  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  52:54  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/services/notifications/push-route.ts
+  270:58  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/backend/services/notifications/push-service.ts
+    7:29  warning  'NotificationTemplate' is defined but never used                                      @typescript-eslint/no-unused-vars
+   49:18  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   52:15  warning  'serviceAccountPath' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+   64:15  warning  'message' is assigned a value but never used                                          @typescript-eslint/no-unused-vars
+  353:7   warning  'limit' is assigned a value but never used                                            @typescript-eslint/no-unused-vars
+  354:7   warning  'offset' is assigned a value but never used                                           @typescript-eslint/no-unused-vars
+  355:7   warning  'channels' is assigned a value but never used                                         @typescript-eslint/no-unused-vars
+  356:7   warning  'startDate' is assigned a value but never used                                        @typescript-eslint/no-unused-vars
+  357:7   warning  'endDate' is assigned a value but never used                                          @typescript-eslint/no-unused-vars
+  455:16  warning  'error' is defined but never used                                                     @typescript-eslint/no-unused-vars
+  517:16  warning  'error' is defined but never used                                                     @typescript-eslint/no-unused-vars
+  560:5   warning  'userId' is defined but never used. Allowed unused args must match /^_/u              @typescript-eslint/no-unused-vars
+  561:5   warning  'preferences' is defined but never used. Allowed unused args must match /^_/u         @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/components/common/social-share.tsx
+  18:38  warning  'description' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/components/features/chat-interface.tsx
+  57:5  warning  'status' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/components/notification-bell.tsx
+  29:17  warning  'session' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/components/ui/sidebar.tsx
+  611:26  warning  Error: Cannot call impure function during render
+
+`Math.random` is an impure function. Calling an impure function can produce unstable results that update unpredictably when the component happens to re-render. (https://react.dev/reference/rules/components-and-hooks-must-be-pure#components-and-hooks-must-be-idempotent).
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/components/ui/sidebar.tsx:611:26
+  609 |   // Random width between 50 to 90%.
+  610 |   const width = React.useMemo(() => {
+> 611 |     return `${Math.floor(Math.random() * 40) + 50}%`
+      |                          ^^^^^^^^^^^^^ Cannot call impure function
+  612 |   }, [])
+  613 |
+  614 |   return (  react-hooks/purity
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/components/ui/use-toast.ts
+  18:7  warning  'actionTypes' is assigned a value but only used as a type  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/hooks/use-toast.ts
+  18:7  warning  'actionTypes' is assigned a value but only used as a type  @typescript-eslint/no-unused-vars
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/hooks/useCreatorFilters.ts
+  36:9  warning  The 'filters' object makes the dependencies of useCallback Hook (at line 64) change on every render. To fix this, wrap the initialization of 'filters' in its own useMemo() Hook  react-hooks/exhaustive-deps
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/hooks/useMessages.ts
+  93:7  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/hooks/useMessages.ts:93:7
+  91 |   useEffect(() => {
+  92 |     if (!passphrase) {
+> 93 |       setCryptoKey(null)
+     |       ^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  94 |       return
+  95 |     }
+  96 |     deriveKey(passphrase, threadId)  react-hooks/set-state-in-effect
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/lib/analytics/analytics.ts
+  103:54  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/lib/auth/auth.ts
+    1:8    warning  'NextAuth' is defined but never used      @typescript-eslint/no-unused-vars
+    1:37   warning  'Session' is defined but never used       @typescript-eslint/no-unused-vars
+   90:105  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  103:50   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  115:60   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/analytics.test.js
+  25:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/auth.test.js
+  22:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/bounties.test.js
+  26:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/creators.test.js
+  27:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/messages.test.js
+  10:10  warning  'jsonHeaders' is defined but never used          @typescript-eslint/no-unused-vars
+  28:1   warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/referrals.test.js
+  10:10  warning  'jsonHeaders' is defined but never used          @typescript-eslint/no-unused-vars
+  30:1   warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/reviews.test.js
+   9:20  warning  'averageLoadOptions' is defined but never used   @typescript-eslint/no-unused-vars
+  34:1   warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/rust-api.test.js
+  21:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/upload.test.js
+  34:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/scenarios/users.test.js
+  25:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/smoke.test.js
+  16:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/soak.test.js
+  27:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/spike.test.js
+  38:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/load-tests/stress.test.js
+  22:1  warning  Unexpected default export of anonymous function  import/no-anonymous-default-export
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/services/api/stellar/contract.ts
+   2:3   warning  'Address' is defined but never used       @typescript-eslint/no-unused-vars
+  19:67  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  40:11  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  74:46  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  74:55  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/mac/STELLAR CREATOR -PORTFOLIO 2/services/api/stellar/types.ts
+  13:9  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+✖ 334 problems (0 errors, 334 warnings)
+  0 errors and 2 warnings potentially fixable with the `--fix` option.
+

@@ -9,9 +9,10 @@ use anyhow::Context;
 use sqlx::PgPool;
 use stellar_discovery::{create_discovery, ServiceInfo};
 
+use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{runtime, trace::{self, TracerProvider}, Resource};
+use opentelemetry_sdk::{runtime, trace::{self}, Resource};
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 

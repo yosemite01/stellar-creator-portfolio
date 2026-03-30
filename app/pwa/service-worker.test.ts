@@ -1,5 +1,41 @@
-// @ts-nocheck
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// ---------------------------------------------------------------------------
+// Typed cache mock helpers — no `as any` needed
+// ---------------------------------------------------------------------------
+
+type MockCache = Pick<CacheStorage, 'match' | 'open'>;
+
+function makeCacheStorageMock(overrides: Partial<MockCache> = {}): CacheStorage {
+  const namedCaches = new Map<string, Cache>();
+
+  const defaultOpen = vi.fn(async (name: string): Promise<Cache> => {
+    if (!namedCaches.has(name)) {
+      namedCaches.set(name, {
+        put: vi.fn(),
+        match: vi.fn().mockResolvedValue(undefined),
+        matchAll: vi.fn().mockResolvedValue([]),
+        add: vi.fn(),
+        addAll: vi.fn(),
+        delete: vi.fn().mockResolvedValue(false),
+        keys: vi.fn().mockResolvedValue([]),
+      } as unknown as Cache);
+    }
+    return namedCaches.get(name)!;
+  });
+
+  return {
+    open: overrides.open ?? defaultOpen,
+    match: overrides.match ?? vi.fn().mockResolvedValue(undefined),
+    has: vi.fn().mockResolvedValue(false),
+    delete: vi.fn().mockResolvedValue(false),
+    keys: vi.fn().mockResolvedValue([]),
+  } as unknown as CacheStorage;
+}
+
+function assignCachesMock(mock: CacheStorage) {
+  Object.defineProperty(globalThis, 'caches', { value: mock, writable: true, configurable: true });
+}
 
 /**
  * Unit Tests for Service Worker
@@ -12,11 +48,10 @@ describe('Service Worker - Caching Strategies', () => {
       const request = new Request('https://example.com/image.png');
       const cachedResponse = new Response('cached', { status: 200 });
 
-      const mockCaches = {
+      const mockCaches = makeCacheStorageMock({
         match: vi.fn().mockResolvedValue(cachedResponse),
-      };
-
-      global.caches = mockCaches as any;
+      });
+      assignCachesMock(mockCaches);
 
       const result = await caches.match(request);
       expect(result).toBe(cachedResponse);
@@ -27,14 +62,10 @@ describe('Service Worker - Caching Strategies', () => {
       const request = new Request('https://example.com/new-image.png');
       const networkResponse = new Response('network', { status: 200 });
 
-      const mockCaches = {
-        match: vi.fn().mockResolvedValue(null),
-        open: vi.fn().mockResolvedValue({
-          put: vi.fn(),
-        }),
-      };
-
-      global.caches = mockCaches as any;
+      const mockCaches = makeCacheStorageMock({
+        match: vi.fn().mockResolvedValue(undefined),
+      });
+      assignCachesMock(mockCaches);
       global.fetch = vi.fn().mockResolvedValue(networkResponse);
 
       expect(mockCaches.match).toHaveBeenCalled();
@@ -43,11 +74,10 @@ describe('Service Worker - Caching Strategies', () => {
     it('should handle network errors gracefully', async () => {
       const request = new Request('https://example.com/image.png');
 
-      const mockCaches = {
-        match: vi.fn().mockResolvedValue(null),
-      };
-
-      global.caches = mockCaches as any;
+      const mockCaches = makeCacheStorageMock({
+        match: vi.fn().mockResolvedValue(undefined),
+      });
+      assignCachesMock(mockCaches);
       global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
 
       // Should return error response
@@ -74,11 +104,10 @@ describe('Service Worker - Caching Strategies', () => {
         status: 200,
       });
 
-      const mockCaches = {
+      const mockCaches = makeCacheStorageMock({
         match: vi.fn().mockResolvedValue(cachedResponse),
-      };
-
-      global.caches = mockCaches as any;
+      });
+      assignCachesMock(mockCaches);
       global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
 
       expect(mockCaches.match).toHaveBeenCalled();
@@ -91,11 +120,10 @@ describe('Service Worker - Caching Strategies', () => {
       const oldCached = new Response('old', { status: 200 });
       const newNetwork = new Response('new', { status: 200 });
 
-      const mockCaches = {
+      const mockCaches = makeCacheStorageMock({
         match: vi.fn().mockResolvedValue(oldCached),
-      };
-
-      global.caches = mockCaches as any;
+      });
+      assignCachesMock(mockCaches);
       global.fetch = vi.fn().mockResolvedValue(newNetwork);
 
       // Should match cached first
@@ -159,18 +187,14 @@ describe('Service Worker - Offline Functionality', () => {
       mode: 'navigate',
     });
 
-    const mockCaches = {
-      match: vi
-        .fn()
-        .mockImplementation((req) => {
-          if (req.url.includes('offline.html')) {
-            return Promise.resolve(new Response('offline page'));
-          }
-          return Promise.resolve(null);
-        }),
-    };
-
-    global.caches = mockCaches as any;
+    const mockCaches = makeCacheStorageMock({
+      match: vi.fn().mockImplementation((req: RequestInfo | URL) => {
+        const url = typeof req === 'string' ? req : req instanceof URL ? req.href : (req as Request).url;
+        if (url.includes('offline.html')) return Promise.resolve(new Response('offline page'));
+        return Promise.resolve(undefined);
+      }),
+    });
+    assignCachesMock(mockCaches);
 
     // Should match offline.html
     const offlineResult = await mockCaches.match('/offline.html');
