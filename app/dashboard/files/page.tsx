@@ -19,12 +19,14 @@ export default function FilesPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/upload?prefix=uploads", { cache: "no-store" });
+      const res = await fetch("/api/upload?prefix=uploads", {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error("Failed to fetch files");
       const data = await res.json();
       setFiles(data.files || []);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to fetch files");
     } finally {
       setLoading(false);
     }
@@ -39,8 +41,8 @@ export default function FilesPage() {
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold">Project Files</h1>
         <p className="text-sm text-gray-600">
-          Upload deliverables, design assets, and backups. Files are stored securely in cloud storage
-          and delivered via signed URLs.
+          Upload deliverables, design assets, and backups. Files are stored
+          securely in cloud storage and delivered via signed URLs.
         </p>
       </header>
 
@@ -54,7 +56,9 @@ export default function FilesPage() {
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <div>
             <p className="font-medium">File Manager</p>
-            <p className="text-xs text-gray-500">Versioned uploads with signed access links.</p>
+            <p className="text-xs text-gray-500">
+              Versioned uploads with signed access links.
+            </p>
           </div>
           <button
             onClick={() => fetchFiles()}
@@ -73,11 +77,17 @@ export default function FilesPage() {
         ) : (
           <div className="divide-y">
             {files.map((file) => (
-              <div key={file.key} className="flex items-center justify-between px-4 py-3">
+              <div
+                key={file.key}
+                className="flex items-center justify-between px-4 py-3"
+              >
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{file.key}</p>
                   <p className="text-xs text-gray-500">
-                    {file.size ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "unknown"} •{" "}
+                    {file.size
+                      ? `${(file.size / 1024 / 1024).toFixed(2)} MB`
+                      : "unknown"}{" "}
+                    •{" "}
                     {file.lastModified
                       ? new Date(file.lastModified).toLocaleString()
                       : "last modified unknown"}
@@ -95,9 +105,12 @@ export default function FilesPage() {
                   <button
                     className="text-sm text-red-600"
                     onClick={async () => {
-                      await fetch(`/api/upload?key=${encodeURIComponent(file.key)}`, {
-                        method: "DELETE",
-                      });
+                      await fetch(
+                        `/api/upload?key=${encodeURIComponent(file.key)}`,
+                        {
+                          method: "DELETE",
+                        },
+                      );
                       await fetchFiles();
                     }}
                   >

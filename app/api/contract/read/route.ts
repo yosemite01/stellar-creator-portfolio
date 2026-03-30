@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { contractService } from '@/services/api/stellar/contract';
+import { NextRequest, NextResponse } from "next/server";
+import { contractService } from "@/services/api/stellar/contract";
 
 export async function POST(req: NextRequest) {
   try {
@@ -7,19 +7,24 @@ export async function POST(req: NextRequest) {
 
     if (!contractId || !key) {
       return NextResponse.json(
-        { error: 'contractId and key are required' },
-        { status: 400 }
+        { error: "contractId and key are required" },
+        { status: 400 },
       );
     }
 
     const value = await contractService.getContractData(contractId, key);
 
     return NextResponse.json({ value });
-  } catch (error: any) {
-    console.error('Contract read error:', error);
+  } catch (error: unknown) {
+    console.error("Contract read error:", error);
     return NextResponse.json(
-      { error: error.message || 'Failed to read contract data' },
-      { status: 500 }
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to read contract data",
+      },
+      { status: 500 },
     );
   }
 }
