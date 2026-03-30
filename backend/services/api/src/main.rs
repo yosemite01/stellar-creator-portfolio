@@ -1,33 +1,32 @@
-use actix_web::{middleware, web, App, HttpResponse, HttpServer};
-use deadpool_redis::{redis::AsyncCommands, Config as RedisConfig, Pool as RedisPool, Runtime};
-use serde::{Deserialize, Serialize};
-mod metrics;
-
 use actix_cors::Cors;
 use actix_web::{
-    dev::Server, http::StatusCode, middleware, web, App, HttpResponse, HttpServer, ResponseError,
+    dev::{Server, Service, ServiceRequest, ServiceResponse, Transform},
+    http::StatusCode,
+    middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer, ResponseError,
 };
+use chrono::{DateTime, Utc};
+use deadpool_redis::{redis::AsyncCommands, Config as RedisConfig, Pool as RedisPool, Runtime};
+use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, PgPool};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::{pending, Future};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
-use actix_web::{http::StatusCode, middleware, web, App, HttpResponse, HttpServer, ResponseError};
-use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
-use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool};
 use stellar_discovery::{create_discovery, ServiceInfo};
+use thiserror::Error;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
+mod metrics;
 pub mod middleware;
 use middleware::{AuthMiddleware, AuthMiddlewareInner};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessClaims {
     pub sub: String,
-    pub family_id: uuid::Uuid,
+    pub family_id: Uuid,
     pub exp: i64,
     pub iat: i64,
 }
@@ -40,14 +39,14 @@ pub enum AuthError {
     InvalidToken(#[from] jsonwebtoken::errors::Error),
 }
 
-impl actix_web::ResponseError for AuthError {
+impl ResponseError for AuthError {
     fn error_response(&self) -> HttpResponse {
         let response: ApiResponse<serde_json::Value> = ApiResponse::err(self.to_string());
         HttpResponse::Unauthorized().json(response)
     }
 }
 
-async fn get_claims(req: &actix_web::HttpRequest) -> Result<AccessClaims, AuthError> {
+async fn get_claims(req: &HttpRequest) -> Result<AccessClaims, AuthError> {
     let token = req.headers()
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
@@ -65,58 +64,11 @@ async fn get_claims(req: &actix_web::HttpRequest) -> Result<AccessClaims, AuthEr
     .claims;
 
     Ok(claims)
-}
-
-use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::Error;
-use chrono::{DateTime, Utc};
-use jsonwebtoken::{decode, DecodingKey, Validation};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccessClaims {
-    pub sub: String,
-    pub family_id: uuid::Uuid,
-    pub exp: i64,
-    pub iat: i64,
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum AuthError {
-    #[error("Missing or invalid Authorization header")]
-    MissingHeader,
-    #[error("Invalid JWT token")]
-    InvalidToken(#[from] jsonwebtoken::errors::Error),
 }
 
 mod webhooks;
 
 // ── Request / Response types ─────────────────────────────────────────────────
-impl actix_web::ResponseError for AuthError {
-    fn error_response(&self) -> HttpResponse {
-        let response: ApiResponse<serde_json::Value> = ApiResponse::err(self.to_string());
-        HttpResponse::Unauthorized().json(response)
-    }
-}
-
-async fn get_claims(req: &actix_web::HttpRequest) -> Result<AccessClaims, AuthError> {
-    let token = req.headers()
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or(AuthError::MissingHeader)?;
-
-    let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
-    let mut validation = Validation::default();
-    validation.validate_exp = true;
-    let claims = decode::<AccessClaims>(
-        token,
-        &DecodingKey::from_secret(jwt_secret.as_bytes()),
-        &validation,
-    )?
-    .claims;
-
-    Ok(claims)
-}
 
 #[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
 pub struct BountyRequest {
@@ -173,20 +125,20 @@ impl<T> ApiResponse<T> {
 }
 
 #[derive(Debug, Error)]
-enum ApiError {
+pub enum ApiError {
     #[error("Invalid request: {0}")]
     BadRequest(String),
     #[error("Resource not found: {0}")]
     NotFound(String),
     #[error("Resource conflict: {0}")]
     Conflict(String),
-    #[error("Database operation failed")]
-    Database(#[source] sqlx::Error),
-    #[error("Network operation failed")]
+    #[error("Database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("Network operation failed: {0}")]
     Network(String),
-    #[error("Contract invocation failed")]
+    #[error("Contract invocation failed: {0}")]
     ContractInvocation(String),
-    #[error("Failed to serialize response")]
+    #[error("Failed to serialize response: {0}")]
     Serialization(#[from] serde_json::Error),
 }
 
@@ -209,6 +161,20 @@ impl ApiError {
             Self::Network(_) => "A network error occurred".to_string(),
             Self::ContractInvocation(_) => "A contract invocation error occurred".to_string(),
             _ => self.to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadRequest(msg) => write!(f, "Bad Request: {msg}"),
+            Self::NotFound(msg) => write!(f, "Not Found: {msg}"),
+            Self::Conflict(msg) => write!(f, "Conflict: {msg}"),
+            Self::Database(err) => write!(f, "Database Error: {err}"),
+            Self::Network(msg) => write!(f, "Network Error: {msg}"),
+            Self::ContractInvocation(msg) => write!(f, "Contract Error: {msg}"),
+            Self::Serialization(err) => write!(f, "Serialization Error: {err}"),
         }
     }
 }
@@ -452,7 +418,7 @@ fn build_http_server(
             .app_data(web::Data::new(state.clone()))
             .wrap(RequestId)
             .wrap(Cors::permissive())
-            .wrap(middleware::Logger::default())
+            .wrap(TracingLogger::default())
             .wrap(middleware::NormalizePath::trim())
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
@@ -472,6 +438,7 @@ fn build_http_server(
         (status = 503, description = "One or more dependencies are unavailable"),
     )
 )]
+#[tracing::instrument(skip(state))]
 async fn health(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
     let request_id = get_request_id(&req).unwrap_or_else(|| "unknown".to_string());
     tracing::info!(request_id = %request_id, "Health check requested");
@@ -616,17 +583,7 @@ async fn health(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
         (status = 500, description = "Database error"),
     )
 )]
-async fn create_bounty(redis: web::Data<Pool>, body: web::Json<BountyRequest>) -> HttpResponse {
-    tracing::info!("Creating bounty: {:?}", body.title);
-    let data = serde_json::json!({
-        "bounty_id": 1,
-        "creator": body.creator,
-        "title": body.title,
-        "budget": body.budget,
-        "status": "open"
-    });
-    webhooks::trigger_webhooks(&redis, "bounty.created", data.clone()).await;
-    HttpResponse::Created().json(ApiResponse::ok(data, Some("Bounty created successfully".into())))
+#[tracing::instrument(skip(pool))]
 async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) -> Result<HttpResponse, ApiError> {
     tracing::info!("Creating bounty: {:?}", body.title);
 
@@ -688,6 +645,7 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
         (status = 500, description = "Database error"),
     )
 )]
+#[tracing::instrument(skip(pool))]
 async fn list_bounties(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -793,17 +751,7 @@ async fn list_bounties(
     )))
 }
 
-/// Get a single bounty by ID
-#[utoipa::path(
-    get, path = "/api/v1/bounties/{id}",
-    params(("id" = u64, Path, description = "Bounty ID")),
-    responses(
-        (status = 200, description = "Bounty details"),
-        (status = 404, description = "Bounty not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn get_bounty(redis: web::Data<Pool>, path: web::Path<u64>) -> HttpResponse {
+#[tracing::instrument(skip(pool, redis))]
 async fn get_bounty(
     path: web::Path<u64>,
     pool: web::Data<PgPool>,
@@ -816,30 +764,16 @@ async fn get_bounty(
     };
     let cache_key = format!("api:bounty:{bounty_id}");
 
-    if let Ok(mut conn) = redis.get().await {
-        if let Ok(cached) = conn.get::<String, String>(cache_key.clone()).await {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cached) {
-                tracing::debug!("Cache hit for {}", cache_key);
-                return HttpResponse::Ok().json(ApiResponse::ok(parsed, None::<String>));
     match redis.get().await {
         Ok(mut conn) => {
-            match conn.get::<_, String>(&cache_key).await {
-                Ok(payload) => {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
-                        tracing::debug!("Cache hit for {cache_key}");
-                        return Ok(HttpResponse::Ok().json(ApiResponse::ok(parsed, None)));
-                    }
-                }
-                Err(error) => {
-                    tracing::error!("Redis GET failed for key {cache_key}: {error}");
-                    return Err(ApiError::Network("Cache backend unavailable".to_string()));
+            if let Ok(payload) = conn.get::<_, String>(&cache_key).await {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    tracing::debug!("Cache hit for {cache_key}");
+                    return Ok(HttpResponse::Ok().json(ApiResponse::ok(parsed, None)));
                 }
             }
         }
-        Err(error) => {
-            tracing::error!("Redis pool checkout failed: {error}");
-            return Err(ApiError::Network("Cache backend unavailable".to_string()));
-        }
+        Err(e) => tracing::warn!("Redis connection failed: {e}"),
     }
 
     let bounty = match sqlx::query_as::<_, BountyRecord>(
@@ -871,53 +805,23 @@ async fn get_bounty(
 
     let data = value_response(&bounty)?;
 
-    if let Ok(mut conn) = redis.get().await {
-        let _: Result<(), _> = conn.set_ex(cache_key, data.to_string(), 60).await;
-    }
-
-    HttpResponse::Ok().json(ApiResponse::ok(data, None::<String>))
     match redis.get().await {
         Ok(mut conn) => {
-            if let Err(error) = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await {
-                tracing::warn!("Redis SETEX failed for key {cache_key}: {error}");
+            if let Err(e) = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await {
+                tracing::warn!("Redis set failed: {e}");
             }
         }
-        Err(error) => {
-            tracing::warn!("Redis pool checkout failed: {error}");
-        }
+        Err(e) => tracing::warn!("Redis connection failed: {e}"),
     }
 
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
 }
 
-/// Apply for a bounty
-#[utoipa::path(
-    post, path = "/api/v1/bounties/{id}/apply",
-    params(("id" = u64, Path, description = "Bounty ID")),
-    request_body = BountyApplication,
-    responses(
-        (status = 201, description = "Application submitted"),
-        (status = 400, description = "Invalid request body"),
-        (status = 404, description = "Bounty not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
+#[tracing::instrument(skip(pool))]
 async fn apply_for_bounty(
-    redis: web::Data<Pool>,
     path: web::Path<u64>,
-    body: web::Json<BountyApplication>,
-) -> HttpResponse {
-    let bounty_id = path.into_inner();
-    let data = serde_json::json!({
-        "application_id": 1,
-        "bounty_id": bounty_id,
-        "freelancer": body.freelancer,
-        "status": "pending"
-    });
-    webhooks::trigger_webhooks(&redis, "application.submitted", data.clone()).await;
-    HttpResponse::Created()
-        .json(ApiResponse::ok(data, Some("Application submitted successfully".to_string())))
     pool: web::Data<PgPool>,
+    body: web::Json<BountyApplication>,
 ) -> Result<HttpResponse, ApiError> {
     let bounty_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
@@ -998,11 +902,7 @@ async fn apply_for_bounty(
         (status = 500, description = "Database error"),
     )
 )]
-async fn register_freelancer(body: web::Json<FreelancerRegistration>) -> HttpResponse {
-    HttpResponse::Created().json(ApiResponse::ok(
-        serde_json::json!({ "name": body.name, "discipline": body.discipline, "verified": false }),
-        Some("Freelancer registered successfully".to_string()),
-    ))
+#[tracing::instrument(skip(pool))]
 async fn register_freelancer(
     body: web::Json<FreelancerRegistration>,
     pool: web::Data<PgPool>,
@@ -1064,16 +964,9 @@ async fn register_freelancer(
         (status = 500, description = "Database error"),
     )
 )]
+#[tracing::instrument(skip(pool))]
 async fn list_freelancers(
-    req: HttpRequest,
     query: web::Query<std::collections::HashMap<String, String>>,
-    _redis: web::Data<Pool>,
-) -> HttpResponse {
-    let discipline = query.get("discipline").cloned().unwrap_or_default();
-    HttpResponse::Ok().json(ApiResponse::ok(
-        serde_json::json!({ "freelancers": [], "total": 0, "filters": { "discipline": discipline } }),
-        None::<String>,
-    ))
     pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, ApiError> {
     let discipline = query.get("discipline").cloned();
@@ -1136,17 +1029,7 @@ async fn list_freelancers(
     )))
 }
 
-/// Get a freelancer by Stellar address
-#[utoipa::path(
-    get, path = "/api/v1/freelancers/{address}",
-    params(("address" = String, Path, description = "Stellar address")),
-    responses(
-        (status = 200, description = "Freelancer profile"),
-        (status = 404, description = "Freelancer not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn get_freelancer(redis: web::Data<Pool>, path: web::Path<String>) -> HttpResponse {
+#[tracing::instrument(skip(pool, redis))]
 async fn get_freelancer(
     path: web::Path<String>,
     pool: web::Data<PgPool>,
@@ -1155,30 +1038,16 @@ async fn get_freelancer(
     let address = path.into_inner();
     let cache_key = format!("api:freelancer:{address}");
 
-    if let Ok(mut conn) = redis.get().await {
-        if let Ok(cached) = conn.get::<String, String>(cache_key.clone()).await {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cached) {
-                tracing::debug!("Cache hit for {}", cache_key);
-                return HttpResponse::Ok().json(ApiResponse::ok(parsed, None::<String>));
     match redis.get().await {
         Ok(mut conn) => {
-            match conn.get::<_, String>(&cache_key).await {
-                Ok(payload) => {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
-                        tracing::debug!("Cache hit for {cache_key}");
-                        return Ok(HttpResponse::Ok().json(ApiResponse::ok(parsed, None)));
-                    }
-                }
-                Err(error) => {
-                    tracing::error!("Redis GET failed for key {cache_key}: {error}");
-                    return Err(ApiError::Network("Cache backend unavailable".to_string()));
+            if let Ok(payload) = conn.get::<_, String>(&cache_key).await {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    tracing::debug!("Cache hit for {cache_key}");
+                    return Ok(HttpResponse::Ok().json(ApiResponse::ok(parsed, None)));
                 }
             }
         }
-        Err(error) => {
-            tracing::error!("Redis pool checkout failed: {error}");
-            return Err(ApiError::Network("Cache backend unavailable".to_string()));
-        }
+        Err(e) => tracing::warn!("Redis connection failed: {e}"),
     }
 
     let freelancer = match sqlx::query_as::<_, FreelancerRecord>(
@@ -1207,22 +1076,15 @@ async fn get_freelancer(
         }
     };
 
-    if let Ok(mut conn) = redis.get().await {
-        let _: Result<(), _> = conn.set_ex(cache_key, data.to_string(), 60).await;
-    }
-
-    HttpResponse::Ok().json(ApiResponse::ok(data, None::<String>))
     let data = value_response(&freelancer)?;
 
     match redis.get().await {
         Ok(mut conn) => {
-            if let Err(error) = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await {
-                tracing::warn!("Redis SETEX failed for key {cache_key}: {error}");
+            if let Err(e) = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await {
+                tracing::warn!("Redis set failed: {e}");
             }
         }
-        Err(error) => {
-            tracing::warn!("Redis pool checkout failed: {error}");
-        }
+        Err(e) => tracing::warn!("Redis connection failed: {e}"),
     }
 
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
@@ -1238,12 +1100,7 @@ async fn get_freelancer(
         (status = 500, description = "Database error"),
     )
 )]
-async fn get_escrow(path: web::Path<u64>) -> HttpResponse {
-    let escrow_id = path.into_inner();
-    HttpResponse::Ok().json(ApiResponse::ok(
-        serde_json::json!({ "id": escrow_id, "status": "active", "amount": 0 }),
-        None::<String>,
-    ))
+#[tracing::instrument(skip(pool))]
 async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<HttpResponse, ApiError> {
     let escrow_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
@@ -1282,24 +1139,7 @@ async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<Htt
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
 }
 
-/// Release escrowed funds
-#[utoipa::path(
-    post, path = "/api/v1/escrow/{id}/release",
-    params(("id" = u64, Path, description = "Escrow ID")),
-    responses(
-        (status = 200, description = "Funds released"),
-        (status = 403, description = "Not authorised to release"),
-        (status = 404, description = "Escrow not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn release_escrow(redis: web::Data<Pool>, path: web::Path<u64>) -> HttpResponse {
-    let escrow_id = path.into_inner();
-    let data = serde_json::json!({ "id": escrow_id, "status": "released" });
-    webhooks::trigger_webhooks(&redis, "escrow.released", data.clone()).await;
-    HttpResponse::Ok()
-        .json(ApiResponse::ok(data, Some("Funds released successfully".to_string())))
-}
+#[tracing::instrument(skip(pool))]
 async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<HttpResponse, ApiError> {
     let escrow_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
@@ -1466,60 +1306,6 @@ async fn main() -> anyhow::Result<()> {
     build_http_server(listener, state, openapi)?.await?;
     tracing::info!("Stellar API shutdown complete");
     Ok(())
-    let server = HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(db_pool.clone()))
-            .app_data(web::Data::new(redis_pool.clone()))
-            .app_data(business_metrics.clone())
-            .wrap(prometheus.clone())
-            .wrap(Cors::permissive())
-            .wrap(middleware::Compress::default())
-            .wrap(middleware::Logger::default())
-            .wrap(middleware::NormalizePath::trim())
-            .service(
-                SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
-            )
-            .route("/health", web::get().to(health))
-            .route("/api/v1/bounties", web::post().to(create_bounty))
-            .route("/api/v1/bounties", web::get().to(list_bounties))
-            .route("/api/v1/bounties/{id}", web::get().to(get_bounty))
-            .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
-            .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
-            .route("/api/v1/freelancers", web::get().to(list_freelancers))
-            .route("/api/v1/freelancers/{address}", web::get().to(get_freelancer))
-            .route("/api/v1/escrow/{id}", web::get().to(get_escrow))
-            .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
-            .route("/api/v1/webhooks", web::post().to(webhooks::register_webhook))
-            .route("/api/v1/webhooks", web::get().to(webhooks::list_webhooks))
-            .route("/api/v1/webhooks/{id}", web::delete().to(webhooks::delete_webhook))
-            // ── File upload routes ───────────────────────────────────────
-            .route("/api/v1/upload/avatar", web::post().to(upload::upload_avatar))
-            .route("/api/v1/upload/project-image", web::post().to(upload::upload_project_image))
-            .route("/api/v1/upload/bounty-attachment", web::post().to(upload::upload_bounty_attachment))
-            .route("/api/v1/uploads", web::get().to(upload::list_uploads))
-            .route("/api/v1/uploads/{category}/{filename}", web::get().to(upload::serve_upload))
-            .route("/api/v1/uploads/{id}", web::delete().to(upload::delete_upload))
-            // ── Backward-compat redirects: /api/* → /api/v1/* ───────────
-            .route("/api/bounties",              web::get().to(redirect_to_v1))
-            .route("/api/bounties",              web::post().to(redirect_to_v1))
-            .route("/api/bounties/{tail:.*}",    web::route().to(redirect_to_v1))
-            .route("/api/freelancers",           web::get().to(redirect_to_v1))
-            .route("/api/freelancers/{tail:.*}", web::route().to(redirect_to_v1))
-            .route("/api/escrow/{tail:.*}",      web::route().to(redirect_to_v1))
-            .route("/api/webhooks",              web::get().to(redirect_to_v1))
-            .route("/api/webhooks",              web::post().to(redirect_to_v1))
-            .route("/api/webhooks/{tail:.*}",    web::route().to(redirect_to_v1))
-    })
-    .bind((config.api_host.as_str(), config.api_port))?
-    .run()
-    .await;
-
-    // Deregister from service discovery on shutdown
-    if let Err(e) = discovery.deregister(&service_id).await {
-        tracing::warn!("Service discovery deregistration failed: {e}");
-    }
-
-    server
 }
 
 #[cfg(test)]
