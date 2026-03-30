@@ -1,57 +1,100 @@
+use actix_web::{web, App, HttpServer};
+use deadpool_redis::{Config, Pool, Runtime};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{info, error};
+
 mod config;
+mod error;
+mod handlers;
 mod models;
-mod email;
-mod sms;
-mod push;
-mod dispatcher;
+mod queue;
+mod worker;
 
-use crate::config::Settings;
-use crate::dispatcher::NotificationDispatcher;
-use crate::models::{Notification, NotificationChannel};
-use tracing_subscriber::fmt::format::FmtSpan;
+use crate::config::AppConfig;
+use crate::handlers::{health_check, send_notification, get_notification_status, retry_notification};
+use crate::queue::NotificationQueue;
+use crate::worker::NotificationWorker;
 
-#[tokio::main]
+/// Application state shared across handlers
+pub struct AppState {
+    pub queue: Arc<NotificationQueue>,
+    pub worker: Arc<Mutex<NotificationWorker>>,
+    pub config: AppConfig,
+}
+
+#[actix_web::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize structured logging
+    // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info,stellar_notifications=debug".into()))
-        .with_span_events(FmtSpan::CLOSE)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    tracing::info!("Starting Stellar Notifications Service");
+    info!("Starting Stellar Notifications Service...");
 
-    // Load and validate configuration
-    let settings = Settings::from_env()?;
-    settings.validate()?;
+    // Load configuration
+    let config = AppConfig::from_env()?;
+    info!("Configuration loaded successfully");
 
-    // Initialize the dispatcher
-    let dispatcher = NotificationDispatcher::new(settings);
-
-    // Initial service startup check
-    tracing::info!("Notifications Service initialized and ready");
-
-    // In a production environment, this would listen to a Message Queue (e.g. Redis).
-    // For this implementation, we demonstrate the dispatcher with a test notification 
-    // if a special environment variable is set.
-    if std::env::var("SEND_TEST_NOTIFICATION").is_ok() {
-        let test_notification = Notification {
-            user_id: "system-test".to_string(),
-            channel: NotificationChannel::Email,
-            recipient: "test@example.com".to_string(),
-            subject: Some("Stellar Service Test".to_string()),
-            message: "This is a test notification from the Stellar Creator Portfolio service.".to_string(),
-        };
-
-        if let Err(e) = dispatcher.dispatch(test_notification).await {
-             tracing::error!("Test notification delivery failed: {}", e);
-        }
-    }
-
-    // Keep the service alive (placeholder for an actual message loop)
-    tracing::info!("Service is now idling (listening for events placeholder)");
+    // Create Redis connection pool
+    let redis_config = Config::from_url(&config.redis_url);
+    let redis_pool: Pool = redis_config
+        .create_pool(Some(Runtime::Tokio1))
+        .map_err(|e| anyhow::anyhow!("Failed to create Redis pool: {}", e))?;
     
-    // Simulate a long-running service loop
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-    }
+    info!("Redis connection pool created");
+
+    // Test Redis connection
+    let mut conn = redis_pool.get().await?;
+    let _: String = redis::cmd("PING")
+        .query_async(&mut conn)
+        .await?;
+    info!("Redis connection verified");
+
+    // Create notification queue
+    let queue = Arc::new(NotificationQueue::new(redis_pool.clone()));
+    info!("Notification queue initialized");
+
+    // Create and start background worker
+    let worker = Arc::new(Mutex::new(
+        NotificationWorker::new(
+            redis_pool.clone(),
+            config.smtp_config.clone(),
+            config.webhook_base_url.clone(),
+        )
+    ));
+    
+    // Start worker in background task
+    let worker_clone = Arc::clone(&worker);
+    tokio::spawn(async move {
+        info!("Starting notification worker...");
+        if let Err(e) = worker_clone.lock().await.start().await {
+            error!("Worker error: {}", e);
+        }
+    });
+
+    // Create application state
+    let app_state = web::Data::new(AppState {
+        queue,
+        worker,
+        config: config.clone(),
+    });
+
+    // Start HTTP server
+    let bind_address = format!("{}:{}", config.host, config.port);
+    info!("Starting HTTP server on {}", bind_address);
+
+    HttpServer::new(move || {
+        App::new()
+            .app_data(app_state.clone())
+            .route("/health", web::get().to(health_check))
+            .route("/notifications", web::post().to(send_notification))
+            .route("/notifications/{id}/status", web::get().to(get_notification_status))
+            .route("/notifications/{id}/retry", web::post().to(retry_notification))
+    })
+    .bind(&bind_address)?
+    .run()
+    .await?;
+
+    Ok(())
 }
