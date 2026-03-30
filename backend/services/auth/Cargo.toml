@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 actix-web.workspace = true
+tracing-actix-web.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -26,7 +27,15 @@ uuid.workspace = true
 rand.workspace = true
 sha2.workspace = true
 hex.workspace = true
+reqwest.workspace = true
 oauth2 = { version = "4", features = ["reqwest"] }
 sqlx = { workspace = true, features = ["migrate", "chrono", "uuid"] }
 stellar-discovery = { path = "../discovery" }
+
+# Tracing / OpenTelemetry
+opentelemetry = { version = "0.24", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
+opentelemetry-semantic-conventions = "0.15"
+tracing-opentelemetry = "0.25"
 stellar-common = { path = "../common" }

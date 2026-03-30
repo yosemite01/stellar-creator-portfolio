@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { useI18n } from '@/components/i18n-provider';
 import { Header } from '@/components/layout/header';
 import { Footer } from '@/components/layout/footer';
 import { CreatorCard } from '@/components/cards/creator-card';
@@ -10,6 +11,7 @@ import { creators } from '@/lib/services/creators-data';
 
 export default function Home() {
   const router = useRouter();
+  const { t } = useI18n();
   const featuredCreators = creators.slice(0, 3);
 
   return (
@@ -26,27 +28,27 @@ export default function Home() {
             <div className="text-center max-w-4xl mx-auto">
               {/* Subtitle Badge */}
               <p className="text-sm font-semibold text-primary mb-4 uppercase tracking-wide">
-                Creator Marketplace & Bounty Platform
+                {t('home.heroBadge')}
               </p>
 
               {/* Main Heading */}
               <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-foreground mb-6 text-balance leading-tight">
-                Connect with World-Class Creative Talent
+                {t('home.heroTitle')}
               </h1>
 
               {/* Subheading */}
               <p className="text-base sm:text-lg text-muted-foreground mb-8 max-w-3xl mx-auto text-balance leading-relaxed">
-                Discover, hire, and collaborate with exceptional creators across design, writing, marketing, product management, and 10+ more disciplines. Post bounties, find freelancers, and build amazing projects.
+                {t('home.heroSubtitle')}
               </p>
 
               {/* CTA Buttons */}
               <div className="flex flex-col sm:flex-row gap-3 justify-center items-center sm:items-stretch mb-8">
                 <Button size="lg" className="w-full sm:w-auto" onClick={() => router.push('/creators')}>
-                  Browse Creators
-                  <ArrowRight size={18} className="ml-2" />
+                  {t('home.browseCreators')}
+                  <ArrowRight size={18} className="ms-2" />
                 </Button>
                 <Button size="lg" variant="outline" className="w-full sm:w-auto" onClick={() => router.push('/bounties')}>
-                  Post a Bounty
+                  {t('home.postBounty')}
                 </Button>
               </div>
             </div>
@@ -61,19 +63,19 @@ export default function Home() {
                 <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
                   {creators.length}+
                 </div>
-                <p className="text-sm sm:text-base text-muted-foreground">Stellar Creators</p>
+                <p className="text-sm sm:text-base text-muted-foreground">{t('home.statsCreators')}</p>
               </div>
               <div className="text-center">
                 <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
                   {creators.reduce((sum, c) => sum + c.projects.length, 0)}+
                 </div>
-                <p className="text-sm sm:text-base text-muted-foreground">Incredible Projects</p>
+                <p className="text-sm sm:text-base text-muted-foreground">{t('home.statsProjects')}</p>
               </div>
               <div className="text-center">
                 <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
                   15+
                 </div>
-                <p className="text-sm sm:text-base text-muted-foreground">Non-Tech Disciplines</p>
+                <p className="text-sm sm:text-base text-muted-foreground">{t('home.statsDisciplines')}</p>
               </div>
             </div>
           </div>
@@ -85,10 +87,10 @@ export default function Home() {
             {/* Section Header */}
             <div className="text-center mb-12 sm:mb-16">
               <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mb-3 sm:mb-4">
-                Featured Creators
+                {t('home.featuredTitle')}
               </h2>
               <p className="text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto">
-                Discover exceptional talent across 15+ disciplines. From UX design to community management.
+                {t('home.featuredSubtitle')}
               </p>
             </div>
 
@@ -102,8 +104,8 @@ export default function Home() {
             {/* View All CTA */}
             <div className="text-center">
               <Button size="lg" variant="outline" className="group" onClick={() => router.push('/creators')}>
-                View All Creators
-                <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
+                {t('home.viewAllCreators')}
+                <ArrowRight size={18} className="ms-2 group-hover:translate-x-1 transition-transform rtl:group-hover:-translate-x-1" />
               </Button>
             </div>
           </div>
@@ -114,10 +116,10 @@ export default function Home() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center mb-12 sm:mb-16">
               <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mb-3">
-                Why Choose Stellar?
+                {t('home.whyTitle')}
               </h2>
               <p className="text-muted-foreground max-w-2xl mx-auto">
-                The platform built for non-technical talent in tech
+                {t('home.whySubtitle')}
               </p>
             </div>
 
@@ -128,10 +130,10 @@ export default function Home() {
                   <Users size={20} className="text-primary" />
                 </div>
                 <h3 className="text-lg sm:text-xl font-bold text-foreground mb-3">
-                  Connect & Collaborate
+                  {t('home.feature1Title')}
                 </h3>
                 <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-                  Network with industry leaders and find perfect collaborators for your next project.
+                  {t('home.feature1Body')}
                 </p>
               </div>
 
@@ -141,10 +143,10 @@ export default function Home() {
                   <Target size={20} className="text-accent" />
                 </div>
                 <h3 className="text-lg sm:text-xl font-bold text-foreground mb-3">
-                  Bounty Opportunities
+                  {t('home.feature2Title')}
                 </h3>
                 <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-                  Participate in exclusive bounties and showcase your expertise to potential clients.
+                  {t('home.feature2Body')}
                 </p>
               </div>
 
@@ -154,10 +156,10 @@ export default function Home() {
                   <Sparkles size={20} className="text-secondary" />
                 </div>
                 <h3 className="text-lg sm:text-xl font-bold text-foreground mb-3">
-                  Premium Experience
+                  {t('home.feature3Title')}
                 </h3>
                 <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-                  Showcase your portfolio on a professional platform designed for creators.
+                  {t('home.feature3Body')}
                 </p>
               </div>
             </div>
@@ -168,18 +170,18 @@ export default function Home() {
         <section className="py-16 sm:py-24 border-t border-border">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mb-4 sm:mb-6">
-              Ready to Get Started?
+              {t('home.ctaTitle')}
             </h2>
             <p className="text-base sm:text-lg text-muted-foreground mb-8 sm:mb-10 max-w-2xl mx-auto">
-              Join thousands of creators and clients finding perfect matches on Stellar.
+              {t('home.ctaSubtitle')}
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center items-center sm:items-stretch">
               <Button size="lg" className="w-full sm:w-auto" onClick={() => router.push('/creators')}>
-                Browse Creators
-                <ArrowRight size={18} className="ml-2" />
+                {t('home.ctaBrowse')}
+                <ArrowRight size={18} className="ms-2" />
               </Button>
               <Button size="lg" variant="outline" className="w-full sm:w-auto" onClick={() => router.push('/bounties')}>
-                Post a Bounty
+                {t('home.ctaPost')}
               </Button>
             </div>
           </div>

@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 soroban-sdk.workspace = true
-stellar-governance-contract = { path = "../governance", workspace = true }
+stellar-governance-contract.workspace = true
 
 [dev-dependencies]
 soroban-sdk = { version = "23.5.2", features = ["testutils"] }

@@ -46,6 +46,15 @@ services:
       timeout: 5s
       retries: 5
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: stellar-jaeger
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC collector
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
   api:
     image: rust:1.81-slim
     container_name: stellar-api
@@ -62,6 +71,7 @@ services:
       REDIS_URL: "redis://redis:6379"
       CONSUL_HTTP_ADDR: "http://consul:8500"
       RUST_LOG: "info,stellar_api=debug"
+      OTLP_ENDPOINT: "http://jaeger:4317"
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,6 +79,8 @@ services:
         condition: service_healthy
       consul:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     command: cargo run --bin stellar-api
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:3001/health || exit 1"]
@@ -90,11 +102,14 @@ services:
       STELLAR_RPC_URL: "https://soroban-testnet.stellar.org"
       CONSUL_HTTP_ADDR: "http://consul:8500"
       RUST_LOG: "info,stellar_indexer=debug"
+      OTLP_ENDPOINT: "http://jaeger:4317"
     depends_on:
       postgres:
         condition: service_healthy
       consul:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     command: cargo run --bin stellar-indexer
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h postgres -U stellar -d stellar_db || exit 1"]
@@ -102,6 +117,46 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+
+    # ── Notifications Service ────────────────────────────────────────────────
+  # Redis-based message queue for reliable notification delivery.
+  # Supports email, in-app, push, webhook, and SMS notifications.
+  notifications:
+    image: rust:1.81-slim
+    container_name: stellar-notifications
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo_cache:/usr/local/cargo/registry
+    ports:
+      - "3003:3003"
+    environment:
+      NOTIFICATIONS_HOST: "0.0.0.0"
+      NOTIFICATIONS_PORT: "3003"
+      REDIS_URL: "redis://redis:6379"
+      MAX_RETRIES: "3"
+      RETRY_DELAY_SECONDS: "60"
+      WORKER_POLL_INTERVAL_SECONDS: "5"
+      # SMTP Configuration (optional - for email notifications)
+      SMTP_HOST: "${SMTP_HOST:-smtp.gmail.com}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM_ADDRESS: "${SMTP_FROM_ADDRESS:-notifications@stellar.local}"
+      SMTP_FROM_NAME: "${SMTP_FROM_NAME:-Stellar Platform}"
+      # Webhook Configuration (optional)
+      WEBHOOK_BASE_URL: "${WEBHOOK_BASE_URL:-}"
+      RUST_LOG: "info,stellar_notifications=debug"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: cargo run --bin stellar-notifications
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   pgadmin:
     image: dpage/pgadmin4:latest

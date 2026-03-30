@@ -9,7 +9,7 @@ import {
   useState,
 } from 'react'
 import type { Session } from 'next-auth'
-import { ChevronDown, LayoutDashboard, LogOut, User, X } from 'lucide-react'
+import { ChevronDown, LayoutDashboard, LogOut, Sparkles, User, X } from 'lucide-react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 import {
@@ -280,6 +280,10 @@ export function MobileNav({
                 <Link href="/dashboard" onClick={close} className={navLinkClass}>
                   <LayoutDashboard className="mr-2 h-5 w-5 shrink-0" aria-hidden />
                   Dashboard
+                </Link>
+                <Link href="/matches" onClick={close} className={navLinkClass}>
+                  <Sparkles className="mr-2 h-5 w-5 shrink-0 text-primary" aria-hidden />
+                  Matches
                 </Link>
                 <Link href="/dashboard" onClick={close} className={navLinkClass}>
                   <User className="mr-2 h-5 w-5 shrink-0" aria-hidden />

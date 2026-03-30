@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 actix-web.workspace = true
 actix-cors = "0.7"
-actix-rt.workspace = true
+tracing-actix-web.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -35,4 +35,12 @@ utoipa-swagger-ui.workspace = true
 reqwest.workspace = true
 actix-web-prom.workspace = true
 prometheus.workspace = true
+
+# Tracing / OpenTelemetry
+opentelemetry = { version = "0.24", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
+opentelemetry-semantic-conventions = "0.15"
+tracing-opentelemetry = "0.25"
+stellar-discovery = { path = "../discovery" }
 stellar-common = { path = "../common" }

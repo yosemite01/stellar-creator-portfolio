@@ -33,3 +33,7 @@ results/
 
 #Agents
 GEMINI.md
+ISSUE_CONTEXT.md
+
+# Soroban test snapshots (auto-generated)
+backend/contracts/**/test_snapshots/

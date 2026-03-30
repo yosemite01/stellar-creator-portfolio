@@ -1,3 +1,15 @@
+use actix_web::{middleware, web, App, HttpResponse, HttpServer};
+use deadpool_redis::{redis::AsyncCommands, Config as RedisConfig, Pool as RedisPool, Runtime};
+use serde::{Deserialize, Serialize};
+mod metrics;
+
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::KeyValue;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::{runtime, trace::{self, TracerProvider}, Resource};
+use tracing_opentelemetry::OpenTelemetryLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
+
 use actix_cors::Cors;
 use actix_web::{
     dev::{Server, Service, ServiceRequest, ServiceResponse, Transform},
@@ -13,6 +25,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::{pending, Future};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
+use actix_web::{http::StatusCode, middleware, web, App, HttpResponse, HttpServer, ResponseError};
+use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, PgPool};
 use stellar_discovery::{create_discovery, ServiceInfo};
 use thiserror::Error;
 use utoipa::{OpenApi, ToSchema};
@@ -649,6 +666,7 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
 async fn list_bounties(
     req: HttpRequest,
     pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse, ApiError> {
     let request_id = get_request_id(&req).unwrap_or_else(|| "unknown".to_string());
@@ -805,6 +823,21 @@ async fn get_bounty(
 
     let data = value_response(&bounty)?;
 
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.bounty_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut response_data = data;
+    if let Some(object) = response_data.as_object_mut() {
+        object.insert("contractLedger".to_string(), serde_json::json!(contract_ledger));
+    }
+
+    if let Ok(mut conn) = redis.get().await {
+        let _: Result<(), _> = conn.set_ex(cache_key, data.to_string(), 60).await;
+    }
+
+    HttpResponse::Ok().json(ApiResponse::ok(data, None::<String>))
     match redis.get().await {
         Ok(mut conn) => {
             if let Err(e) = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await {
@@ -946,7 +979,8 @@ async fn register_freelancer(
         serde_json::json!({
             "name": freelancer.name,
             "discipline": freelancer.discipline,
-            "verified": freelancer.verified
+            "verified": freelancer.verified,
+            "contractLedger": contract_ledger
         }),
         Some("Freelancer registered successfully".to_string()),
     )))
@@ -1023,7 +1057,8 @@ async fn list_freelancers(
             "total": total,
             "filters": {
                 "discipline": discipline.unwrap_or_default()
-            }
+            },
+            "contractLedger": contract_ledger
         }),
         None,
     )))
@@ -1246,10 +1281,36 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,stellar_api=debug".to_string()),
+    // Initialize OpenTelemetry
+    let tracer_provider = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(std::env::var("OTLP_ENDPOINT").unwrap_or_else(|_| "http://jaeger:4317".to_string())),
         )
+        .with_trace_config(
+            trace::Config::default().with_resource(Resource::new(vec![KeyValue::new(
+                opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+                "stellar-api",
+            )])),
+        )
+        .install_batch(runtime::Tokio)
+        .expect("Failed to initialize tracer");
+
+    let tracer = tracer_provider.tracer("stellar-api");
+    let telemetry = OpenTelemetryLayer::new(tracer);
+    
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,stellar_api=debug"));
+
+    let formatting_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stdout);
+
+    Registry::default()
+        .with(env_filter)
+        .with(telemetry)
+        .with(formatting_layer)
         .init();
 
     let port = std::env::var("API_PORT")
@@ -1306,6 +1367,61 @@ async fn main() -> anyhow::Result<()> {
     build_http_server(listener, state, openapi)?.await?;
     tracing::info!("Stellar API shutdown complete");
     Ok(())
+    let server = HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(db_pool.clone()))
+            .app_data(web::Data::new(redis_pool.clone()))
+            .app_data(business_metrics.clone())
+            .wrap(prometheus.clone())
+            .wrap(Cors::permissive())
+            .wrap(tracing_actix_web::TracingLogger::default())
+            .wrap(middleware::Compress::default())
+            .wrap(middleware::Logger::default())
+            .wrap(middleware::NormalizePath::trim())
+            .service(
+                SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
+            )
+            .route("/health", web::get().to(health))
+            .route("/api/v1/bounties", web::post().to(create_bounty))
+            .route("/api/v1/bounties", web::get().to(list_bounties))
+            .route("/api/v1/bounties/{id}", web::get().to(get_bounty))
+            .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
+            .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
+            .route("/api/v1/freelancers", web::get().to(list_freelancers))
+            .route("/api/v1/freelancers/{address}", web::get().to(get_freelancer))
+            .route("/api/v1/escrow/{id}", web::get().to(get_escrow))
+            .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
+            .route("/api/v1/webhooks", web::post().to(webhooks::register_webhook))
+            .route("/api/v1/webhooks", web::get().to(webhooks::list_webhooks))
+            .route("/api/v1/webhooks/{id}", web::delete().to(webhooks::delete_webhook))
+            // ── File upload routes ───────────────────────────────────────
+            .route("/api/v1/upload/avatar", web::post().to(upload::upload_avatar))
+            .route("/api/v1/upload/project-image", web::post().to(upload::upload_project_image))
+            .route("/api/v1/upload/bounty-attachment", web::post().to(upload::upload_bounty_attachment))
+            .route("/api/v1/uploads", web::get().to(upload::list_uploads))
+            .route("/api/v1/uploads/{category}/{filename}", web::get().to(upload::serve_upload))
+            .route("/api/v1/uploads/{id}", web::delete().to(upload::delete_upload))
+            // ── Backward-compat redirects: /api/* → /api/v1/* ───────────
+            .route("/api/bounties",              web::get().to(redirect_to_v1))
+            .route("/api/bounties",              web::post().to(redirect_to_v1))
+            .route("/api/bounties/{tail:.*}",    web::route().to(redirect_to_v1))
+            .route("/api/freelancers",           web::get().to(redirect_to_v1))
+            .route("/api/freelancers/{tail:.*}", web::route().to(redirect_to_v1))
+            .route("/api/escrow/{tail:.*}",      web::route().to(redirect_to_v1))
+            .route("/api/webhooks",              web::get().to(redirect_to_v1))
+            .route("/api/webhooks",              web::post().to(redirect_to_v1))
+            .route("/api/webhooks/{tail:.*}",    web::route().to(redirect_to_v1))
+    })
+    .bind((config.api_host.as_str(), config.api_port))?
+    .run()
+    .await;
+
+    // Deregister from service discovery on shutdown
+    if let Err(e) = discovery.deregister(&service_id).await {
+        tracing::warn!("Service discovery deregistration failed: {e}");
+    }
+
+    server
 }
 
 #[cfg(test)]

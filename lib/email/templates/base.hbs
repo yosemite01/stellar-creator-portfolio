@@ -36,6 +36,11 @@
         <a href="{{appUrl}}/auth/login">Sign In</a>
       </p>
       <p class="small">You received this email because you have an account on Stellar Creators.</p>
+      {{#if unsubscribeUrl}}
+      <p class="small" style="margin-top:12px;">
+        <a href="{{unsubscribeUrl}}" style="color:#6b7280;text-decoration:underline;">Unsubscribe from non-essential emails</a>
+      </p>
+      {{/if}}
     </div>
   </div>
 </body>

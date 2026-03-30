@@ -4,11 +4,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { pushService, type PushPayload } from '@/lib/push-service';
-import { validateNotificationPayload, sanitizeContent } from '@/lib/notification-validators';
-import type { UserPreferences } from '@/types/notifications';
-import { rateLimit } from '@/lib/rate-limiter';
-import { logNotification, trackDelivery } from '@/lib/notification-logger';
+import { pushService, type PushPayload } from './push-service';
+import { validateNotificationPayload, sanitizeContent } from './notification-validators';
+import type { UserPreferences } from './notification-types';
+import { rateLimit } from './rate-limiter';
+import { logNotification, trackDelivery } from './notification-logger';
+import { prisma } from '@/lib/prisma';
+import { NotificationStatus } from '@prisma/client';
 
 interface SendNotificationRequest {
   userId: string;
@@ -17,6 +19,7 @@ interface SendNotificationRequest {
   data?: Record<string, string>;
   channels?: Array<'firebase' | 'onesignal' | 'browser'>;
   priority?: 'high' | 'normal' | 'low';
+  type?: string;
   templateId?: string;
   variables?: Record<string, string>;
 }
@@ -146,15 +149,13 @@ export async function POST(req: NextRequest) {
       channels: response.channels,
       timestamp: response.timestamp,
       status: response.success ? 'sent' : 'failed',
+      title: sanitized.title,
+      body: sanitized.body,
+      type: body.type || 'info',
     });
 
     // Track delivery metrics
-    await trackDelivery({
-      messageId: response.messageId,
-      userId: sanitized.userId,
-      channels: sanitized.channels,
-      delivered: response.success,
-    });
+    await trackDelivery(response.messageId, response.success ? 'sent' : 'failed');
 
     return NextResponse.json(
       {
@@ -301,6 +302,35 @@ export async function PUT(req: NextRequest) {
   }
 }
 
+// Update notification status (e.g. mark as OPENED)
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const { id } = params;
+    const { status } = await req.json();
+
+    if (!Object.values(NotificationStatus).includes(status)) {
+      return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
+    }
+
+    const updated = await prisma.notification.update({
+      where: { id },
+      data: {
+        status,
+        openedAt: status === NotificationStatus.OPENED ? new Date() : undefined,
+        readAt: status === NotificationStatus.READ ? new Date() : undefined,
+      },
+    });
+
+    return NextResponse.json(updated);
+  } catch (error) {
+    console.error('Error updating notification status:', error);
+    return NextResponse.json({ error: 'Failed to update status' }, { status: 500 });
+  }
+}
+
 // Helper functions
 
 async function getUserPreferences(userId: string): Promise<UserPreferences | null> {
@@ -318,6 +348,7 @@ async function getUserPreferences(userId: string): Promise<UserPreferences | nul
         firebase: true,
         onesignal: true,
         browser: true,
+        email: true,
       },
       doNotDisturb: false,
       blockedCategories: [],

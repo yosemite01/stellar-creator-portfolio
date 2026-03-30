@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, Env, IntoVal, String, Symbol, Vec,
+};
 
 #[derive(Clone)]
 #[contracttype]
@@ -93,6 +95,9 @@ pub struct Evidence {
 
 // Maximum applications allowed per bounty to prevent spam
 pub const MAX_APPLICATIONS_PER_BOUNTY: u32 = 100;
+const GOVERNANCE_GET_PARAMETER_FN: &str = "get_parameter";
+const GOVERNANCE_MIN_BUDGET_PARAM: &str = "bounty_min_budget";
+const GOVERNANCE_MAX_BUDGET_PARAM: &str = "bounty_max_budget";
 
 #[contracttype]
 pub enum DataKey {
@@ -113,7 +118,28 @@ pub enum DataKey {
     // Config
     Deployer,
     EscrowContract,
+    GovernanceContract,
 }
+
+// =============================================================================
+// SECURITY INVARIANTS (for formal verification / audit reference)
+// =============================================================================
+// INV-1: BountyCounter only increases; bounty IDs are unique and monotonic.
+// INV-2: A bounty status transitions are one-directional:
+//        Open → InProgress | Cancelled | Expired
+//        InProgress → PendingCompletion | Disputed | Expired
+//        PendingCompletion → Completed | Disputed
+//        Disputed → Completed | Cancelled (via resolve_dispute)
+//        Terminal states: Completed, Cancelled, Expired — no further transitions.
+// INV-3: Only the bounty creator may call select_freelancer, complete_bounty, cancel_bounty.
+// INV-4: Only the selected freelancer may call submit_completion.
+// INV-5: Only the creator or selected freelancer may initiate a dispute or submit evidence.
+// INV-6: At most one dispute per bounty (enforced by dispute_exists check).
+// INV-7: Applications per bounty are capped at MAX_APPLICATIONS_PER_BOUNTY.
+// INV-8: Deadline is always in the future at bounty creation time.
+// INV-9: Newly created bounty budgets are always positive and within the
+//        governance-configured [min, max] range.
+// =============================================================================
 
 #[contract]
 pub struct BountyContract;
@@ -154,6 +180,7 @@ impl BountyContract {
             deadline > env.ledger().timestamp(),
             "Deadline must be in the future"
         );
+        Self::validate_bounty_budget(&env, budget);
 
         // Use instance storage for frequently accessed counter
         let mut counter: u64 = env
@@ -194,25 +221,43 @@ impl BountyContract {
         counter
     }
 
+    /// Registers the governance contract used for budget policy checks.
+    ///
+    /// Only the deployer (first caller) may set the governance contract address.
+    pub fn set_governance_contract(env: Env, setter: Address, governance: Address) -> bool {
+        setter.require_auth();
+
+        let maybe_deployer: Option<Address> = env.storage().persistent().get(&DataKey::Deployer);
+
+        if let Some(deployer) = maybe_deployer {
+            if deployer != setter {
+                panic!("Only deployer may set governance contract");
+            }
+        } else {
+            env.storage().persistent().set(&DataKey::Deployer, &setter);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::GovernanceContract, &governance);
+
+        true
+    }
+
     /// Registers the trusted escrow contract address.
     ///
     /// Only the deployer (first caller) may set the escrow contract address.
     pub fn set_escrow_contract(env: Env, setter: Address, escrow: Address) -> bool {
         setter.require_auth();
 
-        let maybe_deployer: Option<Address> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Deployer);
+        let maybe_deployer: Option<Address> = env.storage().persistent().get(&DataKey::Deployer);
 
         if let Some(deployer) = maybe_deployer {
             if deployer != setter {
                 panic!("Only deployer may set escrow contract");
             }
         } else {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Deployer, &setter);
+            env.storage().persistent().set(&DataKey::Deployer, &setter);
         }
 
         env.storage()
@@ -238,6 +283,48 @@ impl BountyContract {
             .persistent()
             .get(&DataKey::Bounty(bounty_id))
             .expect("Bounty not found")
+    }
+
+    fn validate_bounty_budget(env: &Env, budget: i128) {
+        assert!(budget > 0, "Budget must be positive");
+
+        let governance: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::GovernanceContract)
+            .expect("Governance contract not configured");
+
+        let min_budget = Self::read_budget_limit(
+            env,
+            &governance,
+            GOVERNANCE_MIN_BUDGET_PARAM,
+            "Minimum bounty budget not configured",
+        );
+        let max_budget = Self::read_budget_limit(
+            env,
+            &governance,
+            GOVERNANCE_MAX_BUDGET_PARAM,
+            "Maximum bounty budget not configured",
+        );
+
+        assert!(min_budget <= max_budget, "Governance budget range invalid");
+        assert!(budget >= min_budget, "Budget below governance minimum");
+        assert!(budget <= max_budget, "Budget above governance maximum");
+    }
+
+    fn read_budget_limit(
+        env: &Env,
+        governance: &Address,
+        parameter_name: &str,
+        missing_message: &str,
+    ) -> i128 {
+        let value: Option<u32> = env.invoke_contract(
+            governance,
+            &Symbol::new(env, GOVERNANCE_GET_PARAMETER_FN),
+            (Symbol::new(env, parameter_name),).into_val(env),
+        );
+
+        value.expect(missing_message) as i128
     }
 
     /// Allows freelancer to apply to a bounty.
@@ -304,9 +391,7 @@ impl BountyContract {
             .persistent()
             .set(&DataKey::Application(counter), &application);
         // Instance storage for counter
-        env.storage()
-            .instance()
-            .set(&DataKey::AppCounter, &counter);
+        env.storage().instance().set(&DataKey::AppCounter, &counter);
 
         // Track application ID under the bounty
         let mut app_ids: Vec<u64> = env
@@ -372,11 +457,7 @@ impl BountyContract {
     ///
     /// # State Changes
     /// - Sets `application.is_withdrawn = true` on the stored application record.
-    pub fn withdraw_application(
-        env: Env,
-        application_id: u64,
-        freelancer: Address,
-    ) -> bool {
+    pub fn withdraw_application(env: Env, application_id: u64, freelancer: Address) -> bool {
         freelancer.require_auth();
 
         // Load and validate the application
@@ -393,10 +474,7 @@ impl BountyContract {
         );
 
         // Idempotency guard — prevent double-withdrawal
-        assert!(
-            !application.is_withdrawn,
-            "Application already withdrawn"
-        );
+        assert!(!application.is_withdrawn, "Application already withdrawn");
 
         // State guard — cannot withdraw once a freelancer has been selected
         let bounty: Bounty = env
@@ -418,7 +496,11 @@ impl BountyContract {
 
         // Emit ApplicationWithdrawn event
         env.events().publish(
-            (Symbol::new(&env, "app_withdraw"), application.bounty_id, application_id),
+            (
+                Symbol::new(&env, "app_withdraw"),
+                application.bounty_id,
+                application_id,
+            ),
             &freelancer,
         );
 
@@ -445,7 +527,7 @@ impl BountyContract {
     /// - Sets selected freelancer.
     /// - Updates bounty status to `InProgress`.
     pub fn select_freelancer(env: Env, bounty_id: u64, application_id: u64) -> bool {
-        let mut bounty: Bounty = env
+        let bounty: Bounty = env
             .storage()
             .persistent()
             .get(&DataKey::Bounty(bounty_id))
@@ -453,10 +535,7 @@ impl BountyContract {
 
         bounty.creator.require_auth();
 
-        assert!(
-            bounty.status == BountyStatus::Open,
-            "Bounty is not open"
-        );
+        assert!(bounty.status == BountyStatus::Open, "Bounty is not open");
         assert!(
             env.ledger().timestamp() <= bounty.deadline,
             "Bounty deadline has passed"
@@ -488,7 +567,8 @@ impl BountyContract {
                 bounty.budget,
                 bounty.token.clone(),
                 ReleaseCondition::OnCompletion,
-            ),
+            )
+                .into_val(&env),
         );
 
         // Use instance storage for active workflow state
@@ -500,7 +580,7 @@ impl BountyContract {
         let mut updated_bounty = bounty;
         updated_bounty.status = BountyStatus::InProgress;
         updated_bounty.escrow_id = Some(escrow_id);
-        
+
         env.storage()
             .persistent()
             .set(&DataKey::Bounty(bounty_id), &updated_bounty);
@@ -531,7 +611,10 @@ impl BountyContract {
             .get(&DataKey::Bounty(bounty_id))
             .expect("Bounty not found");
 
-        assert!(bounty.status == BountyStatus::InProgress, "Bounty not in progress");
+        assert!(
+            bounty.status == BountyStatus::InProgress,
+            "Bounty not in progress"
+        );
         assert!(
             env.ledger().timestamp() <= bounty.deadline,
             "Bounty deadline has passed"
@@ -547,7 +630,9 @@ impl BountyContract {
         freelancer.require_auth();
 
         bounty.status = BountyStatus::PendingCompletion;
-        env.storage().persistent().set(&DataKey::Bounty(bounty_id), &bounty);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Bounty(bounty_id), &bounty);
 
         true
     }
@@ -571,17 +656,19 @@ impl BountyContract {
     /// - Marks work submission as approved (if exists).
     /// - Updates bounty status to `Completed`.
     pub fn complete_bounty(env: Env, bounty_id: u64) -> bool {
-        let mut bounty: Bounty = env
+        let bounty: Bounty = env
             .storage()
             .persistent()
             .get(&DataKey::Bounty(bounty_id))
             .expect("Bounty not found");
 
         bounty.creator.require_auth();
+        // #160: Require the freelancer to have submitted completion first.
+        // complete_bounty now only accepts PendingCompletion status, ensuring
+        // the freelancer's submit_completion step is mandatory before approval.
         assert!(
-            bounty.status == BountyStatus::InProgress ||
             bounty.status == BountyStatus::PendingCompletion,
-            "Bounty not ready for completion"
+            "Freelancer must submit completion before creator can approve"
         );
 
         // Note: Work submission tracking can be added via separate function
@@ -593,11 +680,11 @@ impl BountyContract {
                 .persistent()
                 .get(&DataKey::EscrowContract)
                 .expect("Escrow contract not configured");
-                
+
             env.invoke_contract::<bool>(
                 &escrow_contract,
-                &soroban_sdk::symbol_short!("release_funds"),
-                (escrow_id, bounty.creator.clone()),
+                &soroban_sdk::symbol_short!("rel_funds"),
+                (escrow_id, bounty.creator.clone()).into_val(&env),
             );
         }
 
@@ -669,21 +756,17 @@ impl BountyContract {
     /// # State Changes
     /// - Creates new Dispute record.
     /// - Updates bounty status to `Disputed`.
-    pub fn initiate_dispute(
-        env: Env,
-        bounty_id: u64,
-        initiator: Address,
-        reason: String,
-    ) -> bool {
+    pub fn initiate_dispute(env: Env, bounty_id: u64, initiator: Address, reason: String) -> bool {
         initiator.require_auth();
 
         // Check if dispute already exists (check first to give correct error)
-        let dispute_exists: Option<Dispute> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Dispute(bounty_id));
+        let dispute_exists: Option<Dispute> =
+            env.storage().persistent().get(&DataKey::Dispute(bounty_id));
 
-        assert!(dispute_exists.is_none(), "Dispute already exists for this bounty");
+        assert!(
+            dispute_exists.is_none(),
+            "Dispute already exists for this bounty"
+        );
 
         let mut bounty: Bounty = env
             .storage()
@@ -982,23 +1065,72 @@ impl BountyContract {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Mock escrow contract used in tests to satisfy invoke_contract calls
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[contract]
+pub struct MockEscrowContract;
+
+#[cfg(test)]
+#[contractimpl]
+impl MockEscrowContract {
+    pub fn deposit(
+        _env: Env,
+        _payer: Address,
+        _payee: Address,
+        _amount: i128,
+        _token: Address,
+        _condition: ReleaseCondition,
+    ) -> u64 {
+        1u64
+    }
+    pub fn rel_funds(_env: Env, _escrow_id: u64, _caller: Address) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+#[contract]
+pub struct MockGovernanceContract;
+
+#[cfg(test)]
+#[contractimpl]
+impl MockGovernanceContract {
+    pub fn get_parameter(env: Env, parameter: Symbol) -> Option<u32> {
+        if parameter == Symbol::new(&env, GOVERNANCE_MIN_BUDGET_PARAM) {
+            Some(100)
+        } else if parameter == Symbol::new(&env, GOVERNANCE_MAX_BUDGET_PARAM) {
+            Some(10_000)
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::Env;
 
+    fn setup_with_dependencies(env: &Env) -> (BountyContractClient<'_>, Address) {
+        let contract_id = env.register(BountyContract, ());
+        let client = BountyContractClient::new(env, &contract_id);
+        let deployer = Address::generate(env);
+        let escrow = env.register(MockEscrowContract, ());
+        let governance = env.register(MockGovernanceContract, ());
+        client.set_escrow_contract(&deployer, &escrow);
+        client.set_governance_contract(&deployer, &governance);
+        (client, Address::generate(env))
+    }
+
     #[test]
     fn test_create_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
@@ -1018,13 +1150,8 @@ mod tests {
     fn test_apply_for_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
 
         let bounty_id = client.create_bounty(
@@ -1040,7 +1167,6 @@ mod tests {
             &bounty_id,
             &freelancer,
             &String::from_str(&env, "I can do this!"),
-
             &4500i128,
             &30u64,
         );
@@ -1054,21 +1180,14 @@ mod tests {
     fn test_completion_workflow() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
 
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
-
             &String::from_str(&env, "Test Description"),
-
             &5000i128,
             &100u64,
             &token,
@@ -1078,7 +1197,6 @@ mod tests {
             &bounty_id,
             &freelancer,
             &String::from_str(&env, "I can do this!"),
-
             &4500i128,
             &30u64,
         );
@@ -1102,13 +1220,8 @@ mod tests {
     fn test_initiate_dispute_by_creator() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
 
         let bounty_id = client.create_bounty(
@@ -1151,13 +1264,8 @@ mod tests {
     fn test_initiate_dispute_by_freelancer() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
 
         let bounty_id = client.create_bounty(
@@ -1199,13 +1307,8 @@ mod tests {
     fn test_initiate_dispute_unauthorized() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
         let random = Address::generate(&env);
 
@@ -1240,13 +1343,8 @@ mod tests {
     fn test_submit_evidence() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
 
         let bounty_id = client.create_bounty(
@@ -1301,13 +1399,8 @@ mod tests {
     fn test_resolve_dispute_creator_wins() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
         let admin = Address::generate(&env);
 
@@ -1338,11 +1431,7 @@ mod tests {
         );
 
         // Admin resolves in favor of creator
-        let result = client.resolve_dispute(
-            &bounty_id,
-            &admin,
-            &DisputeResult::CreatorWin,
-        );
+        let result = client.resolve_dispute(&bounty_id, &admin, &DisputeResult::CreatorWin);
         assert!(result);
 
         let dispute = client.get_dispute(&bounty_id);
@@ -1358,13 +1447,8 @@ mod tests {
     fn test_resolve_dispute_freelancer_wins() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
         let admin = Address::generate(&env);
 
@@ -1395,11 +1479,7 @@ mod tests {
         );
 
         // Admin resolves in favor of freelancer
-        let result = client.resolve_dispute(
-            &bounty_id,
-            &admin,
-            &DisputeResult::FreelancerWin,
-        );
+        let result = client.resolve_dispute(&bounty_id, &admin, &DisputeResult::FreelancerWin);
         assert!(result);
 
         let dispute = client.get_dispute(&bounty_id);
@@ -1415,13 +1495,8 @@ mod tests {
     fn test_resolve_dispute_already_resolved() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
         let admin = Address::generate(&env);
 
@@ -1451,18 +1526,10 @@ mod tests {
             &String::from_str(&env, "Freelancer not delivering"),
         );
 
-        client.resolve_dispute(
-            &bounty_id,
-            &admin,
-            &DisputeResult::CreatorWin,
-        );
+        client.resolve_dispute(&bounty_id, &admin, &DisputeResult::CreatorWin);
 
         // Try to resolve again
-        client.resolve_dispute(
-            &bounty_id,
-            &admin,
-            &DisputeResult::FreelancerWin,
-        );
+        client.resolve_dispute(&bounty_id, &admin, &DisputeResult::FreelancerWin);
     }
 
     #[test]
@@ -1470,13 +1537,8 @@ mod tests {
     fn test_duplicate_dispute_not_allowed() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
-        let escrow = env.register(MockEscrowContract, ());
-        client.set_escrow_contract(&creator, &escrow);
         let freelancer = Address::generate(&env);
 
         let bounty_id = client.create_bounty(
@@ -1520,20 +1582,16 @@ mod tests {
     fn test_create_bounty_deadline_in_past() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-
-        // Set ledger timestamp to 1000, try deadline of 500 (in the past)
         env.ledger().set_timestamp(1000);
-
         client.create_bounty(
             &creator,
             &String::from_str(&env, "Late Bounty"),
             &String::from_str(&env, "Should fail"),
             &5000i128,
             &500u64,
+            &token,
         );
     }
 
@@ -1542,25 +1600,18 @@ mod tests {
     fn test_apply_after_deadline() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
-        // Create bounty with deadline at 1000
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        // Should fail - deadline passed
         client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1575,20 +1626,17 @@ mod tests {
     fn test_select_freelancer_after_deadline() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1596,11 +1644,7 @@ mod tests {
             &4500i128,
             &30u64,
         );
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        // Should fail - deadline passed
         client.select_freelancer(&bounty_id, &app_id);
     }
 
@@ -1609,20 +1653,17 @@ mod tests {
     fn test_submit_completion_after_deadline() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1630,13 +1671,8 @@ mod tests {
             &4500i128,
             &30u64,
         );
-
         client.select_freelancer(&bounty_id, &app_id);
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        // Should fail - deadline passed
         client.submit_completion(&bounty_id);
     }
 
@@ -1644,47 +1680,36 @@ mod tests {
     fn test_expire_open_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        let result = client.expire_bounty(&bounty_id);
-        assert!(result);
-
-        let bounty = client.get_bounty(&bounty_id);
-        assert_eq!(bounty.status, BountyStatus::Expired);
+        assert!(client.expire_bounty(&bounty_id));
+        assert_eq!(client.get_bounty(&bounty_id).status, BountyStatus::Expired);
     }
 
     #[test]
     fn test_expire_in_progress_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1692,17 +1717,10 @@ mod tests {
             &4500i128,
             &30u64,
         );
-
         client.select_freelancer(&bounty_id, &app_id);
-
-        // Advance time past deadline
         env.ledger().set_timestamp(1001);
-
-        let result = client.expire_bounty(&bounty_id);
-        assert!(result);
-
-        let bounty = client.get_bounty(&bounty_id);
-        assert_eq!(bounty.status, BountyStatus::Expired);
+        assert!(client.expire_bounty(&bounty_id));
+        assert_eq!(client.get_bounty(&bounty_id).status, BountyStatus::Expired);
     }
 
     #[test]
@@ -1710,20 +1728,16 @@ mod tests {
     fn test_expire_bounty_before_deadline() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
-        // Try to expire before deadline
         client.expire_bounty(&bounty_id);
     }
 
@@ -1732,20 +1746,17 @@ mod tests {
     fn test_expire_completed_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(BountyContract, ());
-        let client = BountyContractClient::new(&env, &contract_id);
-
+        let (client, token) = setup_with_dependencies(&env);
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
-
         let bounty_id = client.create_bounty(
             &creator,
             &String::from_str(&env, "Test Bounty"),
             &String::from_str(&env, "Test Description"),
             &5000i128,
             &1000u64,
+            &token,
         );
-
         let app_id = client.apply_for_bounty(
             &bounty_id,
             &freelancer,
@@ -1755,6 +1766,7 @@ mod tests {
         );
 
         client.select_freelancer(&bounty_id, &app_id);
+        client.submit_completion(&bounty_id);
         client.complete_bounty(&bounty_id);
 
         // Advance time past deadline
@@ -1763,6 +1775,99 @@ mod tests {
         // Should fail - completed bounties can't be expired
         client.expire_bounty(&bounty_id);
     }
+
+    #[test]
+    #[should_panic(expected = "Budget must be positive")]
+    fn test_create_bounty_zero_budget() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, token) = setup_with_dependencies(&env);
+        let creator = Address::generate(&env);
+
+        client.create_bounty(
+            &creator,
+            &String::from_str(&env, "Zero Budget"),
+            &String::from_str(&env, "Should fail"),
+            &0i128,
+            &100u64,
+            &token,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Budget must be positive")]
+    fn test_create_bounty_negative_budget() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, token) = setup_with_dependencies(&env);
+        let creator = Address::generate(&env);
+
+        client.create_bounty(
+            &creator,
+            &String::from_str(&env, "Negative Budget"),
+            &String::from_str(&env, "Should fail"),
+            &-1i128,
+            &100u64,
+            &token,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Budget below governance minimum")]
+    fn test_create_bounty_below_governance_minimum() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, token) = setup_with_dependencies(&env);
+        let creator = Address::generate(&env);
+
+        client.create_bounty(
+            &creator,
+            &String::from_str(&env, "Below Min"),
+            &String::from_str(&env, "Should fail"),
+            &99i128,
+            &100u64,
+            &token,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Budget above governance maximum")]
+    fn test_create_bounty_above_governance_maximum() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, token) = setup_with_dependencies(&env);
+        let creator = Address::generate(&env);
+
+        client.create_bounty(
+            &creator,
+            &String::from_str(&env, "Above Max"),
+            &String::from_str(&env, "Should fail"),
+            &10_001i128,
+            &100u64,
+            &token,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Governance contract not configured")]
+    fn test_create_bounty_requires_governance_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(BountyContract, ());
+        let client = BountyContractClient::new(&env, &contract_id);
+        let deployer = Address::generate(&env);
+        let escrow = env.register(MockEscrowContract, ());
+        let token = Address::generate(&env);
+        let creator = Address::generate(&env);
+
+        client.set_escrow_contract(&deployer, &escrow);
+        client.create_bounty(
+            &creator,
+            &String::from_str(&env, "Missing Governance"),
+            &String::from_str(&env, "Should fail"),
+            &5000i128,
+            &100u64,
+            &token,
+        );
+    }
 }
-
-

@@ -14,6 +14,13 @@ use std::time::Duration;
 use stellar_discovery::{create_discovery, ServiceInfo};
 use tracing::{error, info, warn};
 
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::KeyValue;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::{runtime, trace::{self, TracerProvider}, Resource};
+use tracing_opentelemetry::OpenTelemetryLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 struct Config {
@@ -680,10 +687,36 @@ async fn ensure_schema(pool: &PgPool) -> Result<()> {
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,stellar_indexer=debug".into()),
+    // Initialize OpenTelemetry
+    let tracer_provider = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(std::env::var("OTLP_ENDPOINT").unwrap_or_else(|_| "http://jaeger:4317".to_string())),
         )
+        .with_trace_config(
+            trace::Config::default().with_resource(Resource::new(vec![KeyValue::new(
+                opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+                "stellar-indexer",
+            )])),
+        )
+        .install_batch(runtime::Tokio)
+        .expect("Failed to initialize tracer");
+
+    let tracer = tracer_provider.tracer("stellar-indexer");
+    let telemetry = OpenTelemetryLayer::new(tracer);
+    
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,stellar_indexer=debug"));
+
+    let formatting_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stdout);
+
+    Registry::default()
+        .with(env_filter)
+        .with(telemetry)
+        .with(formatting_layer)
         .init();
 
     let cfg = Config::from_env()?;
