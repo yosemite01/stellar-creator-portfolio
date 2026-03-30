@@ -21,6 +21,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use actix_web::{http::StatusCode, middleware, web, App, HttpResponse, HttpServer, ResponseError};
 use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use stellar_discovery::{create_discovery, ServiceInfo};
@@ -698,6 +699,7 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
 async fn list_bounties(
     req: HttpRequest,
     pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse, ApiError> {
     let request_id = get_request_id(&req).unwrap_or_else(|| "unknown".to_string());
@@ -878,6 +880,16 @@ async fn get_bounty(
 
     let data = value_response(&bounty)?;
 
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.bounty_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut response_data = data;
+    if let Some(object) = response_data.as_object_mut() {
+        object.insert("contractLedger".to_string(), serde_json::json!(contract_ledger));
+    }
+
     if let Ok(mut conn) = redis.get().await {
         let _: Result<(), _> = conn.set_ex(cache_key, data.to_string(), 60).await;
     }
@@ -1053,7 +1065,8 @@ async fn register_freelancer(
         serde_json::json!({
             "name": freelancer.name,
             "discipline": freelancer.discipline,
-            "verified": freelancer.verified
+            "verified": freelancer.verified,
+            "contractLedger": contract_ledger
         }),
         Some("Freelancer registered successfully".to_string()),
     )))
@@ -1137,7 +1150,8 @@ async fn list_freelancers(
             "total": total,
             "filters": {
                 "discipline": discipline.unwrap_or_default()
-            }
+            },
+            "contractLedger": contract_ledger
         }),
         None,
     )))
