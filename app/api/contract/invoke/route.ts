@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { contractService } from '@/services/api/stellar/contract';
-import { LocalSigner } from '@/services/api/stellar/types';
-import { stellarClient } from '@/services/api/stellar/client';
+import { NextRequest, NextResponse } from "next/server";
+import { contractService } from "@/services/api/stellar/contract";
+import { LocalSigner } from "@/services/api/stellar/types";
+import { stellarClient } from "@/services/api/stellar/client";
 
 export async function POST(req: NextRequest) {
   try {
@@ -9,16 +9,16 @@ export async function POST(req: NextRequest) {
 
     if (!contractId || !method || !args) {
       return NextResponse.json(
-        { error: 'contractId, method, and args are required' },
-        { status: 400 }
+        { error: "contractId, method, and args are required" },
+        { status: 400 },
       );
     }
 
     const adminSecret = stellarClient.config.adminSecret;
     if (!adminSecret) {
       return NextResponse.json(
-        { error: 'STELLAR_ADMIN_SECRET is not configured' },
-        { status: 500 }
+        { error: "STELLAR_ADMIN_SECRET is not configured" },
+        { status: 500 },
       );
     }
 
@@ -27,15 +27,20 @@ export async function POST(req: NextRequest) {
       contractId,
       method,
       args,
-      signer
+      signer,
     );
 
     return NextResponse.json({ txHash });
-  } catch (error: any) {
-    console.error('Contract invoke error:', error);
+  } catch (error: unknown) {
+    console.error("Contract invoke error:", error);
     return NextResponse.json(
-      { error: error.message || 'Failed to invoke contract method' },
-      { status: 500 }
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to invoke contract method",
+      },
+      { status: 500 },
     );
   }
 }

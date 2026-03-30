@@ -118,6 +118,46 @@ services:
       retries: 5
       start_period: 60s
 
+    # ── Notifications Service ────────────────────────────────────────────────
+  # Redis-based message queue for reliable notification delivery.
+  # Supports email, in-app, push, webhook, and SMS notifications.
+  notifications:
+    image: rust:1.81-slim
+    container_name: stellar-notifications
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo_cache:/usr/local/cargo/registry
+    ports:
+      - "3003:3003"
+    environment:
+      NOTIFICATIONS_HOST: "0.0.0.0"
+      NOTIFICATIONS_PORT: "3003"
+      REDIS_URL: "redis://redis:6379"
+      MAX_RETRIES: "3"
+      RETRY_DELAY_SECONDS: "60"
+      WORKER_POLL_INTERVAL_SECONDS: "5"
+      # SMTP Configuration (optional - for email notifications)
+      SMTP_HOST: "${SMTP_HOST:-smtp.gmail.com}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM_ADDRESS: "${SMTP_FROM_ADDRESS:-notifications@stellar.local}"
+      SMTP_FROM_NAME: "${SMTP_FROM_NAME:-Stellar Platform}"
+      # Webhook Configuration (optional)
+      WEBHOOK_BASE_URL: "${WEBHOOK_BASE_URL:-}"
+      RUST_LOG: "info,stellar_notifications=debug"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: cargo run --bin stellar-notifications
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: stellar-pgadmin

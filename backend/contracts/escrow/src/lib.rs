@@ -217,11 +217,37 @@ impl EscrowContract {
         );
 
         let token_client = TokenClient::new(&env, &escrow.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &escrow.payee,
-            &escrow.amount,
-        );
+
+        // Query governance contract for platform fee (basis points, e.g. 500 = 5%)
+        let fee_bps: u32 = env
+            .storage()
+            .persistent()
+            .get::<_, Address>(&DataKey::Governance)
+            .map(|governance| {
+                env.invoke_contract(
+                    &governance,
+                    &symbol_short!("get_fee"),
+                    soroban_sdk::Vec::new(&env),
+                )
+            })
+            .unwrap_or(0);
+
+        let fee_amount = if fee_bps > 0 {
+            (escrow.amount * fee_bps as i128) / 10_000
+        } else {
+            0
+        };
+        let payee_amount = escrow.amount - fee_amount;
+
+        if fee_amount > 0 {
+            let governance: Address = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Governance)
+                .expect("Governance not set");
+            token_client.transfer(&env.current_contract_address(), &governance, &fee_amount);
+        }
+        token_client.transfer(&env.current_contract_address(), &escrow.payee, &payee_amount);
 
         escrow.status = EscrowStatus::Released;
         env.storage()
