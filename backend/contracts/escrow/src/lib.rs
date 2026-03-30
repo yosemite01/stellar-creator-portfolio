@@ -2657,7 +2657,7 @@ mod tests {
         // generated client which invokes the contract via the test host.
         // We detect rejection by catching the panic that Soroban raises.
         let client = EscrowContractClient::new(env, contract_id);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             client.deposit(
                 payer,
                 payee,
@@ -2727,7 +2727,7 @@ mod tests {
                 // Case 3: duplicate signatory
                 _ => {
                     // Build n_sigs distinct addresses, then duplicate one
-                    let mut addrs: std::vec::Vec<Address> = (0..n_sigs)
+                    let mut addrs: StdVec<Address> = (0..n_sigs)
                         .map(|_| Address::generate(&env))
                         .collect();
                     let dup = addrs[dup_idx % n_sigs].clone();
@@ -2781,7 +2781,7 @@ mod tests {
             let outsider = Address::generate(&env);
 
             // approve_release with the outsider must panic with "Unauthorized"
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                 client.approve_release(&id, &outsider);
             }));
 
@@ -2821,7 +2821,7 @@ mod tests {
             let k = k_approvals.min(n_sigs);
 
             // Build n_sigs distinct signatories
-            let signatories: std::vec::Vec<Address> = (0..n_sigs)
+            let signatories: StdVec<Address> = (0..n_sigs)
                 .map(|_| Address::generate(&env))
                 .collect();
             let mut sigs = soroban_sdk::Vec::new(&env);
@@ -2841,7 +2841,7 @@ mod tests {
 
             if (k as u32) < threshold {
                 // Below quorum — release_funds must panic
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                     client.release_funds(&id, &any_caller);
                 }));
                 proptest::prop_assert!(
@@ -2850,7 +2850,7 @@ mod tests {
                 );
             } else {
                 // At or above quorum — release_funds must succeed
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                     client.release_funds(&id, &any_caller)
                 }));
                 proptest::prop_assert!(
@@ -2907,7 +2907,7 @@ mod tests {
             if use_third_party {
                 // A random address that is neither payer nor payee must be rejected
                 let stranger = Address::generate(&env);
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                     client.release_funds(&id, &stranger);
                 }));
                 proptest::prop_assert!(
@@ -2917,7 +2917,7 @@ mod tests {
             } else {
                 // Payer or payee must succeed
                 let caller = if caller_is_payer { &payer } else { &payee };
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                     client.release_funds(&id, caller)
                 }));
                 proptest::prop_assert!(
@@ -3145,7 +3145,7 @@ mod tests {
             let token = setup_token(&env, &payer);
 
             // Build n_sigs distinct signatories
-            let signatories: std::vec::Vec<Address> = (0..n_sigs)
+            let signatories: StdVec<Address> = (0..n_sigs)
                 .map(|_| Address::generate(&env))
                 .collect();
             let mut sigs = soroban_sdk::Vec::new(&env);
@@ -3219,7 +3219,7 @@ mod tests {
             let threshold = threshold_raw.min(n_sigs as u32);
 
             // Build n_sigs distinct signatories
-            let signatories: std::vec::Vec<Address> = (0..n_sigs)
+            let signatories: StdVec<Address> = (0..n_sigs)
                 .map(|_| Address::generate(&env))
                 .collect();
             let mut sigs = soroban_sdk::Vec::new(&env);
@@ -3243,7 +3243,7 @@ mod tests {
             }
 
             // After terminal state: approve_release must be rejected
-            let approve_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let approve_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                 client.approve_release(&id, &signatories[0]);
             }));
             proptest::prop_assert!(
@@ -3252,7 +3252,7 @@ mod tests {
             );
 
             // After terminal state: release_funds must also be rejected
-            let release_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let release_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                 let any_caller = Address::generate(&env);
                 client.release_funds(&id, &any_caller);
             }));
@@ -3357,7 +3357,7 @@ mod tests {
             let threshold = threshold_raw.min(n_sigs as u32);
 
             // Build n_sigs distinct signatories
-            let signatories: std::vec::Vec<Address> = (0..n_sigs)
+            let signatories: StdVec<Address> = (0..n_sigs)
                 .map(|_| Address::generate(&env))
                 .collect();
             let mut sigs = soroban_sdk::Vec::new(&env);
@@ -3376,7 +3376,7 @@ mod tests {
             }
 
             // Payer must be able to refund regardless of approval count
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                 client.refund_escrow(&id)
             }));
             proptest::prop_assert!(
@@ -3430,8 +3430,8 @@ mod tests {
             // Create n_escrows multi-sig escrows (1-of-1 for simplicity so
             // a single approve is enough to reach quorum)
             let amount: i128 = 100;
-            let mut escrow_ids: std::vec::Vec<u64> = std::vec::Vec::new();
-            let mut signatories_per_escrow: std::vec::Vec<Address> = std::vec::Vec::new();
+            let mut escrow_ids: StdVec<u64> = StdVec::new();
+            let mut signatories_per_escrow: StdVec<Address> = StdVec::new();
 
             for _ in 0..n_escrows {
                 let sig = Address::generate(&env);
