@@ -248,6 +248,8 @@ enum NotificationStatus {
   READ
   ARCHIVED
   DELETED
+}
+
 // ── Notifications & email delivery ───────────────────────────────────────────
 
 model NotificationPreference {
@@ -300,6 +302,8 @@ enum EmailDeliveryStatus {
   SENT
   FAILED
   SKIPPED
+}
+
 model MatchFeedback {
   id        String   @id @default(cuid())
   userId    String

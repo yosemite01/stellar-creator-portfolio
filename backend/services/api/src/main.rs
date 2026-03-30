@@ -3,6 +3,7 @@ use deadpool_redis::{redis::AsyncCommands, Config as RedisConfig, Pool as RedisP
 use serde::{Deserialize, Serialize};
 mod metrics;
 
+use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{runtime, trace::{self, TracerProvider}, Resource};

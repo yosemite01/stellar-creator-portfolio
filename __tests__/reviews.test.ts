@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 
 describe('calculateAggregate', () => {
   it('returns zeros for empty list', async () => {
-    const { calculateAggregate } = await import('@/lib/review-service')
+    const { calculateAggregate } = await import('@/lib/services/review-service')
     const result = calculateAggregate([])
     expect(result.average).toBe(0)
     expect(result.total).toBe(0)
@@ -13,7 +13,7 @@ describe('calculateAggregate', () => {
   })
 
   it('calculates correct average and breakdown', async () => {
-    const { calculateAggregate } = await import('@/lib/review-service')
+    const { calculateAggregate } = await import('@/lib/services/review-service')
     const reviews = [
       { rating: 5, status: 'approved' },
       { rating: 4, status: 'approved' },
@@ -30,7 +30,7 @@ describe('calculateAggregate', () => {
   })
 
   it('rounds average to 1 decimal place', async () => {
-    const { calculateAggregate } = await import('@/lib/review-service')
+    const { calculateAggregate } = await import('@/lib/services/review-service')
     const reviews = [
       { rating: 5, status: 'approved' },
       { rating: 4, status: 'approved' },
@@ -40,7 +40,7 @@ describe('calculateAggregate', () => {
   })
 
   it('ignores non-approved reviews', async () => {
-    const { calculateAggregate } = await import('@/lib/review-service')
+    const { calculateAggregate } = await import('@/lib/services/review-service')
     const reviews = [
       { rating: 5, status: 'approved' },
       { rating: 1, status: 'pending' },
@@ -54,7 +54,7 @@ describe('calculateAggregate', () => {
 
 describe('createReview', () => {
   it('creates a review with pending status', async () => {
-    const { createReview } = await import('@/lib/review-service')
+    const { createReview } = await import('@/lib/services/review-service')
     const review = createReview({
       creatorId: 'creator-test',
       reviewerId: 'user-test',
@@ -73,7 +73,7 @@ describe('createReview', () => {
 
 describe('voteOnReview', () => {
   it('increments helpful count', async () => {
-    const { createReview, voteOnReview } = await import('@/lib/review-service')
+    const { createReview, voteOnReview } = await import('@/lib/services/review-service')
     const review = createReview({
       creatorId: 'c1',
       reviewerId: 'r1',
@@ -88,7 +88,7 @@ describe('voteOnReview', () => {
   })
 
   it('toggles vote off when same vote submitted twice', async () => {
-    const { createReview, voteOnReview } = await import('@/lib/review-service')
+    const { createReview, voteOnReview } = await import('@/lib/services/review-service')
     const review = createReview({
       creatorId: 'c2',
       reviewerId: 'r2',
@@ -104,7 +104,7 @@ describe('voteOnReview', () => {
   })
 
   it('returns null for non-existent review', async () => {
-    const { voteOnReview } = await import('@/lib/review-service')
+    const { voteOnReview } = await import('@/lib/services/review-service')
     const result = voteOnReview('non-existent-id', 'user', 'helpful')
     expect(result).toBeNull()
   })
@@ -112,7 +112,7 @@ describe('voteOnReview', () => {
 
 describe('moderateReview', () => {
   it('approves a pending review', async () => {
-    const { createReview, moderateReview } = await import('@/lib/review-service')
+    const { createReview, moderateReview } = await import('@/lib/services/review-service')
     const review = createReview({
       creatorId: 'c3',
       reviewerId: 'r3',
@@ -128,7 +128,7 @@ describe('moderateReview', () => {
   })
 
   it('rejects a review', async () => {
-    const { createReview, moderateReview } = await import('@/lib/review-service')
+    const { createReview, moderateReview } = await import('@/lib/services/review-service')
     const review = createReview({
       creatorId: 'c4',
       reviewerId: 'r4',
@@ -145,7 +145,7 @@ describe('moderateReview', () => {
 
 describe('getReviewsForCreator', () => {
   it('only returns approved reviews', async () => {
-    const { createReview, moderateReview, getReviewsForCreator } = await import('@/lib/review-service')
+    const { createReview, moderateReview, getReviewsForCreator } = await import('@/lib/services/review-service')
     const creatorId = 'creator-filter-test'
     const r1 = createReview({ creatorId, reviewerId: 'u1', reviewerName: 'A', rating: 5, title: 'T', body: 'Body content here.', isVerifiedPurchase: false })
     const r2 = createReview({ creatorId, reviewerId: 'u2', reviewerName: 'B', rating: 3, title: 'T', body: 'Body content here.', isVerifiedPurchase: false })
@@ -158,7 +158,7 @@ describe('getReviewsForCreator', () => {
   })
 
   it('filters by rating', async () => {
-    const { createReview, moderateReview, getReviewsForCreator } = await import('@/lib/review-service')
+    const { createReview, moderateReview, getReviewsForCreator } = await import('@/lib/services/review-service')
     const creatorId = 'creator-rating-filter'
     const r1 = createReview({ creatorId, reviewerId: 'u3', reviewerName: 'C', rating: 5, title: 'T', body: 'Body content here.', isVerifiedPurchase: false })
     const r2 = createReview({ creatorId, reviewerId: 'u4', reviewerName: 'D', rating: 3, title: 'T', body: 'Body content here.', isVerifiedPurchase: false })
@@ -172,19 +172,19 @@ describe('getReviewsForCreator', () => {
 
 describe('review validator schemas', () => {
   it('rejects rating outside 1-5', async () => {
-    const { reviewSchema } = await import('@/lib/validators')
+    const { reviewSchema } = await import('@/lib/utils/validators')
     const result = reviewSchema.safeParse({ creatorId: 'c', rating: 6, title: 'T', body: 'Body content here.' })
     expect(result.success).toBe(false)
   })
 
   it('rejects body shorter than 10 chars', async () => {
-    const { reviewSchema } = await import('@/lib/validators')
+    const { reviewSchema } = await import('@/lib/utils/validators')
     const result = reviewSchema.safeParse({ creatorId: 'c', rating: 4, title: 'T', body: 'Short' })
     expect(result.success).toBe(false)
   })
 
   it('accepts valid review input', async () => {
-    const { reviewSchema } = await import('@/lib/validators')
+    const { reviewSchema } = await import('@/lib/utils/validators')
     const result = reviewSchema.safeParse({ creatorId: 'c', rating: 4, title: 'Great', body: 'This is a valid review body.' })
     expect(result.success).toBe(true)
   })
