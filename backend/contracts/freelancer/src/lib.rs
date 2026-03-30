@@ -29,6 +29,18 @@ pub struct FilterOptions {
     pub verified_only: Option<bool>,
     pub skill: Option<String>,
     pub active_only: Option<bool>,
+<<<<<<< HEAD
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FreelancerReview {
+    pub reviewer: Address,
+    pub rating: u32,
+    pub review_text: String,
+    pub timestamp: u64,
+=======
+>>>>>>> main
 }
 
 #[contracttype]
@@ -36,6 +48,8 @@ pub enum DataKey {
     FreelancerCount,
     Profile(Address),
     AllFreelancers,
+    Review(Address, u32),
+    ReviewCount(Address),
     // Governance / admin configuration
     Governance,
     Deployer,
@@ -68,6 +82,65 @@ const FL: Symbol = symbol_short!("fl");
 
 #[contractimpl]
 impl FreelancerContract {
+    fn ensure_escrow_rating_caller(env: &Env, caller: &Address) {
+        let registered: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowContract)
+            .expect("Escrow contract not configured");
+        if *caller != registered {
+            panic!("Unauthorized: only escrow contract may submit ratings");
+        }
+    }
+
+    fn apply_rating(env: &Env, freelancer: &Address, new_rating: u32) -> FreelancerProfile {
+        assert!(new_rating <= 500, "Rating must be between 0 and 500");
+
+        let key = DataKey::Profile(freelancer.clone());
+        let mut profile: FreelancerProfile = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Freelancer not registered");
+
+        let total = (profile.rating as u64) * (profile.total_rating_count as u64);
+        profile.total_rating_count += 1;
+        profile.rating = ((total + new_rating as u64) / profile.total_rating_count as u64) as u32;
+
+        env.storage().persistent().set(&key, &profile);
+        profile
+    }
+
+    fn store_review(
+        env: &Env,
+        freelancer: &Address,
+        reviewer: &Address,
+        rating: u32,
+        review_text: &String,
+    ) {
+        let count_key = DataKey::ReviewCount(freelancer.clone());
+        let review_index: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+
+        let review = FreelancerReview {
+            reviewer: reviewer.clone(),
+            rating,
+            review_text: review_text.clone(),
+            timestamp: env.ledger().timestamp(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Review(freelancer.clone(), review_index), &review);
+        env.storage()
+            .persistent()
+            .set(&count_key, &(review_index + 1));
+
+        env.events().publish(
+            (FL, symbol_short!("rev"), freelancer.clone()),
+            (reviewer.clone(), rating, review_text.clone(), review.timestamp),
+        );
+    }
+
     /// Registers a new freelancer profile.
     pub fn register_freelancer(
         env: Env,
@@ -183,7 +256,13 @@ impl FreelancerContract {
     /// must be in [0, 500] (representing 0.0–5.0 stars × 100).
     pub fn update_rating(env: Env, caller: Address, freelancer: Address, new_rating: u32) -> bool {
         caller.require_auth();
+        Self::ensure_escrow_rating_caller(&env, &caller);
+        let profile = Self::apply_rating(&env, &freelancer, new_rating);
 
+<<<<<<< HEAD
+        let fallback_review = String::from_str(&env, "Rating submitted without review text");
+        Self::store_review(&env, &freelancer, &caller, new_rating, &fallback_review);
+=======
         let registered: Address = env
             .storage()
             .persistent()
@@ -208,6 +287,7 @@ impl FreelancerContract {
             ((total + new_rating as i128) / profile.total_rating_count as i128) as u32;
 
         env.storage().persistent().set(&key, &profile);
+>>>>>>> main
 
         env.events().publish(
             (FL, symbol_short!("rate"), freelancer),
@@ -215,6 +295,56 @@ impl FreelancerContract {
         );
 
         true
+    }
+
+    /// Submits a rating with explicit review text and reviewer metadata.
+    pub fn submit_review(
+        env: Env,
+        caller: Address,
+        freelancer: Address,
+        reviewer: Address,
+        new_rating: u32,
+        review_text: String,
+    ) -> bool {
+        caller.require_auth();
+
+        Self::ensure_escrow_rating_caller(&env, &caller);
+        assert!(review_text.len() > 0, "Review text cannot be empty");
+        assert!(review_text.len() <= 1000, "Review text too long");
+
+        let profile = Self::apply_rating(&env, &freelancer, new_rating);
+        Self::store_review(&env, &freelancer, &reviewer, new_rating, &review_text);
+
+        env.events().publish(
+            (FL, symbol_short!("rate"), freelancer),
+            (profile.rating, profile.total_rating_count),
+        );
+
+        true
+    }
+
+    /// Retrieves all reviews for a freelancer.
+    pub fn get_reviews(env: Env, freelancer: Address) -> Vec<FreelancerReview> {
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReviewCount(freelancer.clone()))
+            .unwrap_or(0);
+
+        let mut reviews = Vec::new(&env);
+        let mut index: u32 = 0;
+        while index < count {
+            if let Some(review) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, FreelancerReview>(&DataKey::Review(freelancer.clone(), index))
+            {
+                reviews.push_back(review);
+            }
+            index += 1;
+        }
+
+        reviews
     }
 
     /// Increments freelancer's completed projects count.
@@ -625,6 +755,66 @@ mod tests {
     }
 
     #[test]
+    fn test_submit_review_stores_text_timestamp_and_reviewer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, escrow) = setup(&env);
+        let freelancer = Address::generate(&env);
+        let reviewer = Address::generate(&env);
+
+        client.register_freelancer(
+            &freelancer,
+            &String::from_str(&env, "Bob"),
+            &String::from_str(&env, "Dev"),
+            &String::from_str(&env, "Bio"),
+        );
+
+        let review_text = String::from_str(&env, "Great communication and fast delivery");
+        assert!(client.submit_review(
+            &escrow,
+            &freelancer,
+            &reviewer,
+            &450,
+            &review_text,
+        ));
+
+        let reviews = client.get_reviews(&freelancer);
+        assert_eq!(reviews.len(), 1);
+        let review = reviews.get(0).expect("review missing");
+        assert_eq!(review.reviewer, reviewer);
+        assert_eq!(review.rating, 450);
+        assert_eq!(review.review_text, review_text);
+        assert_eq!(review.timestamp, env.ledger().timestamp());
+    }
+
+    #[test]
+    fn test_update_rating_stores_fallback_review_entry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, escrow) = setup(&env);
+        let freelancer = Address::generate(&env);
+
+        client.register_freelancer(
+            &freelancer,
+            &String::from_str(&env, "Bob"),
+            &String::from_str(&env, "Dev"),
+            &String::from_str(&env, "Bio"),
+        );
+
+        assert!(client.update_rating(&escrow, &freelancer, &400));
+
+        let reviews = client.get_reviews(&freelancer);
+        assert_eq!(reviews.len(), 1);
+        let review = reviews.get(0).expect("review missing");
+        assert_eq!(review.reviewer, escrow);
+        assert_eq!(review.rating, 400);
+        assert_eq!(
+            review.review_text,
+            String::from_str(&env, "Rating submitted without review text")
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "Rating must be between 0 and 500")]
     fn test_update_rating_exceeds_max() {
         let env = Env::default();
@@ -665,6 +855,29 @@ mod tests {
         client.update_rating(&attacker, &freelancer, &300);
     }
 
+<<<<<<< HEAD
+    #[test]
+    #[should_panic(expected = "Escrow contract not configured")]
+    fn test_update_rating_no_escrow_configured() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(FreelancerContract, ());
+        let client = FreelancerContractClient::new(&env, &contract_id);
+        let freelancer = Address::generate(&env);
+        let caller = Address::generate(&env);
+
+        client.register_freelancer(
+            &freelancer,
+            &String::from_str(&env, "Bob"),
+            &String::from_str(&env, "Dev"),
+            &String::from_str(&env, "Bio"),
+        );
+
+        client.update_rating(&caller, &freelancer, &300);
+    }
+
+=======
+>>>>>>> main
     // -------------------------------------------------------------------------
     // Earnings authorization
     // -------------------------------------------------------------------------
