@@ -1,6 +1,7 @@
 use actix_cors::Cors;
 use actix_web::{http::StatusCode, middleware, web, App, HttpResponse, HttpServer};
 use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use utoipa::{OpenApi, ToSchema};
@@ -106,6 +107,135 @@ struct EscrowRecord {
     released_at: Option<i64>,
 }
 
+#[derive(Clone)]
+struct ContractClient {
+    rpc_url: String,
+    bounty_contract_id: String,
+    freelancer_contract_id: String,
+    escrow_contract_id: String,
+    http: Client,
+}
+
+impl ContractClient {
+    fn from_env() -> Self {
+        Self {
+            rpc_url: std::env::var("STELLAR_RPC_URL")
+                .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".to_string()),
+            bounty_contract_id: std::env::var("BOUNTY_CONTRACT_ID").unwrap_or_default(),
+            freelancer_contract_id: std::env::var("FREELANCER_CONTRACT_ID").unwrap_or_default(),
+            escrow_contract_id: std::env::var("ESCROW_CONTRACT_ID").unwrap_or_default(),
+            http: Client::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcResponse<T> {
+    result: Option<T>,
+    error: Option<RpcError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcError {
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetEventsResult {
+    #[serde(rename = "latestLedger")]
+    latest_ledger: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct GetEventsRequest<'a> {
+    jsonrpc: &'a str,
+    id: u32,
+    method: &'a str,
+    params: GetEventsParams<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct GetEventsParams<'a> {
+    #[serde(rename = "startLedger")]
+    start_ledger: u32,
+    filters: Vec<EventFilter<'a>>,
+    pagination: Pagination,
+}
+
+#[derive(Debug, Serialize)]
+struct EventFilter<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    #[serde(rename = "contractIds")]
+    contract_ids: Vec<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct Pagination {
+    limit: u32,
+}
+
+async fn fetch_contract_latest_ledger(
+    client: &ContractClient,
+    contract_id: &str,
+) -> Result<Option<u32>, HttpResponse> {
+    if contract_id.is_empty() {
+        return Ok(None);
+    }
+
+    let body = GetEventsRequest {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getEvents",
+        params: GetEventsParams {
+            start_ledger: 0,
+            filters: vec![EventFilter {
+                kind: "contract",
+                contract_ids: vec![contract_id],
+            }],
+            pagination: Pagination { limit: 1 },
+        },
+    };
+
+    let response = client
+        .http
+        .post(&client.rpc_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::error!("Contract RPC request failed: {error}");
+            json_error(StatusCode::BAD_GATEWAY, format!("Contract RPC request failed: {error}"))
+        })?;
+
+    if !response.status().is_success() {
+        return Err(json_error(
+            StatusCode::BAD_GATEWAY,
+            format!("Contract RPC returned status {}", response.status()),
+        ));
+    }
+
+    let rpc_response = response
+        .json::<RpcResponse<GetEventsResult>>()
+        .await
+        .map_err(|error| {
+            tracing::error!("Failed to decode contract RPC response: {error}");
+            json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to decode contract RPC response: {error}"),
+            )
+        })?;
+
+    if let Some(error) = rpc_response.error {
+        return Err(json_error(
+            StatusCode::BAD_GATEWAY,
+            format!("Contract RPC error: {}", error.message),
+        ));
+    }
+
+    Ok(rpc_response.result.map(|result| result.latest_ledger))
+}
+
 fn json_error(status: StatusCode, message: impl Into<String>) -> HttpResponse {
     let response: ApiResponse<serde_json::Value> = ApiResponse::err(message.into());
     HttpResponse::build(status).json(response)
@@ -152,7 +282,11 @@ async fn health() -> HttpResponse {
         (status = 500, description = "Database error"),
     )
 )]
-async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) -> HttpResponse {
+async fn create_bounty(
+    pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
+    body: web::Json<BountyRequest>,
+) -> HttpResponse {
     tracing::info!("Creating bounty: {:?}", body.title);
 
     let budget = match parse_i64(body.budget, "budget") {
@@ -199,7 +333,17 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
         Err(response) => return response,
     };
 
-    HttpResponse::Created().json(ApiResponse::ok(data, Some("Bounty created successfully".to_string())))
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.bounty_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut response_data = data;
+    if let Some(object) = response_data.as_object_mut() {
+        object.insert("contractLedger".to_string(), serde_json::json!(contract_ledger));
+    }
+
+    HttpResponse::Created().json(ApiResponse::ok(response_data, Some("Bounty created successfully".to_string())))
 }
 
 /// List bounties (paginated)
@@ -217,6 +361,7 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
 )]
 async fn list_bounties(
     pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
     let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
@@ -268,12 +413,18 @@ async fn list_bounties(
         }
     };
 
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.bounty_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
     HttpResponse::Ok().json(ApiResponse::ok(
         serde_json::json!({
             "bounties": bounties,
             "total": total,
             "page": page,
-            "limit": limit
+            "limit": limit,
+            "contractLedger": contract_ledger
         }),
         None,
     ))
@@ -293,6 +444,7 @@ async fn get_bounty(
     path: web::Path<u64>,
     pool: web::Data<PgPool>,
     redis: web::Data<Pool>,
+    contracts: web::Data<ContractClient>,
 ) -> HttpResponse {
     let bounty_id = path.into_inner();
     let bounty_id_db = match parse_u64_to_i64(bounty_id, "id") {
@@ -343,11 +495,23 @@ async fn get_bounty(
         Err(response) => return response,
     };
 
-    if let Ok(mut conn) = redis.get().await {
-        let _ = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await;
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.bounty_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut response_data = data;
+    if let Some(object) = response_data.as_object_mut() {
+        object.insert("contractLedger".to_string(), serde_json::json!(contract_ledger));
     }
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, None))
+    if let Ok(mut conn) = redis.get().await {
+        let _ = conn
+            .set_ex::<_, _, ()>(&cache_key, response_data.to_string(), 60)
+            .await;
+    }
+
+    HttpResponse::Ok().json(ApiResponse::ok(response_data, None))
 }
 
 /// Apply for a bounty
@@ -366,6 +530,7 @@ async fn apply_for_bounty(
     path: web::Path<u64>,
     body: web::Json<BountyApplication>,
     pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
 ) -> HttpResponse {
     let bounty_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
@@ -433,8 +598,18 @@ async fn apply_for_bounty(
         Err(response) => return response,
     };
 
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.bounty_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut response_data = data;
+    if let Some(object) = response_data.as_object_mut() {
+        object.insert("contractLedger".to_string(), serde_json::json!(contract_ledger));
+    }
+
     HttpResponse::Created().json(ApiResponse::ok(
-        data,
+        response_data,
         Some("Application submitted successfully".to_string()),
     ))
 }
@@ -452,6 +627,7 @@ async fn apply_for_bounty(
 async fn register_freelancer(
     body: web::Json<FreelancerRegistration>,
     pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
 ) -> HttpResponse {
     let generated_address = Uuid::new_v4().to_string();
 
@@ -483,11 +659,17 @@ async fn register_freelancer(
         }
     };
 
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.freelancer_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
     HttpResponse::Created().json(ApiResponse::ok(
         serde_json::json!({
             "name": freelancer.name,
             "discipline": freelancer.discipline,
-            "verified": freelancer.verified
+            "verified": freelancer.verified,
+            "contractLedger": contract_ledger
         }),
         Some("Freelancer registered successfully".to_string()),
     ))
@@ -509,6 +691,7 @@ async fn register_freelancer(
 async fn list_freelancers(
     query: web::Query<std::collections::HashMap<String, String>>,
     pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
 ) -> HttpResponse {
     let discipline = query.get("discipline").cloned();
     let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
@@ -558,13 +741,19 @@ async fn list_freelancers(
         }
     };
 
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.freelancer_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
     HttpResponse::Ok().json(ApiResponse::ok(
         serde_json::json!({
             "freelancers": freelancers,
             "total": total,
             "filters": {
                 "discipline": discipline.unwrap_or_default()
-            }
+            },
+            "contractLedger": contract_ledger
         }),
         None,
     ))
@@ -584,6 +773,7 @@ async fn get_freelancer(
     path: web::Path<String>,
     pool: web::Data<PgPool>,
     redis: web::Data<Pool>,
+    contracts: web::Data<ContractClient>,
 ) -> HttpResponse {
     let address = path.into_inner();
     let cache_key = format!("api:freelancer:{address}");
@@ -629,11 +819,23 @@ async fn get_freelancer(
         Err(response) => return response,
     };
 
-    if let Ok(mut conn) = redis.get().await {
-        let _ = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await;
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.freelancer_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut response_data = data;
+    if let Some(object) = response_data.as_object_mut() {
+        object.insert("contractLedger".to_string(), serde_json::json!(contract_ledger));
     }
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, None))
+    if let Ok(mut conn) = redis.get().await {
+        let _ = conn
+            .set_ex::<_, _, ()>(&cache_key, response_data.to_string(), 60)
+            .await;
+    }
+
+    HttpResponse::Ok().json(ApiResponse::ok(response_data, None))
 }
 
 /// Get escrow details
@@ -646,7 +848,11 @@ async fn get_freelancer(
         (status = 500, description = "Database error"),
     )
 )]
-async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpResponse {
+async fn get_escrow(
+    path: web::Path<u64>,
+    pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
+) -> HttpResponse {
     let escrow_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
         Err(response) => return response,
@@ -684,7 +890,17 @@ async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRespon
         Err(response) => return response,
     };
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, None))
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.escrow_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut response_data = data;
+    if let Some(object) = response_data.as_object_mut() {
+        object.insert("contractLedger".to_string(), serde_json::json!(contract_ledger));
+    }
+
+    HttpResponse::Ok().json(ApiResponse::ok(response_data, None))
 }
 
 /// Release escrowed funds
@@ -698,7 +914,11 @@ async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRespon
         (status = 500, description = "Database error"),
     )
 )]
-async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpResponse {
+async fn release_escrow(
+    path: web::Path<u64>,
+    pool: web::Data<PgPool>,
+    contracts: web::Data<ContractClient>,
+) -> HttpResponse {
     let escrow_id = match parse_u64_to_i64(path.into_inner(), "id") {
         Ok(value) => value,
         Err(response) => return response,
@@ -737,7 +957,20 @@ async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRe
         Err(response) => return response,
     };
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, Some("Funds released successfully".to_string())))
+    let contract_ledger = match fetch_contract_latest_ledger(&contracts, &contracts.escrow_contract_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut response_data = data;
+    if let Some(object) = response_data.as_object_mut() {
+        object.insert("contractLedger".to_string(), serde_json::json!(contract_ledger));
+    }
+
+    HttpResponse::Ok().json(ApiResponse::ok(
+        response_data,
+        Some("Funds released successfully".to_string()),
+    ))
 }
 
 #[derive(OpenApi)]
@@ -804,6 +1037,7 @@ async fn main() -> std::io::Result<()> {
     let cfg = Config::from_url(redis_url);
     let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).expect("Failed to create Redis pool");
     let openapi = ApiDoc::openapi();
+    let contract_client = ContractClient::from_env();
 
     tracing::info!("Starting Stellar API on {}:{}", host, port);
     tracing::info!(
@@ -816,6 +1050,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::Data::new(db_pool.clone()))
             .app_data(web::Data::new(redis_pool.clone()))
+            .app_data(web::Data::new(contract_client.clone()))
             .wrap(Cors::permissive())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
