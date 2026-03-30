@@ -4,6 +4,11 @@
  * In-memory store suitable for demo; persist to DB for production.
  */
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __escrowStore: Store | undefined
+}
+
 export type EscrowStatus =
   | 'pending_funding'
   | 'funded_authorized'
@@ -34,14 +39,13 @@ type Store = {
 }
 
 function getStore(): Store {
-  const g = globalThis as unknown as { __escrowStore?: Store }
-  if (!g.__escrowStore) {
-    g.__escrowStore = {
+  if (!globalThis.__escrowStore) {
+    globalThis.__escrowStore = {
       escrows: new Map(),
       byPaymentIntent: new Map(),
     }
   }
-  return g.__escrowStore
+  return globalThis.__escrowStore
 }
 
 function nowIso(): string {
@@ -146,8 +150,7 @@ export function listEscrowsForUser(userId: string): EscrowRecord[] {
 }
 
 export function __resetEscrowStoreForTests(): void {
-  const g = globalThis as unknown as { __escrowStore?: Store }
-  g.__escrowStore = {
+  globalThis.__escrowStore = {
     escrows: new Map(),
     byPaymentIntent: new Map(),
   }

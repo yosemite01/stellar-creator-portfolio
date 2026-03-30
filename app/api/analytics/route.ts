@@ -186,7 +186,7 @@ export async function GET(req: NextRequest) {
     MOCK_PLATFORM_AVERAGES,
   );
 
-  const payload = {
+  const payload: Record<string, unknown> = {
     range: { start: range.start.toISOString(), end: range.end.toISOString() },
     granularity,
     isMockData: !hasDatabase,
@@ -201,10 +201,7 @@ export async function GET(req: NextRequest) {
   // --- Export format --------------------------------------------------------
   const format = searchParams.get("format");
   if (format === "csv") {
-    const exported = formatDataForExport(
-      payload as unknown as Record<string, unknown>,
-      "csv",
-    );
+    const exported = formatDataForExport(payload, "csv");
     return new NextResponse(exported.data, {
       status: 200,
       headers: {
