@@ -1,0 +1,117 @@
+
+> my-project@0.1.0 check:types /Users/mac/STELLAR CREATOR -PORTFOLIO 2
+> tsc --noEmit
+
+__tests__/bounty-application-validation.test.ts(2,41): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+__tests__/dispute-security.test.ts(23,44): error TS2345: Argument of type 'ArrayBuffer | SharedArrayBuffer' is not assignable to parameter of type 'ArrayBuffer'.
+  Type 'SharedArrayBuffer' is missing the following properties from type 'ArrayBuffer': resizable, resize, detached, transfer, transferToFixedLength
+__tests__/dispute-security.test.ts(37,7): error TS2345: Argument of type 'ArrayBuffer | SharedArrayBuffer' is not assignable to parameter of type 'ArrayBuffer'.
+  Type 'SharedArrayBuffer' is missing the following properties from type 'ArrayBuffer': resizable, resize, detached, transfer, transferToFixedLength
+__tests__/image-utils.test.ts(13,12): error TS18048: 'sizes' is possibly 'undefined'.
+__tests__/image-utils.test.ts(14,12): error TS18048: 'sizes' is possibly 'undefined'.
+__tests__/image-utils.test.ts(15,12): error TS18048: 'sizes' is possibly 'undefined'.
+__tests__/image-utils.test.ts(16,12): error TS18048: 'sizes' is possibly 'undefined'.
+__tests__/image-utils.test.ts(17,12): error TS18048: 'sizes' is possibly 'undefined'.
+__tests__/reviews.test.ts(8,49): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(16,49): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(33,49): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(43,49): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(57,43): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(76,57): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(91,57): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(107,43): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(115,59): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(131,59): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(148,81): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(156,27): error TS7006: Parameter 'r' implicitly has an 'any' type.
+__tests__/reviews.test.ts(157,26): error TS7006: Parameter 'r' implicitly has an 'any' type.
+__tests__/reviews.test.ts(161,81): error TS2307: Cannot find module '@/lib/review-service' or its corresponding type declarations.
+__tests__/reviews.test.ts(169,27): error TS7006: Parameter 'r' implicitly has an 'any' type.
+__tests__/reviews.test.ts(175,43): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+__tests__/reviews.test.ts(181,43): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+__tests__/reviews.test.ts(187,43): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+__tests__/upload.e2e.test.ts(6,30): error TS2307: Cannot find module '@playwright/test' or its corresponding type declarations.
+__tests__/upload.e2e.test.ts(9,56): error TS7031: Binding element 'page' implicitly has an 'any' type.
+app/admin/analytics/page.tsx(123,33): error TS2339: Property 'get' does not exist on type 'Promise<ReadonlyRequestCookies>'.
+app/api/auth/forgot-password/route.ts(2,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+app/api/auth/register/route.ts(2,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+app/api/auth/reset-password/route.ts(2,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+app/api/auth/verify-email/route.ts(2,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+app/api/bounties/route.ts(18,8): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/bounty-applications/[id]/messages/route.ts(4,75): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/bounty-applications/[id]/route.ts(8,8): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/bounty-applications/route.ts(8,8): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/creators/route.ts(18,8): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/creators/route.ts(113,48): error TS7006: Parameter 's' implicitly has an 'any' type.
+app/api/matching/notify/route.ts(3,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+app/api/matching/route.ts(3,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+app/api/payments/route.ts(4,47): error TS2307: Cannot find module '@/lib/stripe' or its corresponding type declarations.
+app/api/payments/route.ts(14,50): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/referrals/route.ts(15,50): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/reviews/route.ts(13,50): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/reviews/route.ts(153,5): error TS2322: Type 'string | null | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+app/api/users/route.ts(17,8): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+app/api/webhooks/stripe/route.ts(3,51): error TS2307: Cannot find module '@/lib/stripe' or its corresponding type declarations.
+app/creators/page.tsx(10,51): error TS2307: Cannot find module '@/components/pagination' or its corresponding type declarations.
+app/dashboard/files/page.tsx(4,24): error TS2307: Cannot find module '@/components/file-upload' or its corresponding type declarations.
+backend/limit/app/api/middleware.ts(6,67): error TS2307: Cannot find module 'express' or its corresponding type declarations.
+backend/limit/app/api/middleware.ts(14,8): error TS2307: Cannot find module '../lib/security' or its corresponding type declarations.
+backend/limit/app/api/middleware.ts(15,43): error TS2307: Cannot find module '../middleware/rate-limit' or its corresponding type declarations.
+backend/limit/app/api/middleware.ts(16,43): error TS2307: Cannot find module '../lib/api-monitoring' or its corresponding type declarations.
+backend/limit/app/api/middleware.ts(119,20): error TS2532: Object is possibly 'undefined'.
+backend/limit/index.ts(6,21): error TS2307: Cannot find module 'express' or its corresponding type declarations.
+backend/limit/index.ts(27,34): error TS7006: Parameter 'req' implicitly has an 'any' type.
+backend/limit/index.ts(27,39): error TS7006: Parameter 'res' implicitly has an 'any' type.
+backend/limit/index.ts(52,31): error TS7006: Parameter 'req' implicitly has an 'any' type.
+backend/limit/index.ts(52,36): error TS7006: Parameter 'res' implicitly has an 'any' type.
+backend/limit/index.ts(62,29): error TS2339: Property 'logger' does not exist on type '{ middleware: any; monitor: Monitor; }'.
+backend/limit/index.ts(71,32): error TS7006: Parameter 'req' implicitly has an 'any' type.
+backend/limit/index.ts(71,37): error TS7006: Parameter 'res' implicitly has an 'any' type.
+backend/limit/lib/api-monitoring.ts(6,49): error TS2307: Cannot find module 'express' or its corresponding type declarations.
+backend/limit/lib/api-monitoring.ts(343,7): error TS2353: Object literal may only specify known properties, and 'sourceIp' does not exist in type 'Partial<LogEntry>'.
+backend/limit/lib/api-monitoring.ts(538,32): error TS2683: 'this' implicitly has type 'any' because it does not have a type annotation.
+backend/limit/lib/security.ts(6,49): error TS2307: Cannot find module 'express' or its corresponding type declarations.
+backend/limit/lib/security.ts(127,26): error TS2339: Property 'headers' does not exist on type 'AuthenticatedRequest'.
+backend/limit/lib/security.ts(128,28): error TS2339: Property 'headers' does not exist on type 'AuthenticatedRequest'.
+backend/limit/lib/security.ts(296,11): error TS2367: This comparison appears to be unintentional because the types '"string" | "number" | "boolean" | "object"' and '"array"' have no overlap.
+backend/limit/lib/security.ts(299,58): error TS2741: Property 'type' is missing in type 'ValidationSchema' but required in type '{ type: "string" | "number" | "boolean" | "object" | "array"; required?: boolean | undefined; minLength?: number | undefined; maxLength?: number | undefined; min?: number | undefined; ... 4 more ...; properties?: ValidationSchema | undefined; }'.
+backend/limit/middleware/rate-limit.ts(6,49): error TS2307: Cannot find module 'express' or its corresponding type declarations.
+backend/limit/middleware/rate-limit.ts(37,7): error TS2783: 'windowMs' is specified more than once, so this usage will be overwritten.
+backend/limit/middleware/rate-limit.ts(38,7): error TS2783: 'maxRequests' is specified more than once, so this usage will be overwritten.
+backend/limit/middleware/rate-limit.ts(265,9): error TS2683: 'this' implicitly has type 'any' because it does not have a type annotation.
+backend/limit/middleware/rate-limit.ts(265,39): error TS2683: 'this' implicitly has type 'any' because it does not have a type annotation.
+backend/limit/middleware/rate-limit.ts(266,9): error TS2683: 'this' implicitly has type 'any' because it does not have a type annotation.
+backend/limit/middleware/rate-limit.ts(267,34): error TS2683: 'this' implicitly has type 'any' because it does not have a type annotation.
+backend/limit/middleware/rate-limit.ts(296,15): error TS2322: Type '{}' is not assignable to type 'RateLimitConfig & { baseMaxRequests?: number | undefined; }'.
+  Type '{}' is missing the following properties from type 'RateLimitConfig': windowMs, maxRequests
+backend/limit/tests/integration/security.test.ts(6,53): error TS2307: Cannot find module 'express' or its corresponding type declarations.
+backend/limit/tests/runner.ts(6,33): error TS2307: Cannot find module '../unit/rate-limit.test' or its corresponding type declarations.
+backend/limit/tests/runner.ts(7,40): error TS2307: Cannot find module '../integration/security.test' or its corresponding type declarations.
+backend/limit/tests/runner.ts(8,32): error TS2307: Cannot find module '../e2e/api-abuse.test' or its corresponding type declarations.
+backend/limit/tests/unit/rate-limit.test.ts(11,25): error TS2307: Cannot find module 'express' or its corresponding type declarations.
+backend/services/notifications/notification-center.tsx(4,41): error TS2307: Cannot find module 'framer-motion' or its corresponding type declarations.
+backend/services/notifications/notification-logger.ts(2,10): error TS2305: Module '"@prisma/client"' has no exported member 'NotificationStatus'.
+backend/services/notifications/notification-logger.ts(110,21): error TS7006: Parameter 's' implicitly has an 'any' type.
+backend/services/notifications/notification-settings-page.tsx(9,24): error TS2307: Cannot find module 'framer-motion' or its corresponding type declarations.
+backend/services/notifications/notification-settings-page.tsx(466,33): error TS2307: Cannot find module 'framer-motion' or its corresponding type declarations.
+backend/services/notifications/push-route.ts(13,10): error TS2305: Module '"@prisma/client"' has no exported member 'NotificationStatus'.
+components/cards/project-card.tsx(79,13): error TS2783: 'sizes' is specified more than once, so this usage will be overwritten.
+components/forms/bounty-application-form.tsx(6,41): error TS2307: Cannot find module '@/lib/validators' or its corresponding type declarations.
+components/widgets/project-modal.tsx(60,15): error TS2783: 'sizes' is specified more than once, so this usage will be overwritten.
+hooks/useMessages.ts(67,91): error TS2345: Argument of type 'Uint8Array<ArrayBuffer>' is not assignable to parameter of type 'ArrayBuffer'.
+  Type 'Uint8Array<ArrayBuffer>' is missing the following properties from type 'ArrayBuffer': maxByteLength, resizable, resize, detached, and 2 more.
+lib/auth/auth.ts(4,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+lib/notifications.ts(2,15): error TS2305: Module '"@prisma/client"' has no exported member 'Prisma'.
+lib/payments/index.ts(4,10): error TS2305: Module '"./stripe"' has no exported member 'default'.
+lib/prisma.ts(1,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+lib/services/index.ts(3,1): error TS2308: Module './dispute-service' has already exported a member named 'UserRole'. Consider explicitly re-exporting to resolve the ambiguity.
+lib/utils/image-utils.ts(41,77): error TS2339: Property 'formats' does not exist on type 'ImageProps'.
+lib/utils/index.ts(6,10): error TS2724: '"./typography"' has no exported member named 'getTypography'. Did you mean 'typography'?
+lib/utils/mobile-nav-utils.ts(35,24): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+services/api/stellar/contract.ts(31,26): error TS2352: Conversion of type 'LedgerEntryData' to type 'ScVal' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'LedgerEntryData' is missing the following properties from type 'ScVal': b, error, u32, i32, and 16 more.
+services/api/stellar/contract.ts(54,50): error TS2339: Property 'sequence' does not exist on type 'Account'.
+services/api/stellar/contract.ts(86,62): error TS2339: Property 'PENDING' does not exist on type 'typeof GetTransactionStatus'.
+services/api/stellar/contract.ts(101,67): error TS2339: Property 'status' does not exist on type 'never'.
+ ELIFECYCLE  Command failed with exit code 1.

@@ -50,6 +50,7 @@ function validateAttachment(v: unknown): Attachment | null {
   return null;
 }
 
+// Validated shapes for each client message type
 type ValidatedSendMessage = {
   type: "message";
   id: string;
@@ -65,6 +66,11 @@ type ValidatedSendMessage = {
 };
 
 type ValidatedTyping = { type: "typing"; userId: string; threadId: string };
+type ValidatedTyping = {
+  type: "typing";
+  userId: string;
+  threadId: string;
+};
 
 type ValidatedReadReceipt = {
   type: "read-receipt";
@@ -135,6 +141,30 @@ function validateClientMessage(
               : {},
         },
       };
+
+      const value: ValidatedSendMessage = {
+        type: "message",
+        id: isNonEmptyString(obj.id) ? obj.id : crypto.randomUUID(),
+        threadId: isNonEmptyString(obj.threadId) ? obj.threadId : "general",
+        senderId: obj.senderId,
+        recipientId: isNonEmptyString(obj.recipientId)
+          ? obj.recipientId
+          : "all",
+        ciphertext: obj.ciphertext,
+        iv: obj.iv,
+        createdAt: isNonEmptyString(obj.createdAt)
+          ? obj.createdAt
+          : new Date().toISOString(),
+        attachment: validateAttachment(obj.attachment),
+        readBy: isStringArray(obj.readBy) ? obj.readBy : [obj.senderId],
+        metadata:
+          typeof obj.metadata === "object" &&
+          obj.metadata !== null &&
+          !Array.isArray(obj.metadata)
+            ? (obj.metadata as Record<string, unknown>)
+            : {},
+      };
+      return { ok: true, value };
     }
 
     case "typing": {
@@ -318,16 +348,62 @@ const handleMessageEvent = (socket: WebSocket, raw: string) => {
       broadcast({ type: "read-receipt", messageId, userId });
     } else if (parsed.type === "moderate") {
       const { messageId, action, moderatorId, reason } = parsed;
+    const parsed: unknown = JSON.parse(raw);
+    const result = validateClientMessage(parsed);
+
+    if (!result.ok) {
+      socket.send(JSON.stringify({ type: "error", message: result.error }));
+      return;
+    }
+
+    const msg = result.value;
+
+    if (msg.type === "message") {
+      const message: MessagePayload = {
+        id: msg.id,
+        threadId: msg.threadId,
+        senderId: msg.senderId,
+        recipientId: msg.recipientId,
+        ciphertext: msg.ciphertext,
+        iv: msg.iv,
+        createdAt: msg.createdAt,
+        attachment: msg.attachment,
+        status: "sent",
+        readBy: msg.readBy,
+        metadata: msg.metadata,
+      };
+      state.history.push(message);
+      broadcast({ type: "message", data: message });
+    } else if (msg.type === "typing") {
+      broadcast({ type: "typing", userId: msg.userId, threadId: msg.threadId });
+    } else if (msg.type === "read-receipt") {
+      const { messageId, userId } = msg;
+      state.history = state.history.map((m) =>
+        m.id === messageId
+          ? {
+              ...m,
+              status: "read",
+              readBy: Array.from(new Set([...(m.readBy || []), userId])),
+            }
+          : m,
+      );
+      broadcast({ type: "read-receipt", messageId, userId });
+    } else if (msg.type === "moderate") {
+      const { messageId, action, moderatorId, reason } = msg;
       if (action === "delete") {
         state.history = state.history.filter((m) => m.id !== messageId);
       }
       broadcast({ type: "moderated", messageId, action, moderatorId, reason });
     } else if (parsed.type === "ping") {
+    } else if (msg.type === "ping") {
       socket.send(JSON.stringify({ type: "pong", ts: Date.now() }));
     }
   } catch (err) {
     console.error("Invalid payload", err);
     socket.send(JSON.stringify({ type: "error", message: "Invalid payload" }));
+    socket.send(
+      JSON.stringify({ type: "error", message: "Invalid JSON payload" }),
+    );
   }
 };
 
