@@ -4,6 +4,11 @@ import { prisma } from '@/lib/prisma'
 import { deliverTemplatedEmail, type EmailTemplate } from '@/lib/email/mailer'
 import { getRedisClient } from '@/lib/storage/redis'
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __emailNotifyQueue: string[] | undefined
+}
+
 const QUEUE_KEY = 'notifications:email:queue'
 
 export type NotificationEmailCategory =
@@ -22,9 +27,8 @@ type QueuedPayload = {
 }
 
 function getMemoryQueue(): string[] {
-  const g = globalThis as unknown as { __emailNotifyQueue?: string[] }
-  if (!g.__emailNotifyQueue) g.__emailNotifyQueue = []
-  return g.__emailNotifyQueue
+  if (!globalThis.__emailNotifyQueue) globalThis.__emailNotifyQueue = []
+  return globalThis.__emailNotifyQueue
 }
 
 async function enqueueEmailJob(logId: string): Promise<void> {

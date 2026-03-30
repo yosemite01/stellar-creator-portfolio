@@ -1,6 +1,11 @@
 import { getBountyById, type Bounty } from '@/lib/services/creators-data'
 import { persistInAppNotification } from '@/lib/notifications'
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __bountyApplicationStore: Store | undefined
+}
+
 export type ApplicationStatus = 'pending' | 'accepted' | 'rejected'
 
 export interface BountyApplicationRecord {
@@ -60,16 +65,15 @@ type Store = {
 }
 
 function getGlobalStore(): Store {
-  const g = globalThis as unknown as { __bountyApplicationStore?: Store }
-  if (!g.__bountyApplicationStore) {
-    g.__bountyApplicationStore = {
+  if (!globalThis.__bountyApplicationStore) {
+    globalThis.__bountyApplicationStore = {
       applications: [],
       timeline: [],
       messages: [],
       notifications: [],
     }
   }
-  return g.__bountyApplicationStore
+  return globalThis.__bountyApplicationStore
 }
 
 function nowIso(): string {
@@ -322,8 +326,7 @@ export function markAllNotificationsRead(userId: string): number {
 
 /** Test helper: reset in-memory store (do not use in production routes except tests). */
 export function __resetBountyStoreForTests(): void {
-  const g = globalThis as unknown as { __bountyApplicationStore?: Store }
-  g.__bountyApplicationStore = {
+  globalThis.__bountyApplicationStore = {
     applications: [],
     timeline: [],
     messages: [],

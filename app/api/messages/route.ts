@@ -1,5 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __messageState: ServerState | undefined;
+  /** Deno runtime global — only present on Deno Deploy / Deno edge. */
+  var Deno:
+    | {
+        upgradeWebSocket: (
+          r: Request,
+        ) => { socket: WebSocket; response: Response };
+      }
+    | undefined;
+}
+
 type Attachment = {
   name: string;
   type: string;
@@ -66,11 +79,6 @@ type ValidatedSendMessage = {
 };
 
 type ValidatedTyping = { type: "typing"; userId: string; threadId: string };
-type ValidatedTyping = {
-  type: "typing";
-  userId: string;
-  threadId: string;
-};
 
 type ValidatedReadReceipt = {
   type: "read-receipt";
@@ -141,30 +149,6 @@ function validateClientMessage(
               : {},
         },
       };
-
-      const value: ValidatedSendMessage = {
-        type: "message",
-        id: isNonEmptyString(obj.id) ? obj.id : crypto.randomUUID(),
-        threadId: isNonEmptyString(obj.threadId) ? obj.threadId : "general",
-        senderId: obj.senderId,
-        recipientId: isNonEmptyString(obj.recipientId)
-          ? obj.recipientId
-          : "all",
-        ciphertext: obj.ciphertext,
-        iv: obj.iv,
-        createdAt: isNonEmptyString(obj.createdAt)
-          ? obj.createdAt
-          : new Date().toISOString(),
-        attachment: validateAttachment(obj.attachment),
-        readBy: isStringArray(obj.readBy) ? obj.readBy : [obj.senderId],
-        metadata:
-          typeof obj.metadata === "object" &&
-          obj.metadata !== null &&
-          !Array.isArray(obj.metadata)
-            ? (obj.metadata as Record<string, unknown>)
-            : {},
-      };
-      return { ok: true, value };
     }
 
     case "typing": {
@@ -229,11 +213,10 @@ type ServerState = {
 };
 
 const getState = (): ServerState => {
-  const globalRef = globalThis as unknown as { __messageState?: ServerState };
-  if (!globalRef.__messageState) {
-    globalRef.__messageState = { clients: new Set<WebSocket>(), history: [] };
+  if (!globalThis.__messageState) {
+    globalThis.__messageState = { clients: new Set<WebSocket>(), history: [] };
   }
-  return globalRef.__messageState;
+  return globalThis.__messageState;
 };
 
 /**
@@ -257,16 +240,7 @@ const upgradeWebSocket = (
   request: Request,
 ): { socket: WebSocket; response: Response } => {
   // --- Deno Deploy / Deno edge runtime ---
-  const denoUpgrade = (
-    globalThis as unknown as {
-      Deno?: {
-        upgradeWebSocket: (r: Request) => {
-          socket: WebSocket;
-          response: Response;
-        };
-      };
-    }
-  )?.Deno?.upgradeWebSocket;
+  const denoUpgrade = globalThis.Deno?.upgradeWebSocket;
   if (typeof denoUpgrade === "function") {
     return denoUpgrade(request);
   }
@@ -311,43 +285,6 @@ const broadcast = (data: unknown) => {
 const handleMessageEvent = (socket: WebSocket, raw: string) => {
   const state = getState();
   try {
-    const parsed = JSON.parse(raw) as { type: string; [key: string]: any };
-    if (parsed.type === "message") {
-      const message: MessagePayload = {
-        id: parsed.id || crypto.randomUUID(),
-        threadId: parsed.threadId || "general",
-        senderId: parsed.senderId,
-        recipientId: parsed.recipientId || "all",
-        ciphertext: parsed.ciphertext,
-        iv: parsed.iv,
-        createdAt: parsed.createdAt || new Date().toISOString(),
-        attachment: parsed.attachment || null,
-        status: "sent",
-        readBy: parsed.readBy || [parsed.senderId],
-        metadata: parsed.metadata || {},
-      };
-      state.history.push(message);
-      broadcast({ type: "message", data: message });
-    } else if (parsed.type === "typing") {
-      broadcast({
-        type: "typing",
-        userId: parsed.userId,
-        threadId: parsed.threadId,
-      });
-    } else if (parsed.type === "read-receipt") {
-      const { messageId, userId } = parsed;
-      state.history = state.history.map((msg) =>
-        msg.id === messageId
-          ? {
-              ...msg,
-              status: "read",
-              readBy: Array.from(new Set([...(msg.readBy || []), userId])),
-            }
-          : msg,
-      );
-      broadcast({ type: "read-receipt", messageId, userId });
-    } else if (parsed.type === "moderate") {
-      const { messageId, action, moderatorId, reason } = parsed;
     const parsed: unknown = JSON.parse(raw);
     const result = validateClientMessage(parsed);
 
@@ -394,13 +331,11 @@ const handleMessageEvent = (socket: WebSocket, raw: string) => {
         state.history = state.history.filter((m) => m.id !== messageId);
       }
       broadcast({ type: "moderated", messageId, action, moderatorId, reason });
-    } else if (parsed.type === "ping") {
     } else if (msg.type === "ping") {
       socket.send(JSON.stringify({ type: "pong", ts: Date.now() }));
     }
   } catch (err) {
     console.error("Invalid payload", err);
-    socket.send(JSON.stringify({ type: "error", message: "Invalid payload" }));
     socket.send(
       JSON.stringify({ type: "error", message: "Invalid JSON payload" }),
     );
