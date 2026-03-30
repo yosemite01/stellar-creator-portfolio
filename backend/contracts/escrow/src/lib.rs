@@ -22,6 +22,7 @@ pub enum ReleaseCondition {
     Timelock(u64),
 }
 
+<<<<<<< HEAD
 #[derive(Clone, Copy, PartialEq)]
 #[contracttype]
 pub enum DisputeOutcome {
@@ -49,6 +50,24 @@ pub struct Dispute {
     pub resolved: bool,
     pub outcome: Option<DisputeOutcome>,
     pub resolution_timestamp: Option<u64>,
+=======
+/// Immutable multi-sig configuration stored with the escrow.
+#[derive(Clone)]
+#[contracttype]
+pub struct MultiSigConfig {
+    /// Ordered list of authorized signatories (no duplicates).
+    pub signatories: soroban_sdk::Vec<Address>,
+    /// Minimum number of approvals required to release funds.
+    pub threshold: u32,
+}
+
+/// Optional wrapper for MultiSigConfig (Soroban SDK does not support Option<CustomContractType>).
+#[derive(Clone)]
+#[contracttype]
+pub enum OptionalMultiSigConfig {
+    None,
+    Some(MultiSigConfig),
+>>>>>>> c2f18b71 (Update escrow contract with new implementation and test snapshots)
 }
 
 #[contracttype]
@@ -61,17 +80,22 @@ pub struct EscrowAccount {
     pub status: EscrowStatus,
     pub release_condition: ReleaseCondition,
     pub created_at: u64,
+    pub multi_sig: OptionalMultiSigConfig,
 }
 
 #[contracttype]
 pub enum DataKey {
     EscrowCounter,
     Escrow(u64),
+<<<<<<< HEAD
     Governance,
     Arbitrator,
     Dispute(u64),
     Evidence(u64, u32),
     PartialRefundBalance(u64),
+=======
+    Approvals(u64),
+>>>>>>> c2f18b71 (Update escrow contract with new implementation and test snapshots)
 }
 
 // =============================================================================
@@ -120,16 +144,46 @@ impl EscrowContract {
         amount: i128,
         token: Address,
         release_condition: ReleaseCondition,
+        multi_sig: OptionalMultiSigConfig,
     ) -> u64 {
         payer.require_auth();
         assert!(amount > 0, "Amount must be positive");
 
+<<<<<<< HEAD
         // #179: Validate token implements the token interface by calling balance().
         // This will trap if `token` is not a valid SEP-41 token contract,
         // preventing funds from being locked with an unrecoverable address.
         let token_client = TokenClient::new(&env, &token);
         let _ = token_client.balance(&payer); // panics if token is invalid
         token_client.transfer(&payer, &env.current_contract_address(), &amount);
+=======
+        // Validate MultiSigConfig if provided
+        if let OptionalMultiSigConfig::Some(ref cfg) = multi_sig {
+            assert!(!cfg.signatories.is_empty(), "Signatory list must not be empty");
+            assert!(cfg.threshold > 0, "Threshold must be positive");
+            assert!(
+                cfg.threshold <= cfg.signatories.len(),
+                "Threshold exceeds signatory count"
+            );
+            // Duplicate detection using nested iteration (no_std compatible)
+            let len = cfg.signatories.len();
+            let mut i = 0u32;
+            while i < len {
+                let mut j = i + 1;
+                while j < len {
+                    assert!(
+                        cfg.signatories.get(i).unwrap() != cfg.signatories.get(j).unwrap(),
+                        "Duplicate signatory"
+                    );
+                    j += 1;
+                }
+                i += 1;
+            }
+        }
+
+        let token_client = TokenClient::new(&env, &token);
+        token_client.transfer(&payer, env.current_contract_address(), &amount);
+>>>>>>> c2f18b71 (Update escrow contract with new implementation and test snapshots)
 
         let mut counter: u64 = env
             .storage()
@@ -147,6 +201,7 @@ impl EscrowContract {
             status: EscrowStatus::Active,
             release_condition,
             created_at: env.ledger().timestamp(),
+            multi_sig,
         };
 
         env.storage()
@@ -206,11 +261,28 @@ impl EscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .expect("Escrow not found");
 
-        assert!(
-            caller == escrow.payer || caller == escrow.payee,
-            "Unauthorized"
-        );
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
+
+        match escrow.multi_sig.clone() {
+            OptionalMultiSigConfig::Some(cfg) => {
+                // Multi-sig path: any caller may trigger release once quorum is reached.
+                // Quorum check: approval count must meet threshold.
+                let approvals: soroban_sdk::Vec<Address> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Approvals(escrow_id))
+                    .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+                assert!(approvals.len() >= cfg.threshold, "Quorum not reached");
+            }
+            OptionalMultiSigConfig::None => {
+                // Single-sig path: caller must be payer or payee.
+                assert!(
+                    caller == escrow.payer || caller == escrow.payee,
+                    "Unauthorized"
+                );
+            }
+        }
+
         assert!(
             Self::can_release(env.clone(), escrow_id),
             "Release condition not met"
@@ -451,6 +523,108 @@ impl EscrowContract {
             .get(&DataKey::EscrowCounter)
             .unwrap_or(0)
     }
+<<<<<<< HEAD
+=======
+
+    /// Records a signatory's approval for a multi-sig escrow release.
+    ///
+    /// # Parameters
+    /// - `env`: Soroban environment.
+    /// - `escrow_id`: Escrow ID.
+    /// - `signatory`: Address of the approving signatory (must authenticate).
+    ///
+    /// # Returns
+    /// - `u32`: Updated approval count after this call.
+    ///
+    /// # Errors
+    /// - Panics with "Escrow not found" if escrow does not exist.
+    /// - Panics with "Escrow not active" if escrow is not in Active status.
+    /// - Panics with "Not a multi-sig escrow" if escrow has no MultiSigConfig.
+    /// - Panics with "Unauthorized" if signatory is not in the signatory list.
+    ///
+    /// # Idempotency
+    /// - If the signatory has already approved, the call is a no-op and returns
+    ///   the current approval count unchanged.
+    pub fn approve_release(env: Env, escrow_id: u64, signatory: Address) -> u32 {
+        signatory.require_auth();
+
+        let escrow: EscrowAccount = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
+
+        let cfg = match escrow.multi_sig {
+            OptionalMultiSigConfig::Some(ref c) => c.clone(),
+            OptionalMultiSigConfig::None => panic!("Not a multi-sig escrow"),
+        };
+
+        // Verify signatory is authorized
+        let mut authorized = false;
+        let sig_len = cfg.signatories.len();
+        let mut i = 0u32;
+        while i < sig_len {
+            if cfg.signatories.get(i).unwrap() == signatory {
+                authorized = true;
+                break;
+            }
+            i += 1;
+        }
+        assert!(authorized, "Unauthorized");
+
+        // Load existing approvals (default to empty vec)
+        let mut approvals: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Approvals(escrow_id))
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        // Idempotency: skip write if already present
+        let app_len = approvals.len();
+        let mut already_approved = false;
+        let mut j = 0u32;
+        while j < app_len {
+            if approvals.get(j).unwrap() == signatory {
+                already_approved = true;
+                break;
+            }
+            j += 1;
+        }
+
+        if !already_approved {
+            approvals.push_back(signatory);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Approvals(escrow_id), &approvals);
+        }
+
+        approvals.len()
+    }
+
+    pub fn get_approvals(env: Env, escrow_id: u64) -> soroban_sdk::Vec<Address> {
+        let escrow: EscrowAccount = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        match escrow.multi_sig {
+            OptionalMultiSigConfig::Some(_) => env
+                .storage()
+                .persistent()
+                .get(&DataKey::Approvals(escrow_id))
+                .unwrap_or_else(|| soroban_sdk::Vec::new(&env)),
+            OptionalMultiSigConfig::None => soroban_sdk::Vec::new(&env),
+        }
+    }
+
+    pub fn get_approval_count(env: Env, escrow_id: u64) -> u32 {
+        Self::get_approvals(env, escrow_id).len()
+    }
+}
+>>>>>>> c2f18b71 (Update escrow contract with new implementation and test snapshots)
 
     /// Sets the governance contract address.
     /// Can only be called once by an authorized caller.
@@ -478,6 +652,7 @@ mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::{token, Env};
+    extern crate std;
 
     fn setup_token(env: &Env, admin: &Address) -> Address {
         let token_id = env.register_stellar_asset_contract_v2(admin.clone());
@@ -913,11 +1088,11 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         assert_eq!(id, 1);
         assert_eq!(client.get_escrow_count(), 1);
 
-        let id2 = client.deposit(&payer, &payee, &200, &token, &ReleaseCondition::OnCompletion);
+        let id2 = client.deposit(&payer, &payee, &200, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         assert_eq!(id2, 2);
         assert_eq!(client.get_escrow_count(), 2);
     }
@@ -1166,7 +1341,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         let escrow = client.get_escrow(&id);
 
         assert_eq!(escrow.payer, payer);
@@ -1218,7 +1393,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        client.deposit(&payer, &payee, &0, &token, &ReleaseCondition::OnCompletion);
+        client.deposit(&payer, &payee, &0, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
     }
 
     #[test]
@@ -1277,7 +1452,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        client.deposit(&payer, &payee, &-1, &token, &ReleaseCondition::OnCompletion);
+        client.deposit(&payer, &payee, &-1, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
     }
 
     #[test]
@@ -1359,7 +1534,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         let result = client.release_funds(&id, &payer);
         assert!(result);
 
@@ -1476,7 +1651,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &300, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &300, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         let result = client.release_funds(&id, &payee);
         assert!(result);
 
@@ -1530,7 +1705,7 @@ mod tests {
         let random = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         client.release_funds(&id, &random);
     }
 
@@ -1567,7 +1742,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         client.release_funds(&id, &payer);
         // Second release should panic
         client.release_funds(&id, &payer);
@@ -1611,7 +1786,7 @@ mod tests {
         let token = setup_token(&env, &payer);
 
         let deadline = 1000u64;
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::Timelock(deadline));
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::Timelock(deadline), &OptionalMultiSigConfig::None);
 
         // Before deadline: cannot release
         assert!(!client.can_release(&id));
@@ -1657,7 +1832,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::Timelock(9999));
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::Timelock(9999), &OptionalMultiSigConfig::None);
         // Timestamp is 0 by default, deadline is 9999 — should panic
         client.release_funds(&id, &payer);
     }
@@ -1699,7 +1874,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         let result = client.refund_escrow(&id);
         assert!(result);
 
@@ -1876,7 +2051,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         client.refund_escrow(&id);
         // Second refund should panic
         client.refund_escrow(&id);
@@ -1919,7 +2094,7 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &500, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         client.release_funds(&id, &payer);
         // Refund after release should panic
         client.refund_escrow(&id);
@@ -2018,7 +2193,1320 @@ mod tests {
         let payee = Address::generate(&env);
         let token = setup_token(&env, &payer);
 
-        let id = client.deposit(&payer, &payee, &100, &token, &ReleaseCondition::OnCompletion);
+        let id = client.deposit(&payer, &payee, &100, &token, &ReleaseCondition::OnCompletion, &OptionalMultiSigConfig::None);
         assert!(client.can_release(&id));
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 2.2: MultiSigConfig validation tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "Signatory list must not be empty")]
+    fn test_deposit_multisig_empty_signatories_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let cfg = MultiSigConfig {
+            signatories: soroban_sdk::Vec::new(&env),
+            threshold: 1,
+        };
+        client.deposit(
+            &payer,
+            &payee,
+            &500,
+            &token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::Some(cfg),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Threshold must be positive")]
+    fn test_deposit_multisig_zero_threshold_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let sig1 = Address::generate(&env);
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1);
+
+        let cfg = MultiSigConfig {
+            signatories: sigs,
+            threshold: 0,
+        };
+        client.deposit(
+            &payer,
+            &payee,
+            &500,
+            &token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::Some(cfg),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Threshold exceeds signatory count")]
+    fn test_deposit_multisig_threshold_exceeds_signatories_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let sig1 = Address::generate(&env);
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1);
+
+        let cfg = MultiSigConfig {
+            signatories: sigs,
+            threshold: 2, // 2 > 1 signatory
+        };
+        client.deposit(
+            &payer,
+            &payee,
+            &500,
+            &token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::Some(cfg),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Duplicate signatory")]
+    fn test_deposit_multisig_duplicate_signatory_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let sig1 = Address::generate(&env);
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+        sigs.push_back(sig1); // duplicate
+
+        let cfg = MultiSigConfig {
+            signatories: sigs,
+            threshold: 1,
+        };
+        client.deposit(
+            &payer,
+            &payee,
+            &500,
+            &token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::Some(cfg),
+        );
+    }
+
+    #[test]
+    fn test_deposit_multisig_valid_config_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+        let sig3 = Address::generate(&env);
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1);
+        sigs.push_back(sig2);
+        sigs.push_back(sig3);
+
+        let cfg = MultiSigConfig {
+            signatories: sigs,
+            threshold: 2, // 2-of-3
+        };
+        let id = client.deposit(
+            &payer,
+            &payee,
+            &500,
+            &token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::Some(cfg),
+        );
+        assert_eq!(id, 1);
+        let escrow = client.get_escrow(&id);
+        assert_eq!(escrow.status, EscrowStatus::Active);
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 3.1: approve_release unit tests
+    // -------------------------------------------------------------------------
+
+    /// Helper: create a multi-sig escrow and return (contract_id, client, escrow_id, signatories).
+    fn setup_multisig_escrow<'a>(
+        env: &'a Env,
+        payer: &Address,
+        payee: &Address,
+        token: &Address,
+        signatories: soroban_sdk::Vec<Address>,
+        threshold: u32,
+    ) -> (Address, EscrowContractClient<'a>, u64) {
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(env, &contract_id);
+        let cfg = MultiSigConfig { signatories, threshold };
+        let id = client.deposit(
+            payer,
+            payee,
+            &500,
+            token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::Some(cfg),
+        );
+        (contract_id, client, id)
+    }
+
+    #[test]
+    fn test_approve_release_1_of_1() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+        let count = client.approve_release(&id, &sig1);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_approve_release_2_of_3() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+        let sig3 = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+        sigs.push_back(sig2.clone());
+        sigs.push_back(sig3.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 2);
+
+        let count1 = client.approve_release(&id, &sig1);
+        assert_eq!(count1, 1);
+
+        let count2 = client.approve_release(&id, &sig2);
+        assert_eq!(count2, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized")]
+    fn test_approve_release_unauthorized_signatory_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+        let outsider = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+        client.approve_release(&id, &outsider);
+    }
+
+    #[test]
+    fn test_approve_release_idempotent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+        let count1 = client.approve_release(&id, &sig1);
+        let count2 = client.approve_release(&id, &sig1);
+        let count3 = client.approve_release(&id, &sig1);
+        assert_eq!(count1, 1);
+        assert_eq!(count2, 1);
+        assert_eq!(count3, 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 7.1: approve_release rejects non-Active escrows (Requirements 6.4)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "Escrow not active")]
+    fn test_approve_release_on_released_escrow_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+        // Approve to reach quorum, then release funds (status → Released)
+        client.approve_release(&id, &sig1);
+        client.release_funds(&id, &payer);
+
+        // Now approve should panic with "Escrow not active"
+        client.approve_release(&id, &sig1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Escrow not active")]
+    fn test_approve_release_on_refunded_escrow_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+        // Refund the escrow (status → Refunded)
+        client.refund_escrow(&id);
+
+        // Now approve should panic with "Escrow not active"
+        client.approve_release(&id, &sig1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Not a multi-sig escrow")]
+    fn test_approve_release_on_single_sig_escrow_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let id = client.deposit(
+            &payer,
+            &payee,
+            &500,
+            &token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::None,
+        );
+
+        let random = Address::generate(&env);
+        client.approve_release(&id, &random);
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 4.1: release_funds multi-sig unit tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_multisig_release_at_quorum_2_of_3() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+        let sig3 = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+        sigs.push_back(sig2.clone());
+        sigs.push_back(sig3.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 2);
+
+        // Approve with 2 signatories to reach quorum
+        client.approve_release(&id, &sig1);
+        client.approve_release(&id, &sig2);
+
+        // Any caller can trigger release once quorum is reached
+        let any_caller = Address::generate(&env);
+        let result = client.release_funds(&id, &any_caller);
+        assert!(result);
+
+        let escrow = client.get_escrow(&id);
+        assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    #[test]
+    #[should_panic(expected = "Quorum not reached")]
+    fn test_multisig_release_below_quorum_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+        let sig3 = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+        sigs.push_back(sig2.clone());
+        sigs.push_back(sig3.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 2);
+
+        // Only 1 approval — below threshold of 2
+        client.approve_release(&id, &sig1);
+
+        // Should panic with "Quorum not reached"
+        client.release_funds(&id, &payer);
+    }
+
+    #[test]
+    fn test_multisig_release_any_caller_once_quorum_reached() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+        sigs.push_back(sig2.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 2);
+
+        // Reach quorum
+        client.approve_release(&id, &sig1);
+        client.approve_release(&id, &sig2);
+
+        // A completely unrelated address triggers the release
+        let stranger = Address::generate(&env);
+        let result = client.release_funds(&id, &stranger);
+        assert!(result);
+
+        let escrow = client.get_escrow(&id);
+        assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 2.3: Property test for invalid multi-sig config rejection
+    // Feature: escrow-multi-sig, Property 2: invalid config rejected
+    // Validates: Requirements 1.3, 1.4, 1.5, 6.1
+    // -------------------------------------------------------------------------
+
+    /// Helper: attempt a deposit with the given config and return whether it panicked.
+    fn deposit_panics(
+        env: &Env,
+        contract_id: &Address,
+        token: &Address,
+        payer: &Address,
+        payee: &Address,
+        cfg: OptionalMultiSigConfig,
+    ) -> bool {
+        // Soroban's Env is not UnwindSafe, so we drive the call through the
+        // generated client which invokes the contract via the test host.
+        // We detect rejection by catching the panic that Soroban raises.
+        let client = EscrowContractClient::new(env, contract_id);
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            client.deposit(
+                payer,
+                payee,
+                &500,
+                token,
+                &ReleaseCondition::OnCompletion,
+                &cfg,
+            );
+        }));
+        result.is_err()
+    }
+
+    proptest::proptest! {
+        // Property 2: Deposit validation rejects invalid multi-sig configs
+        // For any MultiSigConfig where threshold == 0, signatories is empty,
+        // threshold > len(signatories), or signatories contains duplicates,
+        // the deposit call SHALL panic.
+        #[test]
+        fn prop_invalid_multisig_config_rejected(
+            // Case selector: 0=empty list, 1=zero threshold, 2=threshold>N, 3=duplicate
+            case in 0u8..4u8,
+            // Number of distinct signatories for cases 2 and 3 (1..=5)
+            n_sigs in 1usize..=5usize,
+            // For case 2: threshold offset above N (1..=3)
+            excess in 1u32..=3u32,
+            // For case 3: which index to duplicate (0..=4, clamped to n_sigs-1)
+            dup_idx in 0usize..5usize,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+            let contract_id = env.register(EscrowContract, ());
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            let panicked = match case {
+                // Case 0: empty signatory list, threshold=1
+                0 => {
+                    let cfg = MultiSigConfig {
+                        signatories: soroban_sdk::Vec::new(&env),
+                        threshold: 1,
+                    };
+                    deposit_panics(&env, &contract_id, &token, &payer, &payee,
+                        OptionalMultiSigConfig::Some(cfg))
+                }
+                // Case 1: zero threshold, one valid signatory
+                1 => {
+                    let sig = Address::generate(&env);
+                    let mut sigs = soroban_sdk::Vec::new(&env);
+                    sigs.push_back(sig);
+                    let cfg = MultiSigConfig { signatories: sigs, threshold: 0 };
+                    deposit_panics(&env, &contract_id, &token, &payer, &payee,
+                        OptionalMultiSigConfig::Some(cfg))
+                }
+                // Case 2: threshold > N signatories
+                2 => {
+                    let mut sigs = soroban_sdk::Vec::new(&env);
+                    for _ in 0..n_sigs {
+                        sigs.push_back(Address::generate(&env));
+                    }
+                    let threshold = n_sigs as u32 + excess;
+                    let cfg = MultiSigConfig { signatories: sigs, threshold };
+                    deposit_panics(&env, &contract_id, &token, &payer, &payee,
+                        OptionalMultiSigConfig::Some(cfg))
+                }
+                // Case 3: duplicate signatory
+                _ => {
+                    // Build n_sigs distinct addresses, then duplicate one
+                    let mut addrs: StdVec<Address> = (0..n_sigs)
+                        .map(|_| Address::generate(&env))
+                        .collect();
+                    let dup = addrs[dup_idx % n_sigs].clone();
+                    addrs.push(dup);
+
+                    let mut sigs = soroban_sdk::Vec::new(&env);
+                    for a in &addrs {
+                        sigs.push_back(a.clone());
+                    }
+                    // threshold=1 so only the duplicate check can fire
+                    let cfg = MultiSigConfig { signatories: sigs, threshold: 1 };
+                    deposit_panics(&env, &contract_id, &token, &payer, &payee,
+                        OptionalMultiSigConfig::Some(cfg))
+                }
+            };
+
+            proptest::prop_assert!(panicked, "Expected deposit to panic for invalid config (case {})", case);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 3.3: Property test for unauthorized signatory rejection
+    // Feature: escrow-multi-sig, Property 5: unauthorized signatory rejected
+    // Validates: Requirements 2.2
+    // -------------------------------------------------------------------------
+    proptest::proptest! {
+        /// Property 5: Unauthorized signatory rejection
+        /// For any Multi_Sig_Escrow and any address NOT in the signatory list,
+        /// calling `approve_release` SHALL be rejected with "Unauthorized".
+        #[test]
+        fn prop_unauthorized_signatory_rejected(
+            n_sigs in 1usize..=4usize,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            // Build n_sigs distinct signatories
+            let mut sigs = soroban_sdk::Vec::new(&env);
+            for _ in 0..n_sigs {
+                sigs.push_back(Address::generate(&env));
+            }
+
+            let (_cid, client, id) =
+                setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+            // Generate a fresh address that is NOT in the signatory list
+            let outsider = Address::generate(&env);
+
+            // approve_release with the outsider must panic with "Unauthorized"
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                client.approve_release(&id, &outsider);
+            }));
+
+            proptest::prop_assert!(
+                result.is_err(),
+                "Expected approve_release to panic for unauthorized address"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 4.2: Property test for quorum gate
+    // Feature: escrow-multi-sig, Property 4: quorum gate
+    // Validates: Requirements 3.1, 3.2, 3.3
+    // -------------------------------------------------------------------------
+    proptest::proptest! {
+        /// Property 4: Quorum gate
+        /// For any Multi_Sig_Escrow with threshold T and K recorded approvals
+        /// where K < T, calling `release_funds` SHALL fail. Once K >= T,
+        /// calling `release_funds` SHALL succeed and transfer funds to the payee.
+        #[test]
+        fn prop_quorum_gate(
+            n_sigs in 1usize..=4usize,
+            threshold in 1u32..=4u32,
+            k_approvals in 0usize..=4usize,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            // Clamp threshold to n_sigs so the config is always valid
+            let threshold = threshold.min(n_sigs as u32);
+            // Clamp k to n_sigs (can't approve more times than there are signatories)
+            let k = k_approvals.min(n_sigs);
+
+            // Build n_sigs distinct signatories
+            let signatories: StdVec<Address> = (0..n_sigs)
+                .map(|_| Address::generate(&env))
+                .collect();
+            let mut sigs = soroban_sdk::Vec::new(&env);
+            for s in &signatories {
+                sigs.push_back(s.clone());
+            }
+
+            let (_cid, client, id) =
+                setup_multisig_escrow(&env, &payer, &payee, &token, sigs, threshold);
+
+            // Submit k distinct approvals
+            for i in 0..k {
+                client.approve_release(&id, &signatories[i]);
+            }
+
+            let any_caller = Address::generate(&env);
+
+            if (k as u32) < threshold {
+                // Below quorum — release_funds must panic
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    client.release_funds(&id, &any_caller);
+                }));
+                proptest::prop_assert!(
+                    result.is_err(),
+                    "Expected release_funds to panic when k={} < threshold={}", k, threshold
+                );
+            } else {
+                // At or above quorum — release_funds must succeed
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    client.release_funds(&id, &any_caller)
+                }));
+                proptest::prop_assert!(
+                    result.is_ok(),
+                    "Expected release_funds to succeed when k={} >= threshold={}", k, threshold
+                );
+                let escrow = client.get_escrow(&id);
+                proptest::prop_assert_eq!(
+                    escrow.status,
+                    EscrowStatus::Released,
+                    "Expected escrow status to be Released after successful release"
+                );
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 4.3: Property test for single-sig backward compatibility
+    // Feature: escrow-multi-sig, Property 1: single-sig backward compat
+    // Validates: Requirements 5.1, 5.2
+    // -------------------------------------------------------------------------
+    proptest::proptest! {
+        /// Property 1: Single-sig backward compatibility
+        /// For any escrow created without a MultiSigConfig, calling `release_funds`
+        /// with the payer or payee as caller and a satisfied release condition SHALL
+        /// succeed, and calling it with any other address SHALL fail — identical to
+        /// pre-feature behavior.
+        #[test]
+        fn prop_single_sig_backward_compat(
+            amount in 1i128..=10000i128,
+            caller_is_payer in proptest::bool::ANY,
+            use_third_party in proptest::bool::ANY,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            let contract_id = env.register(EscrowContract, ());
+            let client = EscrowContractClient::new(&env, &contract_id);
+
+            // Create a single-sig escrow (no MultiSigConfig)
+            let id = client.deposit(
+                &payer,
+                &payee,
+                &amount,
+                &token,
+                &ReleaseCondition::OnCompletion,
+                &OptionalMultiSigConfig::None,
+            );
+
+            if use_third_party {
+                // A random address that is neither payer nor payee must be rejected
+                let stranger = Address::generate(&env);
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    client.release_funds(&id, &stranger);
+                }));
+                proptest::prop_assert!(
+                    result.is_err(),
+                    "Expected release_funds to panic for third-party caller on single-sig escrow"
+                );
+            } else {
+                // Payer or payee must succeed
+                let caller = if caller_is_payer { &payer } else { &payee };
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    client.release_funds(&id, caller)
+                }));
+                proptest::prop_assert!(
+                    result.is_ok(),
+                    "Expected release_funds to succeed for {} on single-sig escrow",
+                    if caller_is_payer { "payer" } else { "payee" }
+                );
+                let escrow = client.get_escrow(&id);
+                proptest::prop_assert_eq!(
+                    escrow.status,
+                    EscrowStatus::Released,
+                    "Expected escrow status to be Released after successful release"
+                );
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 3.2: Property test for approval idempotence
+    // Feature: escrow-multi-sig, Property 3: approval idempotent
+    // Validates: Requirements 2.3
+    // -------------------------------------------------------------------------
+    proptest::proptest! {
+        /// Property 3: Approval idempotence
+        /// For any Multi_Sig_Escrow and any authorized signatory, calling
+        /// `approve_release` N times (N ≥ 1) SHALL result in exactly one
+        /// approval recorded for that signatory — the approval count SHALL be
+        /// the same after the first call as after any subsequent call.
+        #[test]
+        fn prop_approval_idempotent(
+            // Number of times to call approve_release (1..=5)
+            n_calls in 1u32..=5u32,
+            // Which of the 3 signatories to use (0..3)
+            sig_idx in 0usize..3usize,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            // Build a 3-signatory, 1-of-3 multi-sig escrow
+            let sig0 = Address::generate(&env);
+            let sig1 = Address::generate(&env);
+            let sig2 = Address::generate(&env);
+            let mut sigs = soroban_sdk::Vec::new(&env);
+            sigs.push_back(sig0.clone());
+            sigs.push_back(sig1.clone());
+            sigs.push_back(sig2.clone());
+
+            let (_cid, client, id) =
+                setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+            let chosen = [&sig0, &sig1, &sig2][sig_idx];
+
+            // Call approve_release n_calls times for the same signatory
+            let mut last_count = 0u32;
+            for _ in 0..n_calls {
+                last_count = client.approve_release(&id, chosen);
+            }
+
+            // Regardless of n_calls, the count for this signatory must be 1
+            proptest::prop_assert_eq!(last_count, 1u32,
+                "Expected approval count == 1 after {} calls, got {}", n_calls, last_count);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 6.1: Unit tests for get_approvals
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_approvals_multisig_no_approvals_returns_empty() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let sig1 = Address::generate(&env);
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1);
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+        let approvals = client.get_approvals(&id);
+        assert_eq!(approvals.len(), 0);
+    }
+
+    #[test]
+    fn test_get_approvals_multisig_after_approvals_returns_those_addresses() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+        let sig3 = Address::generate(&env);
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+        sigs.push_back(sig2.clone());
+        sigs.push_back(sig3.clone());
+
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 2);
+
+        client.approve_release(&id, &sig1);
+        client.approve_release(&id, &sig3);
+
+        let approvals = client.get_approvals(&id);
+        assert_eq!(approvals.len(), 2);
+        assert!(approvals.contains(&sig1));
+        assert!(approvals.contains(&sig3));
+        assert!(!approvals.contains(&sig2));
+    }
+
+    #[test]
+    fn test_get_approvals_single_sig_returns_empty() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let id = client.deposit(
+            &payer,
+            &payee,
+            &1000,
+            &token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::None,
+        );
+
+        let approvals = client.get_approvals(&id);
+        assert_eq!(approvals.len(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Escrow not found")]
+    fn test_get_approvals_nonexistent_escrow_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        client.get_approvals(&9999);
+    }
+
+    #[test]
+    fn test_get_approval_count_returns_correct_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+        let sig3 = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let mut signatories = soroban_sdk::Vec::new(&env);
+        signatories.push_back(sig1.clone());
+        signatories.push_back(sig2.clone());
+        signatories.push_back(sig3.clone());
+
+        let id = client.deposit(
+            &payer,
+            &payee,
+            &1000,
+            &token,
+            &ReleaseCondition::OnCompletion,
+            &OptionalMultiSigConfig::Some(MultiSigConfig {
+                signatories,
+                threshold: 2,
+            }),
+        );
+
+        assert_eq!(client.get_approval_count(&id), 0);
+
+        client.approve_release(&id, &sig1);
+        assert_eq!(client.get_approval_count(&id), 1);
+
+        client.approve_release(&id, &sig2);
+        assert_eq!(client.get_approval_count(&id), 2);
+
+        client.approve_release(&id, &sig3);
+        assert_eq!(client.get_approval_count(&id), 3);
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 6.3: Property test for approval round-trip
+    // Feature: escrow-multi-sig, Property 6: approval round-trip
+    // Validates: Requirements 4.1, 4.4
+    // -------------------------------------------------------------------------
+    proptest::proptest! {
+        /// Property 6: Approval round-trip
+        /// For any Multi_Sig_Escrow, after a set of distinct authorized signatories
+        /// submit approvals, `get_approvals` SHALL return exactly those addresses
+        /// (no more, no fewer), and `get_approval_count` SHALL equal the size of
+        /// that set.
+        #[test]
+        fn prop_approval_round_trip(
+            n_sigs in 1usize..=5usize,
+            k_approve in 0usize..=5usize,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            // Build n_sigs distinct signatories
+            let signatories: StdVec<Address> = (0..n_sigs)
+                .map(|_| Address::generate(&env))
+                .collect();
+            let mut sigs = soroban_sdk::Vec::new(&env);
+            for s in &signatories {
+                sigs.push_back(s.clone());
+            }
+
+            // threshold=1 so quorum is not a concern for this test
+            let (_cid, client, id) =
+                setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 1);
+
+            // k = min(k_approve, n_sigs) distinct approvals from the first k signatories
+            let k = k_approve.min(n_sigs);
+            for i in 0..k {
+                client.approve_release(&id, &signatories[i]);
+            }
+
+            // get_approvals must return exactly k addresses
+            let approvals = client.get_approvals(&id);
+            proptest::prop_assert_eq!(
+                approvals.len() as usize,
+                k,
+                "get_approvals returned {} addresses, expected {}", approvals.len(), k
+            );
+
+            // get_approval_count must equal k
+            let count = client.get_approval_count(&id);
+            proptest::prop_assert_eq!(
+                count as usize,
+                k,
+                "get_approval_count returned {}, expected {}", count, k
+            );
+
+            // Each of the k approving signatories must appear in the returned list
+            for i in 0..k {
+                proptest::prop_assert!(
+                    approvals.contains(&signatories[i]),
+                    "Signatory {} not found in get_approvals result", i
+                );
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 7.2: Property test for no approvals/release after terminal state
+    // Feature: escrow-multi-sig, Property 7: no approvals after terminal
+    // Validates: Requirements 6.4
+    // -------------------------------------------------------------------------
+    proptest::proptest! {
+        /// Property 7: Finality — no approvals after terminal state
+        /// For any escrow that has transitioned to Released or Refunded,
+        /// calling `approve_release` SHALL be rejected, and calling
+        /// `release_funds` SHALL be rejected.
+        #[test]
+        fn prop_no_approvals_after_terminal(
+            // Number of signatories: 1..=3
+            n_sigs in 1usize..=3usize,
+            // Threshold: 1..=n_sigs (clamped below)
+            threshold_raw in 1u32..=3u32,
+            // true = reach quorum and release; false = refund
+            do_release in proptest::bool::ANY,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            // Clamp threshold to n_sigs so the config is always valid
+            let threshold = threshold_raw.min(n_sigs as u32);
+
+            // Build n_sigs distinct signatories
+            let signatories: StdVec<Address> = (0..n_sigs)
+                .map(|_| Address::generate(&env))
+                .collect();
+            let mut sigs = soroban_sdk::Vec::new(&env);
+            for s in &signatories {
+                sigs.push_back(s.clone());
+            }
+
+            let (_cid, client, id) =
+                setup_multisig_escrow(&env, &payer, &payee, &token, sigs, threshold);
+
+            if do_release {
+                // Approve up to threshold, then release
+                for i in 0..(threshold as usize) {
+                    client.approve_release(&id, &signatories[i]);
+                }
+                let any_caller = Address::generate(&env);
+                client.release_funds(&id, &any_caller);
+            } else {
+                // Refund without any approvals (payer auth is mocked)
+                client.refund_escrow(&id);
+            }
+
+            // After terminal state: approve_release must be rejected
+            let approve_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                client.approve_release(&id, &signatories[0]);
+            }));
+            proptest::prop_assert!(
+                approve_result.is_err(),
+                "Expected approve_release to panic after terminal state (do_release={})", do_release
+            );
+
+            // After terminal state: release_funds must also be rejected
+            let release_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let any_caller = Address::generate(&env);
+                client.release_funds(&id, &any_caller);
+            }));
+            proptest::prop_assert!(
+                release_result.is_err(),
+                "Expected release_funds to panic after terminal state (do_release={})", do_release
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 8.1: Verify payer refund works on multi-sig escrows
+    // Requirements: 5.3
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_refund_multisig_escrow_zero_approvals() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+        sigs.push_back(sig2.clone());
+
+        // 2-of-2 multi-sig escrow, zero approvals submitted
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 2);
+
+        // Payer can refund with 0 approvals
+        let result = client.refund_escrow(&id);
+        assert!(result);
+
+        let escrow = client.get_escrow(&id);
+        assert_eq!(escrow.status, EscrowStatus::Refunded);
+    }
+
+    #[test]
+    fn test_refund_multisig_escrow_below_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let sig1 = Address::generate(&env);
+        let sig2 = Address::generate(&env);
+        let sig3 = Address::generate(&env);
+        let token = setup_token(&env, &payer);
+
+        let mut sigs = soroban_sdk::Vec::new(&env);
+        sigs.push_back(sig1.clone());
+        sigs.push_back(sig2.clone());
+        sigs.push_back(sig3.clone());
+
+        // 3-of-3 multi-sig escrow; only 1 approval submitted (below threshold)
+        let (_cid, client, id) =
+            setup_multisig_escrow(&env, &payer, &payee, &token, sigs, 3);
+
+        client.approve_release(&id, &sig1);
+        assert_eq!(client.get_approval_count(&id), 1);
+
+        // Payer can still refund even though approvals < threshold
+        let result = client.refund_escrow(&id);
+        assert!(result);
+
+        let escrow = client.get_escrow(&id);
+        assert_eq!(escrow.status, EscrowStatus::Refunded);
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 8.2: Property test for payer refund always available
+    // Feature: escrow-multi-sig, Property 8: payer refund always available
+    // Validates: Requirements 5.3
+    // -------------------------------------------------------------------------
+    proptest::proptest! {
+        /// Property 8: Payer refund always available
+        /// For any Active Multi_Sig_Escrow regardless of approval count, the payer
+        /// SHALL be able to call `refund_escrow` and receive the full escrowed
+        /// amount back.
+        #[test]
+        fn prop_payer_refund_always_available(
+            // Number of signatories: 1..=3
+            n_sigs in 1usize..=3usize,
+            // Threshold: 1..=n_sigs (clamped below)
+            threshold_raw in 1u32..=3u32,
+            // Number of approvals to submit before refund: 0..=n_sigs (clamped below)
+            k_approvals in 0usize..=3usize,
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            // Clamp threshold to n_sigs so the config is always valid
+            let threshold = threshold_raw.min(n_sigs as u32);
+
+            // Build n_sigs distinct signatories
+            let signatories: StdVec<Address> = (0..n_sigs)
+                .map(|_| Address::generate(&env))
+                .collect();
+            let mut sigs = soroban_sdk::Vec::new(&env);
+            for s in &signatories {
+                sigs.push_back(s.clone());
+            }
+
+            let (_cid, client, id) =
+                setup_multisig_escrow(&env, &payer, &payee, &token, sigs, threshold);
+
+            // Submit k approvals where k < threshold (keep escrow Active)
+            // Clamp k so it never reaches threshold and never exceeds n_sigs
+            let k = k_approvals.min(n_sigs).min((threshold as usize).saturating_sub(1));
+            for i in 0..k {
+                client.approve_release(&id, &signatories[i]);
+            }
+
+            // Payer must be able to refund regardless of approval count
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                client.refund_escrow(&id)
+            }));
+            proptest::prop_assert!(
+                result.is_ok(),
+                "Expected refund_escrow to succeed for payer with k={} approvals (threshold={})",
+                k, threshold
+            );
+
+            // Escrow status must be Refunded
+            let escrow = client.get_escrow(&id);
+            proptest::prop_assert_eq!(
+                escrow.status,
+                EscrowStatus::Refunded,
+                "Expected escrow status to be Refunded after payer refund"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 9.1: Property test for balance invariant
+    // Feature: escrow-multi-sig, Property 9: balance invariant
+    // Validates: Requirements 6.3, 5.4
+    // -------------------------------------------------------------------------
+    proptest::proptest! {
+        /// Property 9: Balance invariant preserved
+        /// For any sequence of deposits, approvals, releases, and refunds, the
+        /// token balance held by the contract SHALL equal the sum of amounts of
+        /// all Active escrows.
+        #[test]
+        fn prop_balance_invariant(
+            // Number of escrows to create upfront (1..=3)
+            n_escrows in 1usize..=3usize,
+            // Sequence of operations: each op is (op_type, escrow_index)
+            // op_type: 0=approve, 1=release, 2=refund
+            ops in proptest::collection::vec(
+                (0u8..3u8, 0usize..3usize),
+                1..=5,
+            ),
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let payer = Address::generate(&env);
+            let payee = Address::generate(&env);
+            let token = setup_token(&env, &payer);
+
+            // Register a single contract to hold all escrows
+            let contract_id = env.register(EscrowContract, ());
+            let client = EscrowContractClient::new(&env, &contract_id);
+
+            // Create n_escrows multi-sig escrows (1-of-1 for simplicity so
+            // a single approve is enough to reach quorum)
+            let amount: i128 = 100;
+            let mut escrow_ids: StdVec<u64> = StdVec::new();
+            let mut signatories_per_escrow: StdVec<Address> = StdVec::new();
+
+            for _ in 0..n_escrows {
+                let sig = Address::generate(&env);
+                let mut sigs = soroban_sdk::Vec::new(&env);
+                sigs.push_back(sig.clone());
+                let cfg = MultiSigConfig { signatories: sigs, threshold: 1 };
+                let id = client.deposit(
+                    &payer,
+                    &payee,
+                    &amount,
+                    &token,
+                    &ReleaseCondition::OnCompletion,
+                    &OptionalMultiSigConfig::Some(cfg),
+                );
+                escrow_ids.push(id);
+                signatories_per_escrow.push(sig);
+            }
+
+            // After deposits: contract balance == n_escrows * amount
+            let token_client = token::Client::new(&env, &token);
+            let contract_balance = token_client.balance(&contract_id);
+            let expected: i128 = n_escrows as i128 * amount;
+            proptest::prop_assert_eq!(
+                contract_balance,
+                expected,
+                "After deposits: contract balance {} != expected {}", contract_balance, expected
+            );
+
+            // Apply the random sequence of operations
+            for (op_type, escrow_idx) in &ops {
+                let idx = escrow_idx % n_escrows;
+                let id = escrow_ids[idx];
+
+                // Check current escrow status — skip if not Active
+                let escrow = client.get_escrow(&id);
+                if escrow.status != EscrowStatus::Active {
+                    continue;
+                }
+
+                match op_type {
+                    // Approve: submit approval from the escrow's signatory
+                    0 => {
+                        client.approve_release(&id, &signatories_per_escrow[idx]);
+                    }
+                    // Release: attempt release (succeeds only if quorum reached)
+                    1 => {
+                        let approval_count = client.get_approval_count(&id);
+                        let threshold = match &escrow.multi_sig {
+                            OptionalMultiSigConfig::Some(cfg) => cfg.threshold,
+                            OptionalMultiSigConfig::None => 0,
+                        };
+                        if approval_count >= threshold {
+                            let any_caller = Address::generate(&env);
+                            client.release_funds(&id, &any_caller);
+                        }
+                    }
+                    // Refund: payer refunds the escrow
+                    _ => {
+                        client.refund_escrow(&id);
+                    }
+                }
+
+                // After each operation: contract balance == sum of Active escrow amounts
+                let contract_balance = token_client.balance(&contract_id);
+                let active_sum: i128 = escrow_ids.iter().map(|eid| {
+                    let e = client.get_escrow(eid);
+                    if e.status == EscrowStatus::Active { e.amount } else { 0 }
+                }).sum();
+
+                proptest::prop_assert_eq!(
+                    contract_balance,
+                    active_sum,
+                    "Balance invariant violated: contract_balance={} != active_sum={}", contract_balance, active_sum
+                );
+            }
+        }
     }
 }
