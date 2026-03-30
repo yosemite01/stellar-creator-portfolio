@@ -1,8 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   images: {
     // Image optimization enabled (unoptimized removed).
     // Add remote hostnames your <Image> components load from, e.g.:
@@ -12,6 +9,6 @@ const nextConfig = {
   experimental: {
     instrumentationHook: true,
   },
-}
+};
 
-export default nextConfig
+export default nextConfig;

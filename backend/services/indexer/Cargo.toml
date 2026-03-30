@@ -23,9 +23,9 @@ reqwest.workspace = true
 stellar-discovery = { path = "../discovery" }
 
 # Tracing / OpenTelemetry
-opentelemetry.workspace = true
-opentelemetry_sdk.workspace = true
-opentelemetry-otlp.workspace = true
+opentelemetry = { version = "0.24", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = "0.15"
-tracing-opentelemetry.workspace = true
+tracing-opentelemetry = "0.25"
 stellar-common = { path = "../common" }

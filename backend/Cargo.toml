@@ -17,9 +17,8 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.81.0"
-authors = ["Stellar Team"]
+authors = ["Stellars Team"]
 license = "MIT"
-repository = "https://github.com/stellar/stellar-platform"
 
 [workspace.dependencies]
 # Soroban SDK
@@ -77,13 +76,10 @@ tracing-opentelemetry = "0.25"
 # OpenAPI / Swagger
 utoipa = { version = "4", features = ["actix_extras"] }
 utoipa-swagger-ui = { version = "7", features = ["actix-web"] }
-# HTTP client (indexer polls Horizon/Soroban RPC)
 reqwest = { version = "0.12", features = ["json"] }
 
 # Testing
 tokio-test = "0.4"
-
-# Circuit Breaker
 failsafe = "1.3.0"
 
 [profile.release]
@@ -91,7 +87,6 @@ opt-level = 3
 lto = true
 codegen-units = 1
 
-# Contract-optimised release profile (used when building WASM)
 [profile.release-contract]
 inherits = "release"
 opt-level = "z"
