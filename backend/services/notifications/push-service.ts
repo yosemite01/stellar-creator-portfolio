@@ -4,14 +4,14 @@
  * Includes queue management, rate limiting, and delivery tracking
  */
 
-import type { Notification, NotificationTemplate, UserPreferences, NotificationChannel } from '@/types/notifications';
+import type { Notification, NotificationTemplate, UserPreferences, NotificationChannel } from './notification-types';
 
 interface PushProvider {
   send(data: PushPayload): Promise<PushResponse>;
   isHealthy(): Promise<boolean>;
 }
 
-interface PushPayload {
+export interface PushPayload {
   userId: string;
   title: string;
   body: string;
@@ -260,6 +260,7 @@ export class PushNotificationService {
     this.rateLimiter = new Map();
     this.maxQueueSize = 10000;
     this.processInterval = 5000; // Process queue every 5 seconds
+    this.queueProcessor = null;
   }
 
   /**
@@ -374,7 +375,12 @@ export class PushNotificationService {
     // Save preferences to database
     const updated: UserPreferences = {
       userId,
-      channels: preferences.channels || {},
+      channels: preferences.channels || {
+        firebase: true,
+        onesignal: true,
+        browser: true,
+        email: true,
+      },
       quietHours: preferences.quietHours,
       doNotDisturb: preferences.doNotDisturb || false,
       dndSchedule: preferences.dndSchedule,
@@ -463,7 +469,7 @@ export class PushNotificationService {
     if (this.queue.size >= this.maxQueueSize) {
       // Queue is full, drop oldest item
       const firstKey = this.queue.keys().next().value;
-      this.queue.delete(firstKey);
+      if (firstKey) this.queue.delete(firstKey);
     }
 
     const queueItem: NotificationQueue = {

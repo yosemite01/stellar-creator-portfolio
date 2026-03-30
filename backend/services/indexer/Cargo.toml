@@ -11,14 +11,21 @@ name = "stellar-indexer"
 path = "src/main.rs"
 
 [dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["full", "time"] }
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
-sqlx.workspace = true
 reqwest.workspace = true
 stellar-discovery = { path = "../discovery" }
+
+# Tracing / OpenTelemetry
+opentelemetry = { version = "0.24", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
+opentelemetry-semantic-conventions = "0.15"
+tracing-opentelemetry = "0.25"
 stellar-common = { path = "../common" }

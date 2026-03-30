@@ -158,7 +158,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
                 .error_for_status()
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
-                .json()
+                .json::<GoogleProfile>()
                 .await
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?;
             Ok(format!("google:{}", profile.sub))
@@ -179,7 +179,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
                 .error_for_status()
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
-                .json()
+                .json::<GitHubProfile>()
                 .await
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?;
             Ok(format!("github:{}", profile.id))
@@ -202,7 +202,7 @@ async fn fetch_oauth_user_id(provider: OAuthProvider, access_token: &str) -> Res
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
                 .error_for_status()
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?
-                .json()
+                .json::<TwitterProfile>()
                 .await
                 .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?;
             Ok(format!("twitter:{}", profile.data.id))
@@ -314,13 +314,13 @@ pub async fn mint_tokens(
 }
 
 pub async fn oauth2_token_exchange(
-    provider: web::Path<String>,
+    provider_path: web::Path<String>,
     body: web::Json<OAuthTokenRequest>,
     config: web::Data<Config>,
     pool: web::Data<sqlx::PgPool>,
 ) -> Result<HttpResponse, AuthError> {
-    let provider = OAuthProvider::from_str(provider.as_str())
-        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider.into_inner()))?;
+    let provider = OAuthProvider::from_str(provider_path.as_str())
+        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider_path.into_inner()))?;
 
     let provider_config = config
         .oauth_provider_config(provider)
@@ -365,12 +365,12 @@ pub async fn oauth2_token_exchange(
 }
 
 pub async fn oauth2_authorize(
-    provider: web::Path<String>,
+    provider_path: web::Path<String>,
     query: web::Query<OAuthAuthorizeRequest>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, AuthError> {
-    let provider = OAuthProvider::from_str(provider.as_str())
-        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider.into_inner()))?;
+    let provider = OAuthProvider::from_str(provider_path.as_str())
+        .ok_or_else(|| AuthError::InvalidOAuthProvider(provider_path.into_inner()))?;
 
     let provider_config = config
         .oauth_provider_config(provider)

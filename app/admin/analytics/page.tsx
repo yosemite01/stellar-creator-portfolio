@@ -31,7 +31,12 @@ async function fetchAggregate(): Promise<Aggregate> {
     };
   }
 
-  const metrics = ["visitors", "pageviews", "bounce_rate", "visit_duration"].join(",");
+  const metrics = [
+    "visitors",
+    "pageviews",
+    "bounce_rate",
+    "visit_duration",
+  ].join(",");
   const res = await fetch(
     `https://plausible.io/api/v2/stats/aggregate?site_id=${SITE_ID}&period=30d&metrics=${metrics}`,
     {
@@ -39,7 +44,7 @@ async function fetchAggregate(): Promise<Aggregate> {
         Authorization: `Bearer ${API_KEY}`,
       },
       next: { revalidate: 60 },
-    }
+    },
   );
 
   if (!res.ok) {
@@ -62,17 +67,19 @@ async function fetchConversions(): Promise<number> {
     {
       headers: { Authorization: `Bearer ${API_KEY}` },
       next: { revalidate: 60 },
-    }
+    },
   );
   if (!res.ok) return 0;
   const data = await res.json();
   return data.results.reduce(
     (sum: number, row: { conversions: number }) => sum + (row.conversions || 0),
-    0
+    0,
   );
 }
 
-async function fetchTopContent(event: "creator-view" | "bounty-view"): Promise<TopItem[]> {
+async function fetchTopContent(
+  event: "creator-view" | "bounty-view",
+): Promise<TopItem[]> {
   if (!API_KEY) {
     return [
       { label: "creator/alex", value: 92 },
@@ -85,14 +92,16 @@ async function fetchTopContent(event: "creator-view" | "bounty-view"): Promise<T
     {
       headers: { Authorization: `Bearer ${API_KEY}` },
       next: { revalidate: 60 },
-    }
+    },
   );
   if (!res.ok) return [];
   const data = await res.json();
-  return data.results.map((r: any) => ({
-    label: r["event:slug"] || "unknown",
-    value: r.visitors || r.pageviews || 0,
-  }));
+  return data.results.map(
+    (r: { "event:slug"?: string; visitors?: number; pageviews?: number }) => ({
+      label: r["event:slug"] || "unknown",
+      value: r.visitors || r.pageviews || 0,
+    }),
+  );
 }
 
 async function fetchSearches(): Promise<TopItem[]> {
@@ -108,14 +117,16 @@ async function fetchSearches(): Promise<TopItem[]> {
     {
       headers: { Authorization: `Bearer ${API_KEY}` },
       next: { revalidate: 60 },
-    }
+    },
   );
   if (!res.ok) return [];
   const data = await res.json();
-  return data.results.map((row: any) => ({
-    label: row["event:query"] || "unknown",
-    value: row.visitors || 0,
-  }));
+  return data.results.map(
+    (row: { "event:query"?: string; visitors?: number }) => ({
+      label: row["event:query"] || "unknown",
+      value: row.visitors || 0,
+    }),
+  );
 }
 
 function requireAdmin() {
@@ -155,7 +166,10 @@ export default async function AnalyticsPage() {
   const funnel = [
     { label: "Viewed listing", value: aggregate.pageviews },
     { label: "CTA clicked", value: Math.round(aggregate.pageviews * 0.42) },
-    { label: "Started application", value: Math.round(aggregate.pageviews * 0.21) },
+    {
+      label: "Started application",
+      value: Math.round(aggregate.pageviews * 0.21),
+    },
     { label: "Submitted application", value: aggregate.conversions },
   ];
 
@@ -183,7 +197,10 @@ export default async function AnalyticsPage() {
         <h2 style={styles.sectionTitle}>Conversion Funnel</h2>
         <div style={styles.funnel}>
           {funnel.map((step, idx) => (
-            <div key={step.label} style={{ ...styles.funnelStep, opacity: 1 - idx * 0.12 }}>
+            <div
+              key={step.label}
+              style={{ ...styles.funnelStep, opacity: 1 - idx * 0.12 }}
+            >
               <p style={styles.funnelLabel}>{step.label}</p>
               <p style={styles.funnelValue}>{step.value}</p>
             </div>
@@ -220,7 +237,13 @@ export default async function AnalyticsPage() {
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: string | number }) {
+function MetricCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
     <article style={styles.card}>
       <p style={styles.cardLabel}>{label}</p>
@@ -256,7 +279,12 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: "space-between",
     marginBottom: "24px",
   },
-  kicker: { textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "12px", color: "#7dd3fc" },
+  kicker: {
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+    fontSize: "12px",
+    color: "#7dd3fc",
+  },
   title: { fontSize: "32px", margin: "6px 0 4px" },
   subtitle: { color: "#cbd5e1" },
   grid: {
@@ -294,7 +322,13 @@ const styles: Record<string, CSSProperties> = {
   },
   funnelLabel: { color: "#cbd5e1", marginBottom: "6px" },
   funnelValue: { fontWeight: 700, fontSize: "20px" },
-  list: { listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" },
+  list: {
+    listStyle: "none",
+    padding: 0,
+    margin: 0,
+    display: "grid",
+    gap: "8px",
+  },
   listItem: {
     display: "flex",
     alignItems: "center",

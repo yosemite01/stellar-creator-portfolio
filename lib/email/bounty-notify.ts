@@ -1,7 +1,5 @@
-import { sendEmail } from '@/lib/email/mailer'
-import { PrismaClient } from '@prisma/client'
-
-const prisma = new PrismaClient()
+import { prisma } from '@/lib/prisma'
+import { submitQueuedEmail } from '@/lib/notifications'
 
 export async function getEmailForUserId(userId: string): Promise<string | null> {
   const u = await prisma.user.findUnique({
@@ -15,12 +13,15 @@ export async function sendApplicantReceivedEmail(params: {
   to: string
   name: string
   bountyTitle: string
+  userId: string | null
 }): Promise<void> {
   const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
-  await sendEmail({
+  await submitQueuedEmail({
+    userId: params.userId,
     to: params.to,
     subject: `Application received — ${params.bountyTitle}`,
-    template: 'bounty-notification',
+    template: 'application-status',
+    category: params.userId ? 'application' : 'transactional',
     variables: {
       name: params.name,
       headline: 'Your proposal was submitted',
@@ -38,12 +39,15 @@ export async function sendClientNewApplicationEmail(params: {
   bountyTitle: string
   applicantName: string
   bountyId: string
+  userId: string | null
 }): Promise<void> {
   const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
-  await sendEmail({
+  await submitQueuedEmail({
+    userId: params.userId,
     to: params.to,
     subject: `New application for "${params.bountyTitle}"`,
-    template: 'bounty-notification',
+    template: 'bounty-update',
+    category: params.userId ? 'bounty' : 'transactional',
     variables: {
       name: params.name,
       headline: 'Someone applied to your bounty',
@@ -60,15 +64,18 @@ export async function sendApplicantStatusEmail(params: {
   name: string
   bountyTitle: string
   status: 'accepted' | 'rejected'
+  userId: string | null
 }): Promise<void> {
   const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
   const accepted = params.status === 'accepted'
-  await sendEmail({
+  await submitQueuedEmail({
+    userId: params.userId,
     to: params.to,
     subject: accepted
       ? `Accepted — ${params.bountyTitle}`
       : `Update on your application — ${params.bountyTitle}`,
-    template: 'bounty-notification',
+    template: 'application-status',
+    category: params.userId ? 'application' : 'transactional',
     variables: {
       name: params.name,
       headline: accepted ? 'Your application was accepted' : 'Your application was not selected',
@@ -78,6 +85,32 @@ export async function sendApplicantStatusEmail(params: {
       actionUrl: `${appUrl}/dashboard/applications`,
       actionLabel: 'View applications',
       footerNote: 'You can continue the conversation in your dashboard if messaging is enabled.',
+    },
+  })
+}
+
+export async function sendThreadMessageEmail(params: {
+  to: string
+  name: string
+  bountyTitle: string
+  preview: string
+  applicationId: string
+  userId: string | null
+}): Promise<void> {
+  const appUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+  await submitQueuedEmail({
+    userId: params.userId,
+    to: params.to,
+    subject: `New message — ${params.bountyTitle}`,
+    template: 'bounty-notification',
+    category: params.userId ? 'message' : 'transactional',
+    variables: {
+      name: params.name,
+      headline: 'New message on your application',
+      bodyText: params.preview,
+      actionUrl: `${appUrl}/dashboard/applications?thread=${params.applicationId}`,
+      actionLabel: 'Open thread',
+      footerNote: 'Reply from your dashboard to keep everything in one place.',
     },
   })
 }

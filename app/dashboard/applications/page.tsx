@@ -38,7 +38,7 @@ export default function DashboardApplicationsPage() {
   const loadAll = useCallback(async () => {
     const [aRes, nRes] = await Promise.all([
       fetch('/api/bounty-applications?applicant=me'),
-      fetch('/api/bounty-notifications'),
+      fetch('/api/notifications'),
     ])
     if (aRes.ok) {
       const data = await aRes.json()
@@ -108,7 +108,7 @@ export default function DashboardApplicationsPage() {
   }
 
   async function markRead(nid: string) {
-    await fetch('/api/bounty-notifications', {
+    await fetch('/api/notifications', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: nid }),

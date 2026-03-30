@@ -11,6 +11,7 @@ name = "stellar-notifications"
 path = "src/main.rs"
 
 [dependencies]
+# Workspace dependencies
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -18,3 +19,36 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
+redis.workspace = true
+deadpool-redis.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+
+# HTTP server
+actix-web = "4.4"
+actix-rt = "2.9"
+
+# Email
+lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls", "builder"] }
+
+# HTTP client for webhooks
+reqwest = { version = "0.12", features = ["json"] }
+
+# Configuration
+config = "0.14"
+
+# Serialization
+toml = "0.8"
+
+# Async traits
+async-trait = "0.1"
+
+# Retry logic
+backoff = { version = "0.4", features = ["tokio"] }
+thiserror.workspace = true
+reqwest.workspace = true
+
+# Email delivery
+lettre = { version = "0.11", features = ["tokio1-rustls-tls", "smtp-transport", "hostname"] }

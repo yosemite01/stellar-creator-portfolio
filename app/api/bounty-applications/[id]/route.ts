@@ -85,6 +85,7 @@ export async function PATCH(request: NextRequest, context: RouteParams) {
           name: application.applicantName,
           bountyTitle: bounty.title,
           status,
+          userId: application.applicantId,
         })
       }
     } catch (e) {
