@@ -407,6 +407,8 @@ mod tests {
         let nonce = body["data"]["nonce"].as_str().expect("nonce must be a string");
         assert_eq!(nonce.len(), 64);
         assert!(nonce.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
     // ── Signature verification tests ─────────────────────────────────────────
 
     /// Build a deterministic keypair + signature for testing.
