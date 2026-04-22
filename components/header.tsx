@@ -6,6 +6,7 @@ import { useTheme } from 'next-themes';
 import { Moon, Sun, Menu, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
+import { ConnectWalletButton } from '@/components/connect-wallet-button';
 
 export function Header() {
   const { theme, setTheme } = useTheme();
@@ -61,18 +62,21 @@ export function Header() {
           {/* Right Actions */}
           <div className="flex items-center gap-2">
             {mounted && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleTheme}
-                aria-label="Toggle theme"
-              >
-                {theme === 'dark' ? (
-                  <Sun size={20} className="text-accent" />
-                ) : (
-                  <Moon size={20} className="text-primary" />
-                )}
-              </Button>
+              <>
+                <ConnectWalletButton />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleTheme}
+                  aria-label="Toggle theme"
+                >
+                  {theme === 'dark' ? (
+                    <Sun size={20} className="text-accent" />
+                  ) : (
+                    <Moon size={20} className="text-primary" />
+                  )}
+                </Button>
+              </>
             )}
 
             {/* Mobile Menu Button */}
