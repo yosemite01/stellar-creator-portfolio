@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 actix-web.workspace = true
+actix-cors = "0.7"
 actix-rt.workspace = true
 tokio.workspace = true
 serde.workspace = true

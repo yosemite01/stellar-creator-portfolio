@@ -1,9 +1,116 @@
-use actix_web::{web, App, HttpServer, HttpResponse, middleware};
+use actix_cors::Cors;
+use actix_web::{http, web, App, HttpServer, HttpResponse, middleware};
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 use tracing_subscriber;
 
-// ==================== Data Models ====================
+// ==================== Domain Models ====================
+
+/// Machine-readable error codes returned by the API.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ApiErrorCode {
+    BadRequest,
+    ValidationError,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    Conflict,
+    UnprocessableEntity,
+    InternalServerError,
+    ServiceUnavailable,
+}
+
+/// Per-field validation error detail.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct FieldError {
+    pub field: String,
+    pub message: String,
+}
+
+/// Structured error payload included in failed responses.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ApiError {
+    pub code: ApiErrorCode,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_errors: Option<Vec<FieldError>>,
+}
+
+impl ApiError {
+    pub fn new(code: ApiErrorCode, message: impl Into<String>) -> Self {
+        ApiError { code, message: message.into(), field_errors: None }
+    }
+
+    pub fn with_field_errors(
+        code: ApiErrorCode,
+        message: impl Into<String>,
+        field_errors: Vec<FieldError>,
+    ) -> Self {
+        ApiError { code, message: message.into(), field_errors: Some(field_errors) }
+    }
+
+    pub fn not_found(resource: impl Into<String>) -> Self {
+        ApiError::new(ApiErrorCode::NotFound, format!("{} not found", resource.into()))
+    }
+
+    pub fn internal() -> Self {
+        ApiError::new(ApiErrorCode::InternalServerError, "An unexpected error occurred")
+    }
+}
+
+/// Pagination metadata for list responses.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PaginationMeta {
+    pub page: u32,
+    pub limit: u32,
+    pub total: u64,
+    pub total_pages: u32,
+}
+
+impl PaginationMeta {
+    pub fn new(page: u32, limit: u32, total: u64) -> Self {
+        let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
+        PaginationMeta { page, limit, total, total_pages }
+    }
+}
+
+/// Paginated list payload.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct PaginatedData<T> {
+    pub items: Vec<T>,
+    pub pagination: PaginationMeta,
+}
+
+impl<T> PaginatedData<T> {
+    pub fn new(items: Vec<T>, page: u32, limit: u32, total: u64) -> Self {
+        PaginatedData { items, pagination: PaginationMeta::new(page, limit, total) }
+    }
+}
+
+/// Envelope wrapping every API response.
+///
+/// On success: `success=true`, `data=Some(T)`, `error=None`.
+/// On failure: `success=false`, `data=None`, `error=Some(ApiError)`.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ApiResponse<T> {
+    pub success: bool,
+    pub data: Option<T>,
+    pub error: Option<ApiError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl<T> ApiResponse<T> {
+    pub fn ok(data: T, message: Option<String>) -> Self {
+        ApiResponse { success: true, data: Some(data), error: None, message }
+    }
+
+    pub fn err(error: ApiError) -> Self {
+        ApiResponse { success: false, data: None, error: Some(error), message: None }
+    }
+}
+
+// ==================== Request Models ====================
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct BountyRequest {
@@ -125,7 +232,6 @@ async fn create_bounty(
 ) -> HttpResponse {
     tracing::info!("Creating bounty: {:?}", body.title);
 
-    // In a real implementation, this would interact with Soroban contract
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "bounty_id": 1,
@@ -455,6 +561,43 @@ async fn release_escrow(path: web::Path<u64>) -> HttpResponse {
     HttpResponse::Ok().json(response)
 }
 
+// ==================== CORS ====================
+
+/// Build the CORS middleware from environment configuration.
+///
+/// Allowed origins are read from the `CORS_ALLOWED_ORIGINS` environment
+/// variable as a comma-separated list (e.g. `http://localhost:3000,https://app.stellar.dev`).
+/// When the variable is absent the default `http://localhost:3000` is used,
+/// which covers local Next.js development.
+///
+/// All standard HTTP methods and the headers required by a JSON API
+/// (`Content-Type`, `Authorization`, `Accept`) are permitted.
+/// Credentials (cookies / auth headers) are allowed so wallet-auth flows work.
+pub fn cors_middleware() -> Cors {
+    let allowed_origins: Vec<String> = std::env::var("CORS_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string())
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut cors = Cors::default()
+        .allowed_methods(vec!["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+        .allowed_headers(vec![
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+            http::header::ACCEPT,
+        ])
+        .supports_credentials()
+        .max_age(3600);
+
+    for origin in &allowed_origins {
+        cors = cors.allowed_origin(origin);
+    }
+
+    cors
+}
+
 // ==================== Main ====================
 
 #[actix_web::main]
@@ -477,6 +620,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         App::new()
+            .wrap(cors_middleware())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             // Health check
@@ -506,17 +650,187 @@ async fn main() -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    // ── ApiResponse ───────────────────────────────────────────────────────────
+
     #[test]
     fn test_api_response_ok() {
         let response: ApiResponse<String> = ApiResponse::ok("test".to_string(), None);
         assert!(response.success);
         assert_eq!(response.data, Some("test".to_string()));
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_api_response_ok_with_message() {
+        let response: ApiResponse<u32> =
+            ApiResponse::ok(42, Some("Created successfully".to_string()));
+        assert!(response.success);
+        assert_eq!(response.data, Some(42));
+        assert_eq!(response.message, Some("Created successfully".to_string()));
     }
 
     #[test]
     fn test_api_response_err() {
-        let response: ApiResponse<String> = ApiResponse::err("error".to_string());
+        let error = ApiError::new(ApiErrorCode::NotFound, "Bounty not found");
+        let response: ApiResponse<String> = ApiResponse::err(error.clone());
         assert!(!response.success);
-        assert_eq!(response.error, Some("error".to_string()));
+        assert!(response.data.is_none());
+        assert_eq!(response.error, Some(error));
+    }
+
+    // ── ApiError ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_api_error_not_found() {
+        let err = ApiError::not_found("Bounty");
+        assert_eq!(err.code, ApiErrorCode::NotFound);
+        assert_eq!(err.message, "Bounty not found");
+        assert!(err.field_errors.is_none());
+    }
+
+    #[test]
+    fn test_api_error_internal() {
+        let err = ApiError::internal();
+        assert_eq!(err.code, ApiErrorCode::InternalServerError);
+    }
+
+    #[test]
+    fn test_api_error_with_field_errors() {
+        let field_errors = vec![
+            FieldError { field: "title".to_string(), message: "Title is required".to_string() },
+            FieldError { field: "budget".to_string(), message: "Budget must be positive".to_string() },
+        ];
+        let err = ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            field_errors.clone(),
+        );
+        assert_eq!(err.code, ApiErrorCode::ValidationError);
+        assert_eq!(err.field_errors, Some(field_errors));
+    }
+
+    // ── PaginationMeta ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pagination_meta_exact_pages() {
+        let meta = PaginationMeta::new(1, 10, 30);
+        assert_eq!(meta.total_pages, 3);
+        assert_eq!(meta.total, 30);
+    }
+
+    #[test]
+    fn test_pagination_meta_partial_last_page() {
+        let meta = PaginationMeta::new(1, 10, 25);
+        assert_eq!(meta.total_pages, 3);
+    }
+
+    #[test]
+    fn test_pagination_meta_zero_total() {
+        let meta = PaginationMeta::new(1, 10, 0);
+        assert_eq!(meta.total_pages, 0);
+    }
+
+    // ── PaginatedData ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_paginated_data() {
+        let items = vec!["a", "b", "c"];
+        let pd = PaginatedData::new(items.clone(), 2, 3, 9);
+        assert_eq!(pd.items, items);
+        assert_eq!(pd.pagination.page, 2);
+        assert_eq!(pd.pagination.total_pages, 3);
+    }
+
+    // ── Serialisation ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_api_error_code_serialises_screaming_snake_case() {
+        let json = serde_json::to_string(&ApiErrorCode::ValidationError).unwrap();
+        assert_eq!(json, "\"VALIDATION_ERROR\"");
+    }
+
+    #[test]
+    fn test_field_errors_omitted_when_none() {
+        let err = ApiError::new(ApiErrorCode::NotFound, "not found");
+        let json = serde_json::to_value(&err).unwrap();
+        assert!(json.get("field_errors").is_none());
+    }
+
+    // ── CORS tests ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_cors_middleware_builds_with_default_origin() {
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
+        let _cors = cors_middleware();
+    }
+
+    #[test]
+    fn test_cors_middleware_builds_with_multiple_origins() {
+        std::env::set_var(
+            "CORS_ALLOWED_ORIGINS",
+            "http://localhost:3000,https://app.stellar.dev",
+        );
+        let _cors = cors_middleware();
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
+    }
+
+    #[actix_web::test]
+    async fn test_cors_preflight_returns_200() {
+        use actix_web::test as awtest;
+        std::env::set_var("CORS_ALLOWED_ORIGINS", "http://localhost:3000");
+
+        let app = awtest::init_service(
+            App::new()
+                .wrap(cors_middleware())
+                .route("/health", web::get().to(health)),
+        )
+        .await;
+
+        let req = awtest::TestRequest::default()
+            .method(actix_web::http::Method::OPTIONS)
+            .uri("/health")
+            .insert_header(("Origin", "http://localhost:3000"))
+            .insert_header(("Access-Control-Request-Method", "GET"))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert!(
+            resp.status().is_success(),
+            "preflight should return 2xx, got {}",
+            resp.status()
+        );
+        let acao = resp
+            .headers()
+            .get("Access-Control-Allow-Origin")
+            .expect("Access-Control-Allow-Origin header must be present");
+        assert_eq!(acao, "http://localhost:3000");
+
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
+    }
+
+    #[actix_web::test]
+    async fn test_cors_disallowed_origin_has_no_acao_header() {
+        use actix_web::test as awtest;
+        std::env::set_var("CORS_ALLOWED_ORIGINS", "http://localhost:3000");
+
+        let app = awtest::init_service(
+            App::new()
+                .wrap(cors_middleware())
+                .route("/health", web::get().to(health)),
+        )
+        .await;
+
+        let req = awtest::TestRequest::get()
+            .uri("/health")
+            .insert_header(("Origin", "https://evil.example.com"))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert!(
+            resp.headers().get("Access-Control-Allow-Origin").is_none(),
+            "disallowed origin must not receive ACAO header"
+        );
+
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
     }
 }
