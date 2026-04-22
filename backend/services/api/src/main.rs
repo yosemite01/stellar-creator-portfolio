@@ -184,37 +184,6 @@ pub struct CreatorStats {
     pub experience: i32,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct ApiResponse<T> {
-    pub success: bool,
-    pub data: Option<T>,
-    pub error: Option<String>,
-    pub message: Option<String>,
-}
-
-impl<T> ApiResponse<T> {
-    fn ok(data: T, message: Option<String>) -> Self {
-        ApiResponse {
-            success: true,
-            data: Some(data),
-            error: None,
-            message,
-        }
-    }
-
-    fn err(error: String) -> Self
-    where
-        T: Default,
-    {
-        ApiResponse {
-            success: false,
-            data: None,
-            error: Some(error),
-            message: None,
-        }
-    }
-}
-
 // ==================== Routes ====================
 
 /// Health check endpoint
@@ -521,7 +490,8 @@ async fn get_creator(path: web::Path<String>) -> HttpResponse {
             HttpResponse::Ok().json(response)
         }
         None => {
-            let response: ApiResponse<Creator> = ApiResponse::err(format!("Creator {} not found", creator_id));
+            let response: ApiResponse<Creator> =
+                ApiResponse::err(ApiError::not_found(format!("Creator {}", creator_id)));
             HttpResponse::NotFound().json(response)
         }
     }
@@ -832,5 +802,47 @@ mod tests {
         );
 
         std::env::remove_var("CORS_ALLOWED_ORIGINS");
+    }
+
+    #[actix_web::test]
+    async fn escrow_get_integration_returns_active_payload() {
+        use actix_web::test as awtest;
+
+        let app = awtest::init_service(
+            App::new().route("/api/escrow/{id}", web::get().to(get_escrow)),
+        )
+        .await;
+
+        let req = awtest::TestRequest::get().uri("/api/escrow/7").to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["id"], 7);
+        assert_eq!(json["data"]["status"], "active");
+    }
+
+    #[actix_web::test]
+    async fn escrow_release_integration_returns_released_payload() {
+        use actix_web::test as awtest;
+
+        let app = awtest::init_service(
+            App::new().route("/api/escrow/{id}/release", web::post().to(release_escrow)),
+        )
+        .await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/escrow/7/release")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["status"], "released");
+        assert!(json["data"]["transaction_id"].is_string());
     }
 }

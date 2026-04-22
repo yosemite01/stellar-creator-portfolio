@@ -1,5 +1,8 @@
 #![no_std]
 
+extern crate alloc;
+use alloc::format;
+
 use soroban_sdk::{
     contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec, Map, 
     IntoVal, FromVal, TryFromVal,
@@ -44,62 +47,12 @@ pub struct BountyApplication {
     pub created_at: u64,
 }
 
-/// Bounty Contract Trait
 #[contract]
-pub trait BountyContractTrait {
-    /// Create a new bounty
-    fn create_bounty(
-        env: Env,
-        creator: Address,
-        title: String,
-        description: String,
-        budget: i128,
-        deadline: u64,
-    ) -> u64;
-
-    /// Get bounty details
-    fn get_bounty(env: Env, bounty_id: u64) -> Bounty;
-
-    /// Apply for a bounty
-    fn apply_for_bounty(
-        env: Env,
-        bounty_id: u64,
-        freelancer: Address,
-        proposal: String,
-        proposed_budget: i128,
-        timeline: u64,
-    ) -> u64;
-
-    /// Get application details
-    fn get_application(env: Env, application_id: u64) -> BountyApplication;
-
-    /// Select freelancer for bounty
-    fn select_freelancer(
-        env: Env,
-        bounty_id: u64,
-        application_id: u64,
-    ) -> bool;
-
-    /// Complete bounty
-    fn complete_bounty(env: Env, bounty_id: u64) -> bool;
-
-    /// Cancel bounty
-    fn cancel_bounty(env: Env, bounty_id: u64) -> bool;
-
-    /// Get total bounties count
-    fn get_bounties_count(env: Env) -> u64;
-
-    /// Get bounty applications
-    fn get_applications(env: Env, bounty_id: u64) -> Vec<BountyApplication>;
-}
-
-/// Contract Implementation
-#[contractimpl]
 pub struct BountyContract;
 
 #[contractimpl]
-impl BountyContractTrait for BountyContract {
-    fn create_bounty(
+impl BountyContract {
+    pub fn create_bounty(
         env: Env,
         creator: Address,
         title: String,
@@ -141,7 +94,7 @@ impl BountyContractTrait for BountyContract {
         bounty_id
     }
 
-    fn get_bounty(env: Env, bounty_id: u64) -> Bounty {
+    pub fn get_bounty(env: Env, bounty_id: u64) -> Bounty {
         let bounty_key = Symbol::new(&env, &format!("bounty_{}", bounty_id));
         env.storage()
             .persistent()
@@ -149,7 +102,7 @@ impl BountyContractTrait for BountyContract {
             .expect("Bounty not found")
     }
 
-    fn apply_for_bounty(
+    pub fn apply_for_bounty(
         env: Env,
         bounty_id: u64,
         freelancer: Address,
@@ -189,7 +142,7 @@ impl BountyContractTrait for BountyContract {
         application_id
     }
 
-    fn get_application(env: Env, application_id: u64) -> BountyApplication {
+    pub fn get_application(env: Env, application_id: u64) -> BountyApplication {
         let app_key = Symbol::new(&env, &format!("application_{}", application_id));
         env.storage()
             .persistent()
@@ -197,7 +150,7 @@ impl BountyContractTrait for BountyContract {
             .expect("Application not found")
     }
 
-    fn select_freelancer(
+    pub fn select_freelancer(
         env: Env,
         bounty_id: u64,
         application_id: u64,
@@ -222,7 +175,7 @@ impl BountyContractTrait for BountyContract {
         true
     }
 
-    fn complete_bounty(env: Env, bounty_id: u64) -> bool {
+    pub fn complete_bounty(env: Env, bounty_id: u64) -> bool {
         let bounty_key = Symbol::new(&env, &format!("bounty_{}", bounty_id));
         let mut bounty = env
             .storage()
@@ -231,7 +184,7 @@ impl BountyContractTrait for BountyContract {
             .expect("Bounty not found");
 
         bounty.creator.require_auth();
-        assert_eq!(bounty.status, BountyStatus::InProgress, "Bounty not in progress");
+        assert!(bounty.status == BountyStatus::InProgress, "Bounty not in progress");
 
         bounty.status = BountyStatus::Completed;
         bounty.completed_at = Some(env.ledger().timestamp());
@@ -241,7 +194,7 @@ impl BountyContractTrait for BountyContract {
         true
     }
 
-    fn cancel_bounty(env: Env, bounty_id: u64) -> bool {
+    pub fn cancel_bounty(env: Env, bounty_id: u64) -> bool {
         let bounty_key = Symbol::new(&env, &format!("bounty_{}", bounty_id));
         let mut bounty = env
             .storage()
@@ -250,7 +203,7 @@ impl BountyContractTrait for BountyContract {
             .expect("Bounty not found");
 
         bounty.creator.require_auth();
-        assert_eq!(bounty.status, BountyStatus::Open, "Only open bounties can be cancelled");
+        assert!(bounty.status == BountyStatus::Open, "Only open bounties can be cancelled");
 
         bounty.status = BountyStatus::Cancelled;
 
@@ -259,7 +212,7 @@ impl BountyContractTrait for BountyContract {
         true
     }
 
-    fn get_bounties_count(env: Env) -> u64 {
+    pub fn get_bounties_count(env: Env) -> u64 {
         let bounty_counter_key = Symbol::new(&env, "bounty_counter");
         env.storage()
             .persistent()
@@ -267,7 +220,7 @@ impl BountyContractTrait for BountyContract {
             .unwrap_or(0)
     }
 
-    fn get_applications(env: Env, bounty_id: u64) -> Vec<BountyApplication> {
+    pub fn get_applications(env: Env, bounty_id: u64) -> Vec<BountyApplication> {
         let mut applications = Vec::new(&env);
         let app_counter_key = Symbol::new(&env, "application_counter");
         let counter: u64 = env
@@ -278,7 +231,7 @@ impl BountyContractTrait for BountyContract {
 
         for i in 1..=counter {
             let app_key = Symbol::new(&env, &format!("application_{}", i));
-            if let Ok(app) = env
+            if let Some(app) = env
                 .storage()
                 .persistent()
                 .get::<Symbol, BountyApplication>(&app_key)
@@ -302,9 +255,10 @@ mod tests {
     #[test]
     fn test_create_bounty() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract = BountyContractClient::new(&env, &env.register_contract(None, BountyContract));
 
-        let creator = Address::random(&env);
+        let creator = Address::generate(&env);
         let title = String::from_slice(&env, "Test Bounty");
         let description = String::from_slice(&env, "Test Description");
 
@@ -326,10 +280,11 @@ mod tests {
     #[test]
     fn test_apply_for_bounty() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract = BountyContractClient::new(&env, &env.register_contract(None, BountyContract));
 
-        let creator = Address::random(&env);
-        let freelancer = Address::random(&env);
+        let creator = Address::generate(&env);
+        let freelancer = Address::generate(&env);
 
         let bounty_id = contract.create_bounty(
             &creator,

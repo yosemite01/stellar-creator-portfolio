@@ -1,5 +1,8 @@
 #![no_std]
 
+extern crate alloc;
+use alloc::format;
+
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
 
 /// Freelancer Profile
@@ -18,58 +21,11 @@ pub struct FreelancerProfile {
 }
 
 #[contract]
-pub trait FreelancerContractTrait {
-    /// Register a new freelancer
-    fn register_freelancer(
-        env: Env,
-        freelancer: Address,
-        name: String,
-        discipline: String,
-        bio: String,
-    ) -> bool;
-
-    /// Get freelancer profile
-    fn get_profile(env: Env, freelancer: Address) -> FreelancerProfile;
-
-    /// Update freelancer rating
-    fn update_rating(
-        env: Env,
-        freelancer: Address,
-        new_rating: u32,
-    ) -> bool;
-
-    /// Update completed projects
-    fn update_completed_projects(
-        env: Env,
-        freelancer: Address,
-    ) -> bool;
-
-    /// Update total earnings
-    fn update_earnings(
-        env: Env,
-        freelancer: Address,
-        amount: i128,
-    ) -> bool;
-
-    /// Verify freelancer
-    fn verify_freelancer(
-        env: Env,
-        freelancer: Address,
-    ) -> bool;
-
-    /// Check if freelancer is verified
-    fn is_verified(env: Env, freelancer: Address) -> bool;
-
-    /// Get freelancers count
-    fn get_freelancers_count(env: Env) -> u32;
-}
-
-#[contractimpl]
 pub struct FreelancerContract;
 
 #[contractimpl]
-impl FreelancerContractTrait for FreelancerContract {
-    fn register_freelancer(
+impl FreelancerContract {
+    pub fn register_freelancer(
         env: Env,
         freelancer: Address,
         name: String,
@@ -78,7 +34,7 @@ impl FreelancerContractTrait for FreelancerContract {
     ) -> bool {
         freelancer.require_auth();
 
-        let profile_key = Symbol::new(&env, &format!("profile_{}", freelancer));
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
         
         // Check if already registered
         if env.storage().persistent().has(&profile_key) {
@@ -112,20 +68,20 @@ impl FreelancerContractTrait for FreelancerContract {
         true
     }
 
-    fn get_profile(env: Env, freelancer: Address) -> FreelancerProfile {
-        let profile_key = Symbol::new(&env, &format!("profile_{}", freelancer));
+    pub fn get_profile(env: Env, freelancer: Address) -> FreelancerProfile {
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
         env.storage()
             .persistent()
             .get::<Symbol, FreelancerProfile>(&profile_key)
             .expect("Freelancer not registered")
     }
 
-    fn update_rating(
+    pub fn update_rating(
         env: Env,
         freelancer: Address,
         new_rating: u32,
     ) -> bool {
-        let profile_key = Symbol::new(&env, &format!("profile_{}", freelancer));
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
         let mut profile = env
             .storage()
             .persistent()
@@ -143,11 +99,11 @@ impl FreelancerContractTrait for FreelancerContract {
         true
     }
 
-    fn update_completed_projects(
+    pub fn update_completed_projects(
         env: Env,
         freelancer: Address,
     ) -> bool {
-        let profile_key = Symbol::new(&env, &format!("profile_{}", freelancer));
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
         let mut profile = env
             .storage()
             .persistent()
@@ -160,12 +116,12 @@ impl FreelancerContractTrait for FreelancerContract {
         true
     }
 
-    fn update_earnings(
+    pub fn update_earnings(
         env: Env,
         freelancer: Address,
         amount: i128,
     ) -> bool {
-        let profile_key = Symbol::new(&env, &format!("profile_{}", freelancer));
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
         let mut profile = env
             .storage()
             .persistent()
@@ -178,11 +134,11 @@ impl FreelancerContractTrait for FreelancerContract {
         true
     }
 
-    fn verify_freelancer(
+    pub fn verify_freelancer(
         env: Env,
         freelancer: Address,
     ) -> bool {
-        let profile_key = Symbol::new(&env, &format!("profile_{}", freelancer));
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
         let mut profile = env
             .storage()
             .persistent()
@@ -197,9 +153,9 @@ impl FreelancerContractTrait for FreelancerContract {
         true
     }
 
-    fn is_verified(env: Env, freelancer: Address) -> bool {
-        let profile_key = Symbol::new(&env, &format!("profile_{}", freelancer));
-        if let Ok(profile) = env
+    pub fn is_verified(env: Env, freelancer: Address) -> bool {
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
+        if let Some(profile) = env
             .storage()
             .persistent()
             .get::<Symbol, FreelancerProfile>(&profile_key)
@@ -210,7 +166,7 @@ impl FreelancerContractTrait for FreelancerContract {
         }
     }
 
-    fn get_freelancers_count(env: Env) -> u32 {
+    pub fn get_freelancers_count(env: Env) -> u32 {
         let count_key = Symbol::new(&env, "freelancer_count");
         env.storage()
             .persistent()

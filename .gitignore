@@ -17,6 +17,7 @@ node_modules/
 .DS_Store
 target/
 backend/target/
+**/test_snapshots/
 *.log
 .idea/
 .vscode/
