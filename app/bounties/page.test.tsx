@@ -7,6 +7,20 @@ vi.mock('next/link', () => ({ default: ({ children, href }: { children: React.Re
 // Mock layout components to keep tests focused
 vi.mock('@/components/header', () => ({ Header: () => <header data-testid="header" /> }));
 vi.mock('@/components/footer', () => ({ Footer: () => <footer data-testid="footer" /> }));
+// Mock API client so tests don't make real network calls
+vi.mock('@/lib/api-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api-client')>();
+  return {
+    ...actual,
+    submitEscrowTransaction: vi.fn().mockResolvedValue({
+      escrowId: 'test-escrow-1',
+      txHash: 'abc123testHash',
+      operation: 'deposit',
+      status: 'confirmed',
+      timestamp: '2026-04-23T12:00:00Z',
+    }),
+  };
+});
 
 import BountiesPage from './page';
 import { bounties } from '@/lib/creators-data';
@@ -89,6 +103,7 @@ describe('ApplyModal', () => {
   it('shows submitting state and then success', async () => {
     vi.useFakeTimers();
     openModal();
+    fireEvent.change(screen.getByLabelText(/stellar wallet address/i), { target: { value: 'GPAYER123STELLARADDRESS' } });
     fireEvent.change(screen.getByLabelText(/proposed budget/i), { target: { value: '2000' } });
     fireEvent.change(screen.getByLabelText(/delivery timeline/i), { target: { value: '14' } });
     fireEvent.change(screen.getByLabelText(/proposal/i), { target: { value: 'My detailed proposal' } });
