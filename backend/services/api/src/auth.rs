@@ -41,6 +41,7 @@ pub fn validate_token(token: &str) -> Result<Claims, String> {
     let key = DecodingKey::from_secret(jwt_secret().as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
+    validation.leeway = 0;
 
     decode::<Claims>(token, &key, &validation)
         .map(|data| data.claims)

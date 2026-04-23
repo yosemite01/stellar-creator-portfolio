@@ -139,6 +139,7 @@ export interface ReputationAggregation {
   stars3: number;
   stars2: number;
   stars1: number;
+  isVerified: boolean;
 }
 
 /** Payload for creator reputation + recent reviews. */

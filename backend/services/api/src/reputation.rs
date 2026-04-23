@@ -39,6 +39,7 @@ pub struct ReputationAggregation {
     pub stars_3: u32,
     pub stars_2: u32,
     pub stars_1: u32,
+    pub is_verified: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,6 +81,8 @@ pub fn aggregate_reviews(reviews: &[Review]) -> ReputationAggregation {
         (raw * 100.0).round() / 100.0
     };
 
+    let is_verified = count >= 3 && average_rating >= 4.5;
+
     ReputationAggregation {
         average_rating,
         total_reviews: count,
@@ -88,6 +91,7 @@ pub fn aggregate_reviews(reviews: &[Review]) -> ReputationAggregation {
         stars_3: stars[2],
         stars_2: stars[1],
         stars_1: stars[0],
+        is_verified,
     }
 }
 
@@ -247,6 +251,26 @@ mod tests {
         assert_eq!(agg.stars_5, 1);
         assert_eq!(agg.stars_4, 1);
         assert_eq!(agg.stars_3, 0);
+        assert_eq!(agg.is_verified, false, "need at least 3 reviews");
+    }
+
+    #[test]
+    fn aggregate_verified_threshold() {
+        let mut revs = sample_reviews();
+        // Add a third valid high-rating review
+        revs.push(Review {
+            id: "d".into(),
+            creator_id: "c1".into(),
+            rating: 5,
+            title: "".into(),
+            body: "".into(),
+            reviewer_name: "".into(),
+            created_at: "2025-01-03".into(),
+        });
+        let agg = aggregate_reviews(&revs);
+        assert_eq!(agg.total_reviews, 3);
+        assert!(agg.average_rating >= 4.5);
+        assert_eq!(agg.is_verified, true);
     }
 
     #[test]

@@ -5,6 +5,8 @@ import type { ApiResponse, CreatorReputationPayload } from '@/lib/api-models';
 import { isApiSuccess } from '@/lib/api-models';
 import { ReviewList } from '@/components/review-list';
 import { ErrorAlert } from '@/components/error-alert';
+import { Badge } from '@/components/ui/badge';
+import { CheckCircle } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -119,7 +121,15 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
   return (
     <section className="border-b border-border bg-muted/20 py-12">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <h2 className="text-2xl font-bold text-foreground mb-2">Client reviews</h2>
+        <div className="flex flex-wrap items-center gap-3 mb-2">
+          <h2 className="text-2xl font-bold text-foreground">Client reviews</h2>
+          {aggregation.isVerified && (
+            <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 px-3 py-1 gap-1.5 rounded-full hover:bg-emerald-500/15 transition-colors">
+              <CheckCircle size={14} className="fill-emerald-600/10" />
+              Verified Creator
+            </Badge>
+          )}
+        </div>
         <p className="text-muted-foreground mb-8">
           Ratings from verified clients who worked with this creator.
         </p>

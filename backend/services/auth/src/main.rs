@@ -233,45 +233,61 @@ async fn get_challenge() -> HttpResponse {
 
 async fn verify_auth_signature(body: web::Json<VerifySignatureRequest>) -> HttpResponse {
     tracing::info!("Verifying auth signature for public key: {}", body.public_key);
-    
+
     let pub_key_bytes = match hex::decode(&body.public_key) {
         Ok(b) => b,
-        Err(_) => return HttpResponse::BadRequest().json(ApiResponse::<VerifySignatureResponse>::err("Invalid hex in public_key".to_string())),
+        Err(_) => {
+            return HttpResponse::BadRequest().json(ApiResponse::<VerifySignatureResponse>::err(
+                "Invalid hex in public_key".to_string(),
+            ))
+        }
     };
 
     let sig_bytes = match hex::decode(&body.signature) {
         Ok(b) => b,
-        Err(_) => return HttpResponse::BadRequest().json(ApiResponse::<VerifySignatureResponse>::err("Invalid hex in signature".to_string())),
+        Err(_) => {
+            return HttpResponse::BadRequest().json(ApiResponse::<VerifySignatureResponse>::err(
+                "Invalid hex in signature".to_string(),
+            ))
+        }
     };
 
     match verify_signature(&pub_key_bytes, &sig_bytes, body.message.as_bytes()) {
-        Ok(true) => {
-            let expiration = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_secs() as usize + 24 * 3600;
-
-            let claims = Claims {
-                sub: body.public_key.clone(),
-                exp: expiration,
-            };
-
-            let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret_for_development_only".to_string());
-            
-            match jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_ref())) {
-                Ok(token) => {
-                    HttpResponse::Ok().json(ApiResponse::ok(VerifySignatureResponse { token }))
-                }
-                Err(e) => {
-                    tracing::error!("JWT encoding error: {}", e);
-                    HttpResponse::InternalServerError().json(ApiResponse::<VerifySignatureResponse>::err("Failed to generate token".to_string()))
-                }
+        Ok(true) => match create_jwt(&body.public_key) {
+            Ok(token) => HttpResponse::Ok().json(ApiResponse::ok(VerifySignatureResponse { token })),
+            Err(e) => {
+                tracing::error!("JWT encoding error: {}", e);
+                HttpResponse::InternalServerError().json(ApiResponse::<VerifySignatureResponse>::err(
+                    "Failed to generate token".to_string(),
+                ))
             }
-        }
-        Ok(false) | Err(_) => {
-            HttpResponse::Unauthorized().json(ApiResponse::<VerifySignatureResponse>::err("Invalid signature".to_string()))
-        }
+        },
+        Ok(false) | Err(_) => HttpResponse::Unauthorized()
+            .json(ApiResponse::<VerifySignatureResponse>::err("Invalid signature".to_string())),
     }
+}
+
+/// Create a JWT for a given public key.
+pub fn create_jwt(public_key: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    let expiration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs() as usize
+        + 24 * 3600;
+
+    let claims = Claims {
+        sub: public_key.to_string(),
+        exp: expiration,
+    };
+
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "default_secret_for_development_only".to_string());
+
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_ref()),
+    )
 }
 
 async fn health() -> HttpResponse {
@@ -575,5 +591,49 @@ mod tests {
         assert_eq!(body["success"], true);
         let token = body["data"]["token"].as_str().expect("token must be a string");
         assert!(token.starts_with("eyJ")); // JWT header
+
+        // Verify the token claims
+        let jwt_secret = std::env::var("JWT_SECRET")
+            .unwrap_or_else(|_| "default_secret_for_development_only".to_string());
+        let token_data = jsonwebtoken::decode::<Claims>(
+            token,
+            &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_ref()),
+            &jsonwebtoken::Validation::default(),
+        )
+        .expect("Token should be decodable");
+
+        assert_eq!(token_data.claims.sub, req_body.public_key);
+    }
+
+    #[test]
+    fn test_create_jwt_valid() {
+        let pub_key = "test_pub_key";
+        let token = create_jwt(pub_key).expect("Should create token");
+        
+        let jwt_secret = std::env::var("JWT_SECRET")
+            .unwrap_or_else(|_| "default_secret_for_development_only".to_string());
+        let token_data = jsonwebtoken::decode::<Claims>(
+            &token,
+            &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_ref()),
+            &jsonwebtoken::Validation::default(),
+        )
+        .expect("Token should be decodable");
+
+        assert_eq!(token_data.claims.sub, pub_key);
+        assert!(token_data.claims.exp > (SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as usize));
+    }
+
+    #[test]
+    fn test_verify_signature_empty_message() {
+        let message = b"";
+        let (pub_key, sig) = make_test_sig(message);
+        assert_eq!(verify_signature(&pub_key, &sig, message), Ok(true));
+    }
+
+    #[test]
+    fn test_verify_signature_large_message() {
+        let message = vec![0u8; 1024 * 1024]; // 1MB message
+        let (pub_key, sig) = make_test_sig(&message);
+        assert_eq!(verify_signature(&pub_key, &sig, &message), Ok(true));
     }
 }
