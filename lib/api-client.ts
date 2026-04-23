@@ -51,9 +51,38 @@ const BASE_URL =
     ? (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001')
     : 'http://localhost:3001';
 
+/** localStorage key where the JWT is stored after a successful auth flow. */
+const JWT_STORAGE_KEY = 'stellar_auth_token';
+
+/**
+ * Persist a JWT so subsequent requests are automatically authenticated.
+ * Call this after a successful /api/auth/verify response.
+ */
+export function setAuthToken(token: string): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(JWT_STORAGE_KEY, token);
+  }
+}
+
+/** Remove the stored JWT (e.g. on logout). */
+export function clearAuthToken(): void {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem(JWT_STORAGE_KEY);
+  }
+}
+
+/** Read the current JWT from localStorage, or null if not present. */
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(JWT_STORAGE_KEY);
+}
+
 /**
  * Fetch a backend endpoint and unwrap the `ApiResponse<T>` envelope.
  * Throws `ApiClientError` on any failure so callers never receive raw errors.
+ *
+ * JWT interceptor: if a token is stored via `setAuthToken`, it is automatically
+ * attached as `Authorization: Bearer <token>` on every request.
  */
 export async function apiFetch<T>(
   path: string,
@@ -61,9 +90,16 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
 
+  // JWT interceptor — attach token when available
+  const token = getAuthToken();
+  const authHeader: Record<string, string> = token
+    ? { Authorization: `Bearer ${token}` }
+    : {};
+
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
+    ...authHeader,
     ...(init.headers ?? {}),
   };
 

@@ -19,6 +19,11 @@ pub struct FreelancerProfile {
     pub created_at: u64,
 }
 
+/// Storage key for the contract owner address (set once at init).
+const OWNER_KEY: &str = "owner";
+
+/// Storage key prefix for the public-key → user mapping.
+const PK_MAP_PREFIX: &str = "pk_map_";
 /// Identity Registry Metadata
 #[contracttype]
 pub struct IdentityMetadata {
@@ -32,6 +37,48 @@ pub struct FreelancerContract;
 
 #[contractimpl]
 impl FreelancerContract {
+    // ── Initialisation ────────────────────────────────────────────────────────
+
+    /// Set the contract owner. Must be called once after deployment.
+    pub fn initialize(env: Env, owner: Address) {
+        owner.require_auth();
+        let owner_key = Symbol::new(&env, OWNER_KEY);
+        if env.storage().persistent().has(&owner_key) {
+            panic!("Already initialized");
+        }
+        env.storage().persistent().set(&owner_key, &owner);
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    fn get_owner(env: &Env) -> Address {
+        let owner_key = Symbol::new(env, OWNER_KEY);
+        env.storage()
+            .persistent()
+            .get::<Symbol, Address>(&owner_key)
+            .expect("Contract not initialized")
+    }
+
+    // ── Public-key → user mapping (owner-only) ────────────────────────────────
+
+    /// Map a Stellar public key to a user address. Only the contract owner may call this.
+    pub fn set_public_key_mapping(env: Env, public_key: String, user: Address) {
+        // #313: owner-only guard
+        let owner = Self::get_owner(&env);
+        owner.require_auth();
+
+        let map_key = Symbol::new(&env, &format!("{}{:?}", PK_MAP_PREFIX, public_key));
+        env.storage().persistent().set(&map_key, &user);
+    }
+
+    /// Retrieve the user address associated with a public key.
+    pub fn get_user_by_public_key(env: Env, public_key: String) -> Option<Address> {
+        let map_key = Symbol::new(&env, &format!("{}{:?}", PK_MAP_PREFIX, public_key));
+        env.storage().persistent().get::<Symbol, Address>(&map_key)
+    }
+
+    // ── Freelancer registration ───────────────────────────────────────────────
+
     pub fn register_freelancer(
         env: Env,
         freelancer: Address,
@@ -39,7 +86,10 @@ impl FreelancerContract {
         discipline: String,
         bio: String,
     ) -> bool {
+        // #312: caller must authorise this action
         freelancer.require_auth();
+
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
 
         let profile_key = (Symbol::new(&env, "profile"), freelancer.clone());
         
@@ -63,6 +113,7 @@ impl FreelancerContract {
 
         env.storage().persistent().set(&profile_key, &profile);
 
+        let count_key = Symbol::new(&env, "freelancer_count");
         // Increment freelancers count
         let count_key = Symbol::new(&env, "f_count");
         let count: u32 = env
@@ -83,6 +134,14 @@ impl FreelancerContract {
             .expect("Freelancer not registered")
     }
 
+    /// Update the rating for a freelancer. Only the contract owner may call this
+    /// to prevent self-rating abuse. (#312)
+    pub fn update_rating(env: Env, freelancer: Address, new_rating: u32) -> bool {
+        // #312: owner-only — ratings must come from the platform, not self
+        let owner = Self::get_owner(&env);
+        owner.require_auth();
+
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
     pub fn update_rating(
         env: Env,
         freelancer: Address,
@@ -95,17 +154,22 @@ impl FreelancerContract {
             .get::<(Symbol, Address), FreelancerProfile>(&profile_key)
             .expect("Freelancer not registered");
 
-        // Calculate new average rating
         let total = (profile.rating as u64) * (profile.total_rating_count as u64);
         let new_total = total + (new_rating as u64);
         profile.total_rating_count += 1;
         profile.rating = (new_total / (profile.total_rating_count as u64)) as u32;
 
         env.storage().persistent().set(&profile_key, &profile);
-
         true
     }
 
+    /// Record a completed project. Only the contract owner may call this. (#312)
+    pub fn update_completed_projects(env: Env, freelancer: Address) -> bool {
+        // #312: owner-only — completion must be confirmed by the platform
+        let owner = Self::get_owner(&env);
+        owner.require_auth();
+
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
     pub fn update_completed_projects(
         env: Env,
         freelancer: Address,
@@ -119,10 +183,16 @@ impl FreelancerContract {
 
         profile.completed_projects += 1;
         env.storage().persistent().set(&profile_key, &profile);
-
         true
     }
 
+    /// Update earnings for a freelancer. Only the contract owner may call this. (#312)
+    pub fn update_earnings(env: Env, freelancer: Address, amount: i128) -> bool {
+        // #312: owner-only — earnings are credited by the escrow/platform
+        let owner = Self::get_owner(&env);
+        owner.require_auth();
+
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
     pub fn update_earnings(
         env: Env,
         freelancer: Address,
@@ -137,10 +207,16 @@ impl FreelancerContract {
 
         profile.total_earnings += amount;
         env.storage().persistent().set(&profile_key, &profile);
-
         true
     }
 
+    /// Verify a freelancer. Only the contract owner may call this. (#312)
+    pub fn verify_freelancer(env: Env, freelancer: Address) -> bool {
+        // #312: owner-only — verification is a privileged admin action
+        let owner = Self::get_owner(&env);
+        owner.require_auth();
+
+        let profile_key = Symbol::new(&env, &format!("profile_{:?}", freelancer));
     pub fn verify_freelancer(
         env: Env,
         freelancer: Address,
@@ -152,11 +228,8 @@ impl FreelancerContract {
             .get::<(Symbol, Address), FreelancerProfile>(&profile_key)
             .expect("Freelancer not registered");
 
-        // In a real scenario, this would require admin auth
-        // For now, any verified contract can verify
         profile.verified = true;
         env.storage().persistent().set(&profile_key, &profile);
-
         true
     }
 

@@ -6,6 +6,7 @@ members = [
     "contracts/governance",
     "services/api",
     "services/auth",
+    "tests",
 ]
 resolver = "2"
 
