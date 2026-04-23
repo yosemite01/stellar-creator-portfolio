@@ -8,10 +8,13 @@
 
 #[cfg(test)]
 mod fuzz_tests {
+    extern crate std;
+    use std::panic;
+
     use crate::{EscrowContract, EscrowContractClient, EscrowStatus, ReleaseCondition};
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::token::{StellarAssetClient, TokenClient};
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Vec, vec};
 
     fn setup_token_env(env: &Env, amount: i128) -> (Address, Address, Address) {
         env.mock_all_auths();
@@ -34,6 +37,7 @@ mod fuzz_tests {
         let contract = EscrowContractClient::new(&env, &contract_id);
 
         let escrow_id = contract.deposit(
+            &1u64,
             &payer,
             &payee,
             &1000i128,
@@ -50,7 +54,7 @@ mod fuzz_tests {
         assert_eq!(token_client.balance(&contract_id), 0i128);
 
         // Second release attempt fails
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.release_funds(&payer, &escrow_id);
         }));
         assert!(result.is_err(), "Second release should panic");
@@ -60,7 +64,7 @@ mod fuzz_tests {
     fn fuzz_invariant_balance_conservation() {
         // Test that total token balance is conserved through operations
         let env = Env::default();
-        let amounts = vec![100i128, 500i128, 1000i128, 9999i128];
+        let amounts = vec![&env, 100i128, 500i128, 1000i128, 9999i128];
 
         for amount in amounts {
             let (token, payer, payee) = setup_token_env(&env, amount);
@@ -71,6 +75,7 @@ mod fuzz_tests {
             assert_eq!(initial_balance, amount);
 
             let escrow_id = contract.deposit(
+                &1u64,
                 &payer,
                 &payee,
                 &amount,
@@ -99,6 +104,7 @@ mod fuzz_tests {
         let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
 
         let escrow_id = contract.deposit(
+            &1u64,
             &payer,
             &payee,
             &1000i128,
@@ -110,7 +116,7 @@ mod fuzz_tests {
         assert!(contract.refund_escrow(&payer, &escrow_id));
 
         // Release after refund must fail
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.release_funds(&payee, &escrow_id);
         }));
         assert!(result.is_err(), "Release after refund should panic");
@@ -124,6 +130,7 @@ mod fuzz_tests {
         let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
 
         let escrow_id = contract.deposit(
+            &1u64,
             &payer,
             &payee,
             &1000i128,
@@ -133,13 +140,13 @@ mod fuzz_tests {
 
         // Third party cannot release
         let stranger = Address::generate(&env);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.release_funds(&stranger, &escrow_id);
         }));
         assert!(result.is_err(), "Unauthorized party should not release");
 
         // Payee cannot refund
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.refund_escrow(&payee, &escrow_id);
         }));
         assert!(result.is_err(), "Payee should not refund");
@@ -153,8 +160,9 @@ mod fuzz_tests {
         let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
 
         // Zero amount should fail
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.deposit(
+                &1u64,
                 &payer,
                 &payee,
                 &0i128,
@@ -165,8 +173,9 @@ mod fuzz_tests {
         assert!(result.is_err(), "Zero amount should be rejected");
 
         // Negative amount should fail
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.deposit(
+                &1u64,
                 &payer,
                 &payee,
                 &-100i128,
@@ -191,6 +200,7 @@ mod fuzz_tests {
 
         // Create escrow with timelock at 2000
         let escrow_id = contract.deposit(
+            &1u64,
             &payer,
             &payee,
             &1000i128,
@@ -199,7 +209,7 @@ mod fuzz_tests {
         );
 
         // Try to release before timelock - should fail
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.release_funds(&payee, &escrow_id);
         }));
         assert!(result.is_err(), "Release before timelock should fail");
@@ -220,21 +230,23 @@ mod fuzz_tests {
         let (token, payer, payee) = setup_token_env(&env, 5000i128);
         let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
 
-        let ids: Vec<u64> = (0..10)
-            .map(|i| {
+        let mut ids = Vec::new(&env);
+        for _ in 0..10 {
+            ids.push_back(
                 contract.deposit(
+                    &1u64,
                     &payer,
                     &payee,
                     &(500i128),
                     &token,
                     &ReleaseCondition::OnCompletion,
                 )
-            })
-            .collect();
+            );
+        }
 
         // Verify sequential IDs
         for (i, id) in ids.iter().enumerate() {
-            assert_eq!(*id, (i + 1) as u64, "IDs should increment sequentially");
+            assert_eq!(id, (i + 1) as u64, "IDs should increment sequentially");
         }
 
         // Verify we can retrieve all escrows
@@ -252,28 +264,30 @@ mod fuzz_tests {
         let (token, payer, payee) = setup_token_env(&env, 10000i128);
         let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
 
-        let escrow_ids: Vec<u64> = (0..5)
-            .map(|i| {
+        let mut escrow_ids = Vec::new(&env);
+        for _ in 0..5 {
+            escrow_ids.push_back(
                 contract.deposit(
+                    &1u64,
                     &payer,
                     &payee,
                     &(1000i128),
                     &token,
                     &ReleaseCondition::OnCompletion,
                 )
-            })
-            .collect();
+            );
+        }
 
         // Release every other escrow
         for (i, id) in escrow_ids.iter().enumerate() {
             if i % 2 == 0 {
-                assert!(contract.release_funds(&payer, id));
+                assert!(contract.release_funds(&payer, &id));
             }
         }
 
         // Verify states
         for (i, id) in escrow_ids.iter().enumerate() {
-            let escrow = contract.get_escrow(id);
+            let escrow = contract.get_escrow(&id);
             if i % 2 == 0 {
                 assert_eq!(escrow.status, EscrowStatus::Released);
             } else {
@@ -291,6 +305,7 @@ mod fuzz_tests {
 
         // Test valid transition: Active -> Released
         let id1 = contract.deposit(
+            &1u64,
             &payer,
             &payee,
             &1000i128,
@@ -303,6 +318,7 @@ mod fuzz_tests {
 
         // Test valid transition: Active -> Refunded
         let id2 = contract.deposit(
+            &1u64,
             &payer,
             &payee,
             &1000i128,
@@ -314,13 +330,13 @@ mod fuzz_tests {
         assert_eq!(contract.get_escrow(&id2).status, EscrowStatus::Refunded);
 
         // Test invalid transitions from Released
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.refund_escrow(&payer, &id1);
         }));
         assert!(result.is_err(), "Cannot refund released escrow");
 
         // Test invalid transitions from Refunded
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             contract.release_funds(&payee, &id2);
         }));
         assert!(result.is_err(), "Cannot release refunded escrow");

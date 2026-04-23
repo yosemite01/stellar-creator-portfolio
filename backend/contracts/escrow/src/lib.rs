@@ -8,7 +8,7 @@ use soroban_sdk::{
 };
 
 /// Escrow Status
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 #[contracttype]
 pub enum EscrowStatus {
     Active = 0,
@@ -18,7 +18,7 @@ pub enum EscrowStatus {
 }
 
 /// Release Condition
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[contracttype]
 pub enum ReleaseCondition {
     OnCompletion,
