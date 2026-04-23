@@ -30,7 +30,7 @@ function ApplyModal({ bounty, onClose }: { bounty: Bounty; onClose: () => void }
     setState('submitting');
 
     try {
-      // Simulate escrow deposit call — replace with real apiFetch('/api/bounties/:id/apply')
+      // Simulate escrow deposit call — replace with real apiFetch('/api/bounties/:id/apply', { bounty_id: bounty.id })
       await new Promise<void>((res) => setTimeout(res, 1200));
       setState('success');
     } catch {
