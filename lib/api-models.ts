@@ -176,6 +176,48 @@ export function validateReview(data: Partial<ReviewSubmission>): FieldError[] | 
   return errors.length > 0 ? errors : null;
 }
 
+// ── Escrow / Transaction models ───────────────────────────────────────────────
+
+/** Supported escrow operations submitted via the Stellar SDK. */
+export type EscrowOperation = 'deposit' | 'release' | 'refund' | 'dispute';
+
+/** Payload for submitting an escrow transaction. */
+export interface EscrowTransactionRequest {
+  bountyId: string;
+  escrowId?: string;
+  operation: EscrowOperation;
+  amount?: number;
+  payerAddress: string;
+  payeeAddress?: string;
+  tokenAddress?: string;
+  timelock?: number;
+}
+
+/** Response returned after a successful escrow transaction submission. */
+export interface EscrowTransactionResponse {
+  escrowId: string;
+  txHash: string;
+  operation: EscrowOperation;
+  status: 'pending' | 'confirmed' | 'failed';
+  timestamp: string;
+}
+
+/** Validate an EscrowTransactionRequest. Returns field errors or null if valid. */
+export function validateEscrowTransaction(
+  data: Partial<EscrowTransactionRequest>,
+): FieldError[] | null {
+  const errors: FieldError[] = [];
+  if (!data.bountyId?.trim()) errors.push({ field: 'bountyId', message: 'Bounty ID is required' });
+  if (!data.operation) errors.push({ field: 'operation', message: 'Operation is required' });
+  if (!data.payerAddress?.trim()) errors.push({ field: 'payerAddress', message: 'Payer address is required' });
+  if (data.operation === 'deposit') {
+    if (!data.payeeAddress?.trim()) errors.push({ field: 'payeeAddress', message: 'Payee address is required for deposit' });
+    if (!data.amount || data.amount <= 0) errors.push({ field: 'amount', message: 'Amount must be positive' });
+    if (!data.tokenAddress?.trim()) errors.push({ field: 'tokenAddress', message: 'Token address is required for deposit' });
+  }
+  return errors.length > 0 ? errors : null;
+}
+
 // ── Creator (mirrors Rust Creator struct) ─────────────────────────────────────
 
 export interface Creator {

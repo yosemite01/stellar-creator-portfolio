@@ -23,9 +23,33 @@ export const ERROR_MESSAGES: Record<string, string> = {
 };
 
 /**
- * Get a user-friendly error message from an API error.
+ * Escrow-specific error messages keyed by the error message substring
+ * returned from the Soroban contract.
+ */
+export const ESCROW_ERROR_MESSAGES: Record<string, string> = {
+  'Escrow not found': 'The escrow account could not be found.',
+  'Escrow not active': 'This escrow is no longer active.',
+  'Release condition not met': 'The release condition has not been met yet.',
+  'Unauthorized': 'You are not authorized to perform this escrow action.',
+  'Only payer can refund': 'Only the payer can request a refund.',
+  'Only payer can add milestones': 'Only the payer can add milestones.',
+  'Only payer can release milestones': 'Only the payer can release milestones.',
+  'Milestone already released': 'This milestone has already been released.',
+  'Milestone not found': 'The specified milestone could not be found.',
+  'Milestone amount exceeds escrow': 'The milestone amount exceeds the escrow balance.',
+  'Amount must be positive': 'The escrow amount must be greater than zero.',
+  'Unknown operation': 'The requested escrow operation is not supported.',
+};
+
+/**
+ * Get a user-friendly error message from an API error,
+ * with special handling for escrow contract errors.
  */
 export function getErrorMessage(error: ApiError): string {
+  // Check for escrow-specific messages first
+  for (const [key, msg] of Object.entries(ESCROW_ERROR_MESSAGES)) {
+    if (error.message.includes(key)) return msg;
+  }
   return ERROR_MESSAGES[error.code] || error.message;
 }
 

@@ -18,6 +18,8 @@ import {
   type CreatorReputationPayload,
   type PaginatedData,
   type ReviewSubmission,
+  type EscrowTransactionRequest,
+  type EscrowTransactionResponse,
   isApiSuccess,
 } from './api-models';
 import { notifyLoadingChange } from '../components/layout-provider';
@@ -159,5 +161,26 @@ export async function submitReview(
   return apiFetch('/api/reviews', {
     method: 'POST',
     body: JSON.stringify(data),
+  });
+}
+
+/** POST /api/escrow/transaction — submit a Stellar escrow transaction via the backend SDK. */
+export async function submitEscrowTransaction(
+  data: EscrowTransactionRequest,
+): Promise<EscrowTransactionResponse> {
+  return apiFetch('/api/escrow/transaction', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/** POST /api/escrow/:id/release — release escrowed funds to payee. */
+export async function releaseEscrow(
+  escrowId: string,
+  authorizerAddress: string,
+): Promise<EscrowTransactionResponse> {
+  return apiFetch(`/api/escrow/${escrowId}/release`, {
+    method: 'POST',
+    body: JSON.stringify({ authorizerAddress }),
   });
 }

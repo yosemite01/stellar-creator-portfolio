@@ -4,7 +4,8 @@ extern crate alloc;
 use alloc::format;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, Env, Symbol, token::Client as TokenClient,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+    token::Client as TokenClient,
 };
 
 /// Escrow Status
@@ -90,6 +91,13 @@ impl EscrowContract {
 
         env.storage().persistent().set(&Symbol::new(&env, &format!("escrow_{}", counter)), &escrow);
         env.storage().persistent().set(&counter_key, &counter);
+
+        // Emit escrow_deposited event for indexers
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("deposited")),
+            (counter, bounty_id, escrow.payer.clone(), escrow.payee.clone(), amount),
+        );
+
         counter
     }
 
@@ -117,6 +125,13 @@ impl EscrowContract {
         escrow.status = EscrowStatus::Released;
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
+
+        // Emit escrow_released event for indexers
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("released")),
+            (escrow_id, escrow.bounty_id, escrow.payee.clone(), escrow.amount),
+        );
+
         true
     }
 
@@ -136,6 +151,13 @@ impl EscrowContract {
         escrow.status = EscrowStatus::Refunded;
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
+
+        // Emit escrow_refunded event for indexers
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("refunded")),
+            (escrow_id, escrow.bounty_id, escrow.payer.clone(), escrow.amount),
+        );
+
         true
     }
 
@@ -151,6 +173,13 @@ impl EscrowContract {
 
         escrow.status = EscrowStatus::Disputed;
         env.storage().persistent().set(&key, &escrow);
+
+        // Emit escrow_disputed event for indexers
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("disputed")),
+            (escrow_id, escrow.bounty_id, authorizer),
+        );
+
         true
     }
 
@@ -201,6 +230,13 @@ impl EscrowContract {
 
         milestone.released = true;
         env.storage().persistent().set(&m_key, &milestone);
+
+        // Emit milestone_released event for indexers
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("ms_rel")),
+            (escrow_id, index, escrow.payee.clone(), milestone.amount),
+        );
+
         true
     }
 
@@ -224,6 +260,50 @@ impl EscrowContract {
             .persistent()
             .get::<Symbol, u64>(&Symbol::new(&env, "escrow_counter"))
             .unwrap_or(0)
+    }
+
+    /// Submit a Stellar transaction for an escrow operation.
+    ///
+    /// This is the on-chain entry point called by the backend Stellar SDK
+    /// after building and signing a transaction envelope. It validates the
+    /// operation type and delegates to the appropriate escrow function.
+    ///
+    /// `operation`: one of "deposit", "release", "refund", "dispute"
+    /// `escrow_id`: target escrow (0 for deposit, which creates a new one)
+    /// Returns the escrow_id that was acted upon.
+    pub fn submit_transaction(
+        env: Env,
+        caller: Address,
+        operation: Symbol,
+        escrow_id: u64,
+    ) -> u64 {
+        caller.require_auth();
+
+        let op_deposit = Symbol::new(&env, "deposit");
+        let op_release = Symbol::new(&env, "release");
+        let op_refund = Symbol::new(&env, "refund");
+        let op_dispute = Symbol::new(&env, "dispute");
+
+        if operation == op_release {
+            Self::release_funds(env.clone(), caller.clone(), escrow_id);
+        } else if operation == op_refund {
+            Self::refund_escrow(env.clone(), caller.clone(), escrow_id);
+        } else if operation == op_dispute {
+            Self::dispute_escrow(env.clone(), caller.clone(), escrow_id);
+        } else if operation == op_deposit {
+            // deposit requires additional params; callers should use deposit() directly
+            assert!(false, "Use deposit() directly for new escrows");
+        } else {
+            assert!(false, "Unknown operation");
+        }
+
+        // Emit a generic transaction_submitted event for the indexer
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("tx_sub")),
+            (escrow_id, operation, caller),
+        );
+
+        escrow_id
     }
 }
 

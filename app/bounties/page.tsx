@@ -5,7 +5,11 @@ import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { Button } from '@/components/ui/button';
 import { bounties, Bounty } from '@/lib/creators-data';
-import { ArrowRight, Filter, Calendar, DollarSign, Zap, X, CheckCircle, Loader2 } from 'lucide-react';
+import { ArrowRight, Filter, Calendar, DollarSign, Zap, X, CheckCircle, Loader2, ExternalLink } from 'lucide-react';
+import { submitEscrowTransaction } from '@/lib/api-client';
+import { validateEscrowTransaction } from '@/lib/api-models';
+import { getErrorMessage } from '@/lib/error-handling';
+import { ApiClientError } from '@/lib/api-client';
 
 // ── Apply Modal ───────────────────────────────────────────────────────────────
 
@@ -15,8 +19,10 @@ function ApplyModal({ bounty, onClose }: { bounty: Bounty; onClose: () => void }
   const [proposal, setProposal] = useState('');
   const [budget, setBudget] = useState(String(bounty.budget));
   const [timeline, setTimeline] = useState('7');
+  const [walletAddress, setWalletAddress] = useState('');
   const [state, setState] = useState<ApplyState>('idle');
   const [error, setError] = useState('');
+  const [txHash, setTxHash] = useState('');
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -25,17 +31,37 @@ function ApplyModal({ bounty, onClose }: { bounty: Bounty; onClose: () => void }
     if (!b || b <= 0) { setError('Budget must be positive'); return; }
     const t = Number(timeline);
     if (!t || t <= 0) { setError('Timeline must be positive'); return; }
+    if (!walletAddress.trim()) { setError('Stellar wallet address is required'); return; }
+
+    const txRequest = {
+      bountyId: bounty.id,
+      operation: 'deposit' as const,
+      amount: b,
+      payerAddress: walletAddress.trim(),
+      payeeAddress: 'GBOUNTY_PLATFORM_ADDRESS', // platform escrow address
+      tokenAddress: 'USDC_TOKEN_ADDRESS',        // USDC on Stellar testnet
+    };
+
+    const validationErrors = validateEscrowTransaction(txRequest);
+    if (validationErrors) {
+      setError(validationErrors[0].message);
+      return;
+    }
 
     setError('');
     setState('submitting');
 
     try {
-      // Simulate escrow deposit call — replace with real apiFetch('/api/bounties/:id/apply', { bounty_id: bounty.id })
-      await new Promise<void>((res) => setTimeout(res, 1200));
+      const result = await submitEscrowTransaction(txRequest);
+      setTxHash(result.txHash);
       setState('success');
-    } catch {
+    } catch (err) {
       setState('error');
-      setError('Submission failed. Please try again.');
+      if (err instanceof ApiClientError) {
+        setError(getErrorMessage({ code: err.code, message: err.message }));
+      } else {
+        setError('Transaction submission failed. Please try again.');
+      }
     }
   }
 
@@ -63,10 +89,23 @@ function ApplyModal({ bounty, onClose }: { bounty: Bounty; onClose: () => void }
           <div className="p-8 text-center" data-testid="apply-success">
             <CheckCircle size={48} className="text-green-500 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-foreground mb-2">Application Submitted!</h3>
-            <p className="text-sm text-muted-foreground mb-6">
-              Your proposal has been submitted. Funds will be held in escrow until the bounty is completed.
+            <p className="text-sm text-muted-foreground mb-4">
+              Your proposal has been submitted and funds are locked in the Soroban escrow contract.
             </p>
-            <Button onClick={onClose}>Close</Button>
+            {txHash && (
+              <a
+                href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline mb-6"
+              >
+                View transaction on Stellar Explorer
+                <ExternalLink size={13} />
+              </a>
+            )}
+            <div className="mt-4">
+              <Button onClick={onClose}>Close</Button>
+            </div>
           </div>
         ) : (
           <form onSubmit={handleSubmit} noValidate className="p-6 space-y-5">
@@ -76,6 +115,22 @@ function ApplyModal({ bounty, onClose }: { bounty: Bounty; onClose: () => void }
               <p className="text-muted-foreground">
                 Budget is held in a Soroban escrow contract and released only on completion.
               </p>
+            </div>
+
+            {/* Wallet address */}
+            <div>
+              <label htmlFor="apply-wallet" className="block text-sm font-medium text-foreground mb-1.5">
+                Your Stellar Wallet Address
+              </label>
+              <input
+                id="apply-wallet"
+                type="text"
+                value={walletAddress}
+                onChange={(e) => setWalletAddress(e.target.value)}
+                className="w-full px-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 font-mono"
+                placeholder="G…"
+                autoComplete="off"
+              />
             </div>
 
             {/* Proposed budget */}
