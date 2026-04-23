@@ -13,7 +13,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 function StarRow({ value, max = 5 }: { value: number; max?: number }) {
   const rounded = Math.round(value);
   return (
-    <div className="flex gap-0.5" aria-label={`${value.toFixed(1)} out of ${max} stars`}>
+    <div className="flex gap-0.5" aria-label={`${value.toFixed(2)} out of ${max} stars`}>
       {Array.from({ length: max }, (_, i) => (
         <span
           key={i}
@@ -138,7 +138,7 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
           <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-8">
             <div className="text-center sm:text-left">
               <div className="text-4xl font-bold text-primary tabular-nums">
-                {aggregation.averageRating.toFixed(1)}
+                {aggregation.averageRating.toFixed(2)}
               </div>
               <div className="text-sm text-muted-foreground">out of 5</div>
             </div>
