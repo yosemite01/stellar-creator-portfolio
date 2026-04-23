@@ -35,7 +35,7 @@ pub struct FieldError {
 pub struct ApiError {
     pub code: ApiErrorCode,
     pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", rename = "fieldErrors")]
     pub field_errors: Option<Vec<FieldError>>,
 }
 
@@ -214,19 +214,31 @@ async fn create_bounty(
 ) -> HttpResponse {
     tracing::info!("Creating bounty: {:?}", body.title);
 
+    let mut field_errors: Vec<FieldError> = Vec::new();
+    if body.creator.trim().is_empty() {
+        field_errors.push(FieldError { field: "creator".into(), message: "creator is required".into() });
+    }
     if body.title.trim().is_empty() {
-        return error_response(
-            actix_web::http::StatusCode::BAD_REQUEST,
-            ApiErrorCode::ValidationError,
-            "title is required",
-        );
+        field_errors.push(FieldError { field: "title".into(), message: "title is required".into() });
+    }
+    if body.description.trim().is_empty() {
+        field_errors.push(FieldError { field: "description".into(), message: "description is required".into() });
     }
     if body.budget <= 0 {
-        return error_response(
-            actix_web::http::StatusCode::BAD_REQUEST,
+        field_errors.push(FieldError { field: "budget".into(), message: "budget must be positive".into() });
+    }
+    if body.deadline == 0 {
+        field_errors.push(FieldError { field: "deadline".into(), message: "deadline is required".into() });
+    }
+    if !field_errors.is_empty() {
+        let body: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
             ApiErrorCode::ValidationError,
-            "budget must be positive",
-        );
+            "Validation failed",
+            field_errors,
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(body);
     }
 
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
@@ -291,6 +303,27 @@ async fn apply_for_bounty(
     let bounty_id = path.into_inner();
     tracing::info!("Applying for bounty {}: {}", bounty_id, body.freelancer);
 
+    let mut field_errors: Vec<FieldError> = Vec::new();
+    if body.freelancer.trim().is_empty() {
+        field_errors.push(FieldError { field: "freelancer".into(), message: "freelancer is required".into() });
+    }
+    if body.proposal.trim().is_empty() {
+        field_errors.push(FieldError { field: "proposal".into(), message: "proposal is required".into() });
+    }
+    if body.proposed_budget <= 0 {
+        field_errors.push(FieldError { field: "proposed_budget".into(), message: "proposed_budget must be positive".into() });
+    }
+    if !field_errors.is_empty() {
+        let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            field_errors,
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(resp);
+    }
+
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
             "application_id": 1,
@@ -312,12 +345,25 @@ async fn register_freelancer(
 ) -> HttpResponse {
     tracing::info!("Registering freelancer: {}", body.name);
 
+    let mut field_errors: Vec<FieldError> = Vec::new();
     if body.name.trim().is_empty() {
-        return error_response(
-            actix_web::http::StatusCode::BAD_REQUEST,
+        field_errors.push(FieldError { field: "name".into(), message: "name is required".into() });
+    }
+    if body.discipline.trim().is_empty() {
+        field_errors.push(FieldError { field: "discipline".into(), message: "discipline is required".into() });
+    }
+    if body.bio.trim().is_empty() {
+        field_errors.push(FieldError { field: "bio".into(), message: "bio is required".into() });
+    }
+    if !field_errors.is_empty() {
+        let body: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
             ApiErrorCode::ValidationError,
-            "name is required",
-        );
+            "Validation failed",
+            field_errors,
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(body);
     }
 
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
@@ -1127,5 +1173,193 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], true);
         assert_eq!(json["data"]["status"], "released");
+    }
+
+    // ── Validation: create_bounty ─────────────────────────────────────────────
+
+    fn build_public_write_app() -> actix_web::App<
+        impl actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+    > {
+        App::new()
+            .route("/api/bounties", web::post().to(create_bounty))
+            .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
+            .route("/api/freelancers/register", web::post().to(register_freelancer))
+    }
+
+    #[actix_web::test]
+    async fn create_bounty_empty_title_returns_422_with_field_error() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/bounties")
+            .set_json(serde_json::json!({
+                "creator": "wallet-1",
+                "title": "",
+                "description": "desc",
+                "budget": 1000,
+                "deadline": 9999999999u64
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], false);
+        assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array().unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"title"));
+    }
+
+    #[actix_web::test]
+    async fn create_bounty_negative_budget_returns_422_with_field_error() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/bounties")
+            .set_json(serde_json::json!({
+                "creator": "wallet-1",
+                "title": "Bounty",
+                "description": "desc",
+                "budget": -1,
+                "deadline": 9999999999u64
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array().unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"budget"));
+    }
+
+    #[actix_web::test]
+    async fn create_bounty_multiple_missing_fields_returns_all_errors() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/bounties")
+            .set_json(serde_json::json!({
+                "creator": "",
+                "title": "",
+                "description": "",
+                "budget": 0,
+                "deadline": 0u64
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let count = json["error"]["fieldErrors"].as_array().unwrap().len();
+        assert!(count >= 4, "expected at least 4 field errors, got {count}");
+    }
+
+    // ── Validation: register_freelancer ───────────────────────────────────────
+
+    #[actix_web::test]
+    async fn register_freelancer_empty_discipline_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/freelancers/register")
+            .set_json(serde_json::json!({
+                "name": "Jane",
+                "discipline": "",
+                "bio": "Writer"
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array().unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"discipline"));
+    }
+
+    #[actix_web::test]
+    async fn register_freelancer_all_empty_returns_all_field_errors() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/freelancers/register")
+            .set_json(serde_json::json!({ "name": "", "discipline": "", "bio": "" }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["fieldErrors"].as_array().unwrap().len(), 3);
+    }
+
+    // ── Validation: apply_for_bounty ──────────────────────────────────────────
+
+    #[actix_web::test]
+    async fn apply_for_bounty_empty_proposal_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/bounties/1/apply")
+            .set_json(serde_json::json!({
+                "bounty_id": 1,
+                "freelancer": "wallet-2",
+                "proposal": "",
+                "proposed_budget": 500,
+                "timeline": 7
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array().unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"proposal"));
+    }
+
+    #[actix_web::test]
+    async fn apply_for_bounty_zero_budget_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/bounties/1/apply")
+            .set_json(serde_json::json!({
+                "bounty_id": 1,
+                "freelancer": "wallet-2",
+                "proposal": "I can do this",
+                "proposed_budget": 0,
+                "timeline": 7
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array().unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"proposed_budget"));
     }
 }

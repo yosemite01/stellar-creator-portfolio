@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { apiFetch, fetchCreator, fetchCreators, fetchFreelancers, fetchFreelancer, ApiClientError } from './api-client';
+import {
+  apiFetch,
+  fetchCreator,
+  fetchCreators,
+  fetchFreelancers,
+  fetchFreelancer,
+  fetchBounties,
+  fetchCreatorReputation,
+  submitReview,
+  ApiClientError,
+} from './api-client';
 import { apiSuccess, apiFailure } from './api-models';
 
 function mockFetch(body: unknown, status = 200) {
@@ -157,5 +167,133 @@ describe('fetchFreelancer', () => {
     const result = await fetchFreelancer('wallet-1') as { address: string };
     expect(result.address).toBe('wallet-1');
     expect((fetchMock.mock.calls[0] as [string])[0]).toContain('/api/freelancers/wallet-1');
+  });
+});
+
+describe('fetchBounties', () => {
+  it('calls /api/bounties without params', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 200,
+      json: () => Promise.resolve(apiSuccess({ items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 0 } })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await fetchBounties();
+    expect((fetchMock.mock.calls[0] as [string])[0]).toContain('/api/bounties');
+  });
+
+  it('appends category and difficulty params', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 200,
+      json: () => Promise.resolve(apiSuccess({ items: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 0 } })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await fetchBounties({ category: 'Design', difficulty: 'intermediate', page: 2, limit: 5 });
+    const url = (fetchMock.mock.calls[0] as [string])[0];
+    expect(url).toContain('category=Design');
+    expect(url).toContain('difficulty=intermediate');
+    expect(url).toContain('page=2');
+    expect(url).toContain('limit=5');
+  });
+
+  it('throws ApiClientError on failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 503,
+      json: () => Promise.resolve(apiFailure('SERVICE_UNAVAILABLE', 'Down')),
+    }));
+    await expect(fetchBounties()).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+  });
+});
+
+describe('fetchCreatorReputation', () => {
+  it('calls the correct endpoint', async () => {
+    const payload = {
+      creatorId: 'alex-studio',
+      aggregation: { averageRating: 4.9, totalReviews: 3, stars5: 2, stars4: 1, stars3: 0, stars2: 0, stars1: 0 },
+      recentReviews: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 200,
+      json: () => Promise.resolve(apiSuccess(payload)),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await fetchCreatorReputation('alex-studio');
+    expect(result.creatorId).toBe('alex-studio');
+    expect(result.aggregation.averageRating).toBe(4.9);
+    expect((fetchMock.mock.calls[0] as [string])[0]).toContain('/api/creators/alex-studio/reputation');
+  });
+
+  it('throws ApiClientError on 404', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 404,
+      json: () => Promise.resolve(apiFailure('NOT_FOUND', 'Creator not found')),
+    }));
+    await expect(fetchCreatorReputation('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+  });
+});
+
+describe('submitReview', () => {
+  const validReview = {
+    bountyId: 'b-1',
+    creatorId: 'c-1',
+    rating: 5,
+    title: 'Great',
+    body: 'Excellent work',
+    reviewerName: 'Jane',
+  };
+
+  it('POSTs to /api/reviews and returns reviewId', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 201,
+      json: () => Promise.resolve(apiSuccess({ reviewId: 'rev-42' })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await submitReview(validReview);
+    expect(result.reviewId).toBe('rev-42');
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/reviews');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string).bountyId).toBe('b-1');
+  });
+
+  it('throws VALIDATION_ERROR with fieldErrors on 422', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 422,
+      json: () => Promise.resolve(
+        apiFailure('VALIDATION_ERROR', 'Invalid', [{ field: 'rating', message: 'Required' }])
+      ),
+    }));
+    try {
+      await submitReview(validReview);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ApiClientError);
+      expect((e as ApiClientError).code).toBe('VALIDATION_ERROR');
+      expect((e as ApiClientError).fieldErrors).toHaveLength(1);
+    }
+  });
+});
+
+describe('ApiClientError — additional codes', () => {
+  it('preserves FORBIDDEN code', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 403,
+      json: () => Promise.resolve(apiFailure('FORBIDDEN', 'Access denied')),
+    }));
+    await expect(apiFetch('/api/admin')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+  });
+
+  it('preserves CONFLICT code', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 409,
+      json: () => Promise.resolve(apiFailure('CONFLICT', 'Already exists')),
+    }));
+    await expect(apiFetch('/api/creators')).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+  });
+
+  it('preserves UNPROCESSABLE_ENTITY code', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 422,
+      json: () => Promise.resolve(apiFailure('UNPROCESSABLE_ENTITY', 'Unprocessable')),
+    }));
+    await expect(apiFetch('/api/bounties')).rejects.toMatchObject({ code: 'UNPROCESSABLE_ENTITY', status: 422 });
   });
 });
