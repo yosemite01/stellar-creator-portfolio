@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import type { ApiResponse, CreatorReputationPayload } from '@/lib/api-models';
 import { isApiSuccess } from '@/lib/api-models';
+import { ReviewList } from '@/components/review-list';
+import { ErrorAlert } from '@/components/error-alert';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -63,7 +65,7 @@ function Histogram({
 
 export function CreatorReputation({ creatorId }: { creatorId: string }) {
   const [payload, setPayload] = useState<CreatorReputationPayload | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,16 +77,19 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
           { headers: { Accept: 'application/json' } },
         );
         if (!res.ok) {
-          if (!cancelled) setFailed(true);
+          if (!cancelled) setError('Failed to load reviews');
           return;
         }
         const body = (await res.json()) as ApiResponse<CreatorReputationPayload>;
         if (cancelled) return;
         if (isApiSuccess(body) && body.data.aggregation.totalReviews > 0) {
           setPayload(body.data);
+          setError(null);
         }
-      } catch {
-        if (!cancelled) setFailed(true);
+      } catch (err) {
+        if (!cancelled) {
+          setError('Failed to load reviews');
+        }
       }
     }
 
@@ -94,7 +99,18 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
     };
   }, [creatorId]);
 
-  if (failed || !payload) {
+  if (error) {
+    return (
+      <section className="border-b border-border bg-muted/20 py-12">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <h2 className="text-2xl font-bold text-foreground mb-8">Client reviews</h2>
+          <ErrorAlert message={error} onDismiss={() => setError(null)} />
+        </div>
+      </section>
+    );
+  }
+
+  if (!payload) {
     return null;
   }
 
@@ -127,24 +143,8 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
 
           <Histogram aggregation={aggregation} />
 
-          <div className="mt-10 space-y-6">
-            <h3 className="text-lg font-semibold text-foreground">Recent feedback</h3>
-            <ul className="space-y-6">
-              {recentReviews.map((rev) => (
-                <li
-                  key={rev.id}
-                  className="border-b border-border pb-6 last:border-0 last:pb-0"
-                >
-                  <div className="flex flex-wrap items-center gap-2 mb-2">
-                    <StarRow value={rev.rating} />
-                    <span className="text-sm font-medium text-foreground">{rev.title}</span>
-                    <span className="text-xs text-muted-foreground">· {rev.createdAt}</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground mb-1">by {rev.reviewerName}</p>
-                  <p className="text-foreground leading-relaxed">{rev.body}</p>
-                </li>
-              ))}
-            </ul>
+          <div className="mt-10">
+            <ReviewList reviews={recentReviews} />
           </div>
         </div>
       </div>

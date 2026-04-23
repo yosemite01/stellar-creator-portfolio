@@ -405,3 +405,6 @@ mod tests {
         assert!(escrow.status == EscrowStatus::Released);
     }
 }
+
+#[path = "fuzz_tests.rs"]
+mod fuzz_tests;
