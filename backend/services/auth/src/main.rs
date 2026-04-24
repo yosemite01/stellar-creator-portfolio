@@ -4,6 +4,8 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use totp_lite::{totp_custom, Sha1};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Error, Debug)]
@@ -35,7 +37,7 @@ pub enum SigError {
 /// * `public_key_bytes` – 32-byte Ed25519 public key (raw bytes).
 /// * `signature_bytes`  – 64-byte Ed25519 signature (raw bytes).
 /// * `message`          – The original message whose hash was signed.
-///                        The function hashes it with SHA-256 before verifying.
+///   The function hashes it with SHA-256 before verifying.
 ///
 /// # Returns
 /// `Ok(true)` when the signature is valid, `Err(SigError)` otherwise.
@@ -64,7 +66,7 @@ pub fn verify_signature(
     let digest = Sha256::digest(message);
 
     verifying_key
-        .verify(digest.as_slice(), &signature)
+        .verify(&digest, &signature)
         .map(|_| true)
         .map_err(|_| SigError::VerificationFailed)
 }
@@ -105,12 +107,34 @@ pub struct VerifySignatureRequest {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct VerifySignatureResponse {
     pub token: String,
+    pub refresh_token: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub exp: usize,
+}
+
+/// Refresh token entry stored in memory.
+#[derive(Clone, Debug)]
+pub struct RefreshEntry {
+    pub subject: String,
+    pub expires_at: u64,
+}
+
+/// In-memory refresh token store: token → entry.
+pub type RefreshStore = Arc<Mutex<HashMap<String, RefreshEntry>>>;
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct RefreshResponse {
+    pub access_token: String,
+    pub refresh_token: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -178,7 +202,7 @@ fn generate_totp(secret: &str, time_step: u64) -> Result<String, MfaError> {
         .ok_or(MfaError::Base32DecodeError)?;
     
     let code = totp_custom::<Sha1>(30, 6, &decoded, time_step);
-    Ok(format!("{:06}", code))
+    Ok(format!("{code:06}"))
 }
 
 /// Verify TOTP code
@@ -203,11 +227,10 @@ fn verify_totp(secret: &str, code: &str) -> Result<bool, MfaError> {
 
 /// Generate QR code URL for authenticator apps
 fn generate_qr_code_url(user_id: &str, secret: &str, issuer: &str) -> String {
-    let label = format!("{}:{}", issuer, user_id);
+    let label = format!("{issuer}:{user_id}");
     let otpauth_url = format!(
-        "otpauth://totp/{}?secret={}&issuer={}&algorithm=SHA1&digits=6&period=30",
+        "otpauth://totp/{}?secret={secret}&issuer={}&algorithm=SHA1&digits=6&period=30",
         urlencoding::encode(&label),
-        secret,
         urlencoding::encode(issuer)
     );
     otpauth_url
@@ -231,7 +254,10 @@ async fn get_challenge() -> HttpResponse {
     HttpResponse::Ok().json(ApiResponse::ok(ChallengeResponse { nonce }))
 }
 
-async fn verify_auth_signature(body: web::Json<VerifySignatureRequest>) -> HttpResponse {
+async fn verify_auth_signature(
+    store: web::Data<RefreshStore>,
+    body: web::Json<VerifySignatureRequest>,
+) -> HttpResponse {
     tracing::info!("Verifying auth signature for public key: {}", body.public_key);
 
     let pub_key_bytes = match hex::decode(&body.public_key) {
@@ -254,7 +280,13 @@ async fn verify_auth_signature(body: web::Json<VerifySignatureRequest>) -> HttpR
 
     match verify_signature(&pub_key_bytes, &sig_bytes, body.message.as_bytes()) {
         Ok(true) => match create_jwt(&body.public_key) {
-            Ok(token) => HttpResponse::Ok().json(ApiResponse::ok(VerifySignatureResponse { token })),
+            Ok(token) => {
+                let refresh = issue_refresh_token(&store, &body.public_key);
+                HttpResponse::Ok().json(ApiResponse::ok(VerifySignatureResponse {
+                    token,
+                    refresh_token: refresh,
+                }))
+            }
             Err(e) => {
                 tracing::error!("JWT encoding error: {}", e);
                 HttpResponse::InternalServerError().json(ApiResponse::<VerifySignatureResponse>::err(
@@ -264,6 +296,35 @@ async fn verify_auth_signature(body: web::Json<VerifySignatureRequest>) -> HttpR
         },
         Ok(false) | Err(_) => HttpResponse::Unauthorized()
             .json(ApiResponse::<VerifySignatureResponse>::err("Invalid signature".to_string())),
+    }
+}
+
+async fn refresh_token(
+    store: web::Data<RefreshStore>,
+    body: web::Json<RefreshRequest>,
+) -> HttpResponse {
+    if body.refresh_token.trim().is_empty() {
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<RefreshResponse>::err("refresh_token is required".to_string()));
+    }
+
+    match consume_refresh_token(&store, &body.refresh_token) {
+        Some(subject) => match create_jwt(&subject) {
+            Ok(access_token) => {
+                let new_refresh = issue_refresh_token(&store, &subject);
+                HttpResponse::Ok().json(ApiResponse::ok(RefreshResponse {
+                    access_token,
+                    refresh_token: new_refresh,
+                }))
+            }
+            Err(e) => {
+                tracing::error!("JWT encoding error during refresh: {}", e);
+                HttpResponse::InternalServerError()
+                    .json(ApiResponse::<RefreshResponse>::err("Failed to generate token".to_string()))
+            }
+        },
+        None => HttpResponse::Unauthorized()
+            .json(ApiResponse::<RefreshResponse>::err("Invalid or expired refresh token".to_string())),
     }
 }
 
@@ -288,6 +349,29 @@ pub fn create_jwt(public_key: &str) -> Result<String, jsonwebtoken::errors::Erro
         &claims,
         &jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_ref()),
     )
+}
+
+/// Issue a new opaque refresh token (64-byte hex) and store it.
+pub fn issue_refresh_token(store: &RefreshStore, subject: &str) -> String {
+    let token = generate_nonce() + &generate_nonce(); // 128 hex chars
+    let expires_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 30 * 24 * 3600; // 30 days
+    store.lock().unwrap().insert(
+        token.clone(),
+        RefreshEntry { subject: subject.to_string(), expires_at },
+    );
+    token
+}
+
+/// Validate a refresh token and return the subject if valid.
+pub fn consume_refresh_token(store: &RefreshStore, token: &str) -> Option<String> {
+    let mut map = store.lock().unwrap();
+    let entry = map.remove(token)?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    if entry.expires_at > now { Some(entry.subject) } else { None }
 }
 
 async fn health() -> HttpResponse {
@@ -383,13 +467,17 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Starting Stellar Auth on {}:{}", host, port);
     tracing::info!("Features: TOTP-based 2FA/MFA");
 
-    HttpServer::new(|| {
+    let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+
+    HttpServer::new(move || {
         App::new()
+            .app_data(web::Data::new(store.clone()))
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             .route("/health", web::get().to(health))
             .route("/api/auth/challenge", web::get().to(get_challenge))
             .route("/api/auth/verify", web::post().to(verify_auth_signature))
+            .route("/api/auth/refresh", web::post().to(refresh_token))
             .route("/api/auth/mfa/setup", web::post().to(setup_mfa))
             .route("/api/auth/mfa/verify", web::post().to(verify_mfa))
             .route("/api/auth/mfa/backup-codes", web::post().to(generate_backup_codes))
@@ -423,10 +511,7 @@ mod tests {
     #[test]
     fn test_verify_totp_invalid_code() {
         let secret = "JBSWY3DPEHPK3PXP".to_string();
-        let result = verify_totp(&secret, "000000").unwrap();
-        // This might occasionally pass if we're unlucky with timing
-        // In production, use a fixed time for testing
-        assert!(result == false || result == true); // Just verify it doesn't panic
+        let _result = verify_totp(&secret, "000000").unwrap(); // just verify it doesn't panic
     }
 
     #[test]
@@ -498,7 +583,7 @@ mod tests {
         let seed = [0x42u8; 32];
         let signing_key = SigningKey::from_bytes(&seed);
         let digest = Sha256::digest(message);
-        let signature = signing_key.sign(digest.as_slice());
+        let signature = signing_key.sign(&digest);
         let verifying_key = signing_key.verifying_key();
         (verifying_key.to_bytes().to_vec(), signature.to_bytes().to_vec())
     }
@@ -565,8 +650,11 @@ mod tests {
     #[actix_web::test]
     async fn test_verify_auth_signature_endpoint() {
         use actix_web::test;
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
         let app = test::init_service(
-            App::new().route("/api/auth/verify", web::post().to(verify_auth_signature)),
+            App::new()
+                .app_data(web::Data::new(store))
+                .route("/api/auth/verify", web::post().to(verify_auth_signature)),
         )
         .await;
 
@@ -591,6 +679,8 @@ mod tests {
         assert_eq!(body["success"], true);
         let token = body["data"]["token"].as_str().expect("token must be a string");
         assert!(token.starts_with("eyJ")); // JWT header
+        let refresh = body["data"]["refresh_token"].as_str().expect("refresh_token must be a string");
+        assert_eq!(refresh.len(), 128);
 
         // Verify the token claims
         let jwt_secret = std::env::var("JWT_SECRET")
@@ -635,5 +725,160 @@ mod tests {
         let message = vec![0u8; 1024 * 1024]; // 1MB message
         let (pub_key, sig) = make_test_sig(&message);
         assert_eq!(verify_signature(&pub_key, &sig, &message), Ok(true));
+    }
+
+    // ── Refresh token unit tests ──────────────────────────────────────────────
+
+    #[test]
+    fn issue_and_consume_refresh_token_succeeds() {
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let token = issue_refresh_token(&store, "wallet-1");
+        assert_eq!(token.len(), 128);
+        let subject = consume_refresh_token(&store, &token);
+        assert_eq!(subject, Some("wallet-1".to_string()));
+    }
+
+    #[test]
+    fn consume_refresh_token_removes_it() {
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let token = issue_refresh_token(&store, "wallet-1");
+        consume_refresh_token(&store, &token);
+        // Second consume must return None (single-use)
+        assert_eq!(consume_refresh_token(&store, &token), None);
+    }
+
+    #[test]
+    fn consume_unknown_refresh_token_returns_none() {
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        assert_eq!(consume_refresh_token(&store, "nonexistent"), None);
+    }
+
+    #[test]
+    fn two_refresh_tokens_are_unique() {
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let t1 = issue_refresh_token(&store, "wallet-1");
+        let t2 = issue_refresh_token(&store, "wallet-1");
+        assert_ne!(t1, t2);
+    }
+
+    // ── POST /api/auth/refresh integration tests ──────────────────────────────
+
+    fn build_refresh_app(store: RefreshStore) -> actix_web::App<
+        impl actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+    > {
+        App::new()
+            .app_data(web::Data::new(store))
+            .route("/api/auth/refresh", web::post().to(refresh_token))
+    }
+
+    #[actix_web::test]
+    async fn refresh_with_valid_token_returns_new_tokens() {
+        use actix_web::test as awtest;
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let rt = issue_refresh_token(&store, "wallet-1");
+
+        let app = awtest::init_service(build_refresh_app(store)).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/auth/refresh")
+            .set_json(serde_json::json!({ "refresh_token": rt }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body: serde_json::Value = awtest::read_body_json(resp).await;
+        assert_eq!(body["success"], true);
+        let access = body["data"]["access_token"].as_str().unwrap();
+        assert!(access.starts_with("eyJ"));
+        let new_rt = body["data"]["refresh_token"].as_str().unwrap();
+        assert_eq!(new_rt.len(), 128);
+        assert_ne!(new_rt, rt); // rotated
+    }
+
+    #[actix_web::test]
+    async fn refresh_token_is_single_use() {
+        use actix_web::test as awtest;
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let rt = issue_refresh_token(&store, "wallet-1");
+
+        let app = awtest::init_service(build_refresh_app(store)).await;
+
+        // First use succeeds
+        let req = awtest::TestRequest::post()
+            .uri("/api/auth/refresh")
+            .set_json(serde_json::json!({ "refresh_token": rt }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        // Second use with same token must fail
+        let req2 = awtest::TestRequest::post()
+            .uri("/api/auth/refresh")
+            .set_json(serde_json::json!({ "refresh_token": rt }))
+            .to_request();
+        let resp2 = awtest::call_service(&app, req2).await;
+        assert_eq!(resp2.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn refresh_with_invalid_token_returns_401() {
+        use actix_web::test as awtest;
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let app = awtest::init_service(build_refresh_app(store)).await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/auth/refresh")
+            .set_json(serde_json::json!({ "refresh_token": "bogus" }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+
+        let body: serde_json::Value = awtest::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+    }
+
+    #[actix_web::test]
+    async fn refresh_with_empty_token_returns_400() {
+        use actix_web::test as awtest;
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let app = awtest::init_service(build_refresh_app(store)).await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/auth/refresh")
+            .set_json(serde_json::json!({ "refresh_token": "" }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn refreshed_access_token_has_correct_subject() {
+        use actix_web::test as awtest;
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let rt = issue_refresh_token(&store, "wallet-abc");
+
+        let app = awtest::init_service(build_refresh_app(store)).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/auth/refresh")
+            .set_json(serde_json::json!({ "refresh_token": rt }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        let body: serde_json::Value = awtest::read_body_json(resp).await;
+
+        let access = body["data"]["access_token"].as_str().unwrap();
+        let jwt_secret = std::env::var("JWT_SECRET")
+            .unwrap_or_else(|_| "default_secret_for_development_only".to_string());
+        let data = jsonwebtoken::decode::<Claims>(
+            access,
+            &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_ref()),
+            &jsonwebtoken::Validation::default(),
+        )
+        .unwrap();
+        assert_eq!(data.claims.sub, "wallet-abc");
     }
 }

@@ -9,7 +9,7 @@
 //! A mock server is used so no live backend is required.
 
 use actix_web::{test, web, App};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signer, SigningKey, Verifier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -100,7 +100,7 @@ async fn mock_verify(body: web::Json<VerifyRequest>) -> actix_web::HttpResponse 
     let signature = ed25519_dalek::Signature::from_bytes(&sig_arr);
     let digest = Sha256::digest(body.message.as_bytes());
 
-    match verifying_key.verify(digest.as_slice(), &signature) {
+    match verifying_key.verify(&digest, &signature) {
         Ok(_) => {
             // Return a fake JWT-shaped token (header.payload.sig) for shape assertions.
             let fake_token = format!("eyJ.{}.sig", hex::encode(&key_arr[..8]));
@@ -127,7 +127,7 @@ fn test_signing_key() -> SigningKey {
 
 fn sign_message(key: &SigningKey, message: &str) -> (String, String) {
     let digest = Sha256::digest(message.as_bytes());
-    let signature = key.sign(digest.as_slice());
+    let signature = key.sign(&digest);
     let pub_key_hex = hex::encode(key.verifying_key().to_bytes());
     let sig_hex = hex::encode(signature.to_bytes());
     (pub_key_hex, sig_hex)
