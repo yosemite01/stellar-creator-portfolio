@@ -41,10 +41,10 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                 },
                 {
-                  "string": "Alice"
+                  "string": "Bob"
                 },
                 {
-                  "string": "Design"
+                  "string": "Dev"
                 },
                 {
                   "string": "Bio"
@@ -58,24 +58,21 @@
     ],
     [
       [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
         {
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "register_freelancer",
+              "function_name": "update_rating",
               "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                 },
                 {
-                  "string": "Alice"
-                },
-                {
-                  "string": "Design"
-                },
-                {
-                  "string": "Bio"
+                  "u32": 400
                 }
               ]
             }
@@ -83,7 +80,8 @@
           "sub_invocations": []
         }
       ]
-    ]
+    ],
+    []
   ],
   "ledger": {
     "protocol_version": 23,
@@ -298,7 +296,7 @@
                         "symbol": "discipline"
                       },
                       "val": {
-                        "string": "Design"
+                        "string": "Dev"
                       }
                     },
                     {
@@ -306,7 +304,7 @@
                         "symbol": "name"
                       },
                       "val": {
-                        "string": "Alice"
+                        "string": "Bob"
                       }
                     },
                     {
@@ -314,7 +312,7 @@
                         "symbol": "rating"
                       },
                       "val": {
-                        "u32": 0
+                        "u32": 400
                       }
                     },
                     {
@@ -338,7 +336,7 @@
                         "symbol": "total_rating_count"
                       },
                       "val": {
-                        "u32": 0
+                        "u32": 1
                       }
                     },
                     {
@@ -439,7 +437,7 @@
       [
         {
           "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
             "key": {
               "ledger_key_nonce": {
                 "nonce": "1033654523790656264"
@@ -454,7 +452,7 @@
             "data": {
               "contract_data": {
                 "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": "1033654523790656264"

@@ -25,16 +25,14 @@ chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 futures.workspace = true
+reqwest.workspace = true
 
 # HTTP server
 actix-web = "4.4"
 actix-rt = "2.9"
 
-# Email
-lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls", "builder"] }
-
-# HTTP client for webhooks
-reqwest = { version = "0.12", features = ["json"] }
+# Email delivery (consolidated)
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "hostname", "builder"] }
 
 # Configuration
 config = "0.14"
@@ -47,8 +45,3 @@ async-trait = "0.1"
 
 # Retry logic
 backoff = { version = "0.4", features = ["tokio"] }
-thiserror.workspace = true
-reqwest.workspace = true
-
-# Email delivery
-lettre = { version = "0.11", features = ["tokio1-rustls-tls", "smtp-transport", "hostname"] }
