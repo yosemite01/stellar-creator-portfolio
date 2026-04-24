@@ -341,4 +341,168 @@ mod tests {
             );
         }
     }
+
+    // Extended tests for mathematical precision and edge cases
+    
+    #[test]
+    fn test_aggregate_reviews_precision() {
+        // Test mathematical precision of average calculation
+        let reviews = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-01".into(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-02".into(),
+            },
+            Review {
+                id: "3".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-03".into(),
+            },
+        ];
+        let agg = aggregate_reviews(&reviews);
+        
+        // (5 + 4 + 4) / 3 = 4.333... should round to 4.33
+        assert_eq!(agg.average_rating, 4.33);
+        assert_eq!(agg.total_reviews, 3);
+    }
+
+    #[test]
+    fn test_invalid_ratings_ignored_comprehensive() {
+        let reviews = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 0, // Invalid: too low
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-01".into(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 6, // Invalid: too high
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-02".into(),
+            },
+            Review {
+                id: "3".into(),
+                creator_id: "c1".into(),
+                rating: 3, // Valid
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-04".into(),
+            },
+            Review {
+                id: "4".into(),
+                creator_id: "c1".into(),
+                rating: 4, // Valid
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-05".into(),
+            },
+        ];
+        
+        let agg = aggregate_reviews(&reviews);
+        assert_eq!(agg.total_reviews, 2); // Only 2 valid reviews
+        assert_eq!(agg.average_rating, 3.5); // (3 + 4) / 2 = 3.5
+        assert_eq!(agg.stars_3, 1);
+        assert_eq!(agg.stars_4, 1);
+        assert_eq!(agg.stars_1, 0);
+        assert_eq!(agg.stars_5, 0);
+    }
+
+    #[test]
+    fn test_verification_boundary_conditions() {
+        // Test exactly at verification threshold (3 reviews, 4.5+ average)
+        let reviews_at_threshold = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-01".into(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-02".into(),
+            },
+            Review {
+                id: "3".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-03".into(),
+            },
+        ];
+        let agg = aggregate_reviews(&reviews_at_threshold);
+        assert_eq!(agg.total_reviews, 3);
+        assert!((agg.average_rating - 4.67).abs() < 0.01); // Should be 4.67
+        assert_eq!(agg.is_verified, true); // >= 4.5 and >= 3 reviews
+
+        // Test just below threshold (3 reviews, < 4.5 average)
+        let reviews_below_threshold = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-01".into(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-02".into(),
+            },
+            Review {
+                id: "3".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-03".into(),
+            },
+        ];
+        let agg = aggregate_reviews(&reviews_below_threshold);
+        assert_eq!(agg.total_reviews, 3);
+        assert!((agg.average_rating - 4.33).abs() < 0.01); // Should be 4.33
+        assert_eq!(agg.is_verified, false); // < 4.5 average
+    }
 }

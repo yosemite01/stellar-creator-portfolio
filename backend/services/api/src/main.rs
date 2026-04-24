@@ -827,6 +827,8 @@ async fn refund_escrow(
 fn chrono_now() -> String {
     // Stable timestamp placeholder — real impl would use chrono or time crate
     "2026-01-01T00:00:00Z".to_string()
+}
+
 /// Middleware that injects `X-API-Version` into every response.
 pub struct ApiVersionHeader;
 
@@ -951,14 +953,6 @@ async fn main() -> std::io::Result<()> {
             .route("/api/versions", web::get().to(api_versions))
             // v1 public read-only routes
             .service(
-                web::scope("")
-                    .wrap(auth::JwtMiddleware)
-                    .route("/api/bounties", web::post().to(create_bounty))
-                    .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                    .route("/api/freelancers/register", web::post().to(register_freelancer))
-                    .route("/api/escrow/create", web::post().to(create_escrow))
-                    .route("/api/escrow/{id}/release", web::post().to(release_escrow))
-                    .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
                 web::scope("/api/v1")
                     .route("/bounties", web::get().to(list_bounties))
                     .route("/bounties/{id}", web::get().to(get_bounty))
@@ -969,15 +963,17 @@ async fn main() -> std::io::Result<()> {
                     .route("/freelancers", web::get().to(list_freelancers))
                     .route("/freelancers/{address}", web::get().to(get_freelancer))
                     .route("/escrow/{id}", web::get().to(get_escrow))
-                    // Protected write routes — require valid JWT
-                    .service(
-                        web::scope("")
-                            .wrap(auth::JwtMiddleware)
-                            .route("/bounties", web::post().to(create_bounty))
-                            .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                            .route("/freelancers/register", web::post().to(register_freelancer))
-                            .route("/escrow/{id}/release", web::post().to(release_escrow)),
-                    ),
+            )
+            // Protected write routes — require valid JWT
+            .service(
+                web::scope("")
+                    .wrap(auth::JwtMiddleware)
+                    .route("/api/bounties", web::post().to(create_bounty))
+                    .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                    .route("/api/freelancers/register", web::post().to(register_freelancer))
+                    .route("/api/escrow/create", web::post().to(create_escrow))
+                    .route("/api/escrow/{id}/release", web::post().to(release_escrow))
+                    .route("/api/escrow/{id}/refund", web::post().to(refund_escrow))
             )
     })
     .bind((host.parse::<std::net::IpAddr>().unwrap(), port))?
@@ -1287,11 +1283,7 @@ mod tests {
                 .route("/api/freelancers/register", web::post().to(register_freelancer))
                 .route("/api/escrow/create", web::post().to(create_escrow))
                 .route("/api/escrow/{id}/release", web::post().to(release_escrow))
-                .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
-                .route("/api/v1/bounties", web::post().to(create_bounty))
-                .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
-                .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow)),
+                .route("/api/escrow/{id}/refund", web::post().to(refund_escrow))
         )
     }
 
@@ -1870,6 +1862,8 @@ mod tests {
             .map(|e| e["field"].as_str().unwrap())
             .collect();
         assert!(fields.contains(&"authorizerAddress"));
+    }
+
     // ── API versioning ────────────────────────────────────────────────────────
 
     #[actix_web::test]

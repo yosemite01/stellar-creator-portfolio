@@ -3135,6 +3135,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellar-auth-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "actix-rt",
+ "actix-web",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "stellar-bounty-contract"
 version = "0.1.0"
 dependencies = [
