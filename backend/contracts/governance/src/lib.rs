@@ -258,6 +258,9 @@ impl GovernanceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Delegate(delegator.clone()), &delegatee);
+        
+        true
+    }
     pub fn add_admin(env: Env, owner: Address, admin: Address) -> bool {
         owner.require_auth();
         let stored_owner: Address = env.storage().persistent().get(&DataKey::Owner).expect("Not initialized");

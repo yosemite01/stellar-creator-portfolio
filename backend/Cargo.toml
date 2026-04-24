@@ -3,7 +3,7 @@ members = [
     "contracts/bounty",
     "contracts/escrow",
     "contracts/freelancer",
-    "contracts/governance",
+    # "contracts/governance", # Temporarily disabled due to syntax errors
     "services/api",
     "services/auth",
     "services/notifications",
@@ -25,7 +25,7 @@ license = "MIT"
 soroban-sdk = { version = "23.5.2" }
 
 # Local contract dependencies
-stellar-governance-contract = { path = "contracts/governance" }
+# stellar-governance-contract = { path = "contracts/governance" } # Temporarily disabled
 
 # Web & HTTP
 actix-web = "4.4"
