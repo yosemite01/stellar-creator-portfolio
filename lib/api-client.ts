@@ -54,6 +54,9 @@ const BASE_URL =
     ? (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001')
     : 'http://localhost:3001';
 
+export const API_VERSION = 'v1';
+export const API_BASE = `/api/${API_VERSION}`;
+
 /** localStorage key where the JWT is stored after a successful auth flow. */
 const JWT_STORAGE_KEY = 'stellar_auth_token';
 
@@ -102,6 +105,7 @@ export async function apiFetch<T>(
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
+    'Accept-Version': API_VERSION,
     ...authHeader,
     ...(init.headers ?? {}),
   };
@@ -136,7 +140,7 @@ export async function apiFetch<T>(
 
 // ── Domain helpers ────────────────────────────────────────────────────────────
 
-/** GET /api/creators — optionally filter by discipline or search term. */
+/** GET /api/v1/creators — optionally filter by discipline or search term. */
 export async function fetchCreators(params?: {
   discipline?: string;
   search?: string;
@@ -145,22 +149,22 @@ export async function fetchCreators(params?: {
   if (params?.discipline) qs.set('discipline', params.discipline);
   if (params?.search) qs.set('search', params.search);
   const query = qs.toString() ? `?${qs}` : '';
-  return apiFetch(`/api/creators${query}`);
+  return apiFetch(`${API_BASE}/creators${query}`);
 }
 
-/** GET /api/creators/:id */
+/** GET /api/v1/creators/:id */
 export async function fetchCreator(id: string): Promise<Creator> {
-  return apiFetch(`/api/creators/${id}`);
+  return apiFetch(`${API_BASE}/creators/${id}`);
 }
 
-/** GET /api/creators/:id/reputation */
+/** GET /api/v1/creators/:id/reputation */
 export async function fetchCreatorReputation(
   id: string,
 ): Promise<CreatorReputationPayload> {
-  return apiFetch(`/api/creators/${id}/reputation`);
+  return apiFetch(`${API_BASE}/creators/${id}/reputation`);
 }
 
-/** GET /api/bounties — optionally paginated. */
+/** GET /api/v1/bounties — optionally paginated. */
 export async function fetchBounties(params?: {
   page?: number;
   limit?: number;
@@ -175,55 +179,55 @@ export async function fetchBounties(params?: {
   if (params?.difficulty) qs.set('difficulty', params.difficulty);
   if (params?.status) qs.set('status', params.status);
   const query = qs.toString() ? `?${qs}` : '';
-  return apiFetch(`/api/bounties${query}`);
+  return apiFetch(`${API_BASE}/bounties${query}`);
 }
 
-/** GET /api/bounties/:id */
+/** GET /api/v1/bounties/:id */
 export async function fetchBounty(id: string): Promise<Bounty> {
-  return apiFetch(`/api/bounties/${id}`);
+  return apiFetch(`${API_BASE}/bounties/${id}`);
 }
 
-/** GET /api/freelancers — optionally filter by discipline. */
+/** GET /api/v1/freelancers — optionally filter by discipline. */
 export async function fetchFreelancers(params?: {
   discipline?: string;
 }): Promise<{ freelancers: unknown[]; total: number }> {
   const qs = new URLSearchParams();
   if (params?.discipline) qs.set('discipline', params.discipline);
   const query = qs.toString() ? `?${qs}` : '';
-  return apiFetch(`/api/freelancers${query}`);
+  return apiFetch(`${API_BASE}/freelancers${query}`);
 }
 
-/** GET /api/freelancers/:address */
+/** GET /api/v1/freelancers/:address */
 export async function fetchFreelancer(address: string): Promise<unknown> {
-  return apiFetch(`/api/freelancers/${address}`);
+  return apiFetch(`${API_BASE}/freelancers/${address}`);
 }
 
-/** POST /api/reviews — submit a review after bounty completion. */
+/** POST /api/v1/reviews — submit a review after bounty completion. */
 export async function submitReview(
   data: ReviewSubmission,
 ): Promise<{ reviewId: string }> {
-  return apiFetch('/api/reviews', {
+  return apiFetch(`${API_BASE}/reviews`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
-/** POST /api/escrow/transaction — submit a Stellar escrow transaction via the backend SDK. */
+/** POST /api/v1/escrow/transaction — submit a Stellar escrow transaction via the backend SDK. */
 export async function submitEscrowTransaction(
   data: EscrowTransactionRequest,
 ): Promise<EscrowTransactionResponse> {
-  return apiFetch('/api/escrow/transaction', {
+  return apiFetch(`${API_BASE}/escrow/transaction`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
-/** POST /api/escrow/:id/release — release escrowed funds to payee. */
+/** POST /api/v1/escrow/:id/release — release escrowed funds to payee. */
 export async function releaseEscrow(
   escrowId: string,
   authorizerAddress: string,
 ): Promise<EscrowTransactionResponse> {
-  return apiFetch(`/api/escrow/${escrowId}/release`, {
+  return apiFetch(`${API_BASE}/escrow/${escrowId}/release`, {
     method: 'POST',
     body: JSON.stringify({ authorizerAddress }),
   });

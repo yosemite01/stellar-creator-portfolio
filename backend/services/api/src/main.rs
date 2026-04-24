@@ -1,10 +1,16 @@
 use actix_cors::Cors;
 use actix_web::{http, web, App, HttpServer, HttpResponse, middleware};
+use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
+use actix_web::body::MessageBody;
+use futures::future::{ok, Ready};
 use serde::{Deserialize, Serialize};
 use tracing_subscriber;
 
 mod auth;
 mod reputation;
+
+pub const API_VERSION: &str = "1";
+pub const API_PREFIX: &str = "/api/v1";
 
 // ==================== Domain Models ====================
 
@@ -821,6 +827,60 @@ async fn refund_escrow(
 fn chrono_now() -> String {
     // Stable timestamp placeholder — real impl would use chrono or time crate
     "2026-01-01T00:00:00Z".to_string()
+/// Middleware that injects `X-API-Version` into every response.
+pub struct ApiVersionHeader;
+
+impl<S, B> Transform<S, ServiceRequest> for ApiVersionHeader
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: MessageBody + 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Transform = ApiVersionHeaderMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, ()>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ok(ApiVersionHeaderMiddleware { service })
+    }
+}
+
+pub struct ApiVersionHeaderMiddleware<S> {
+    service: S,
+}
+
+impl<S, B> Service<ServiceRequest> for ApiVersionHeaderMiddleware<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: MessageBody + 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    actix_web::dev::forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let fut = self.service.call(req);
+        Box::pin(async move {
+            let mut res = fut.await?;
+            res.headers_mut().insert(
+                http::header::HeaderName::from_static("x-api-version"),
+                http::header::HeaderValue::from_static(API_VERSION),
+            );
+            Ok(res)
+        })
+    }
+}
+
+/// GET /api/versions — advertise supported API versions.
+async fn api_versions() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "current": API_VERSION,
+        "supported": ["1"],
+        "deprecated": []
+    }))
 }
 
 // ==================== CORS ====================
@@ -885,19 +945,11 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors_middleware())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
-            // Health check (public)
+            .wrap(ApiVersionHeader)
+            // Health check & version discovery (unversioned)
             .route("/health", web::get().to(health))
-            // Public read-only routes
-            .route("/api/bounties", web::get().to(list_bounties))
-            .route("/api/bounties/{id}", web::get().to(get_bounty))
-            .route("/api/creators", web::get().to(list_creators))
-            .route("/api/creators/{id}", web::get().to(get_creator))
-            .route("/api/creators/{id}/reputation", web::get().to(get_creator_reputation))
-            .route("/api/reviews", web::post().to(submit_review))
-            .route("/api/freelancers", web::get().to(list_freelancers))
-            .route("/api/freelancers/{address}", web::get().to(get_freelancer))
-            .route("/api/escrow/{id}", web::get().to(get_escrow))
-            // Protected write routes — require valid JWT
+            .route("/api/versions", web::get().to(api_versions))
+            // v1 public read-only routes
             .service(
                 web::scope("")
                     .wrap(auth::JwtMiddleware)
@@ -907,6 +959,25 @@ async fn main() -> std::io::Result<()> {
                     .route("/api/escrow/create", web::post().to(create_escrow))
                     .route("/api/escrow/{id}/release", web::post().to(release_escrow))
                     .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
+                web::scope("/api/v1")
+                    .route("/bounties", web::get().to(list_bounties))
+                    .route("/bounties/{id}", web::get().to(get_bounty))
+                    .route("/creators", web::get().to(list_creators))
+                    .route("/creators/{id}", web::get().to(get_creator))
+                    .route("/creators/{id}/reputation", web::get().to(get_creator_reputation))
+                    .route("/reviews", web::post().to(submit_review))
+                    .route("/freelancers", web::get().to(list_freelancers))
+                    .route("/freelancers/{address}", web::get().to(get_freelancer))
+                    .route("/escrow/{id}", web::get().to(get_escrow))
+                    // Protected write routes — require valid JWT
+                    .service(
+                        web::scope("")
+                            .wrap(auth::JwtMiddleware)
+                            .route("/bounties", web::post().to(create_bounty))
+                            .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                            .route("/freelancers/register", web::post().to(register_freelancer))
+                            .route("/escrow/{id}/release", web::post().to(release_escrow)),
+                    ),
             )
     })
     .bind((host.parse::<std::net::IpAddr>().unwrap(), port))?
@@ -1108,14 +1179,14 @@ mod tests {
 
         let app = awtest::init_service(
             App::new().route(
-                "/api/creators/{id}/reputation",
+                "/api/v1/creators/{id}/reputation",
                 web::get().to(get_creator_reputation),
             ),
         )
         .await;
 
         let req = awtest::TestRequest::get()
-            .uri("/api/creators/alex-studio/reputation")
+            .uri("/api/v1/creators/alex-studio/reputation")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
@@ -1136,11 +1207,11 @@ mod tests {
         use actix_web::test as awtest;
 
         let app = awtest::init_service(
-            App::new().route("/api/escrow/{id}", web::get().to(get_escrow)),
+            App::new().route("/api/v1/escrow/{id}", web::get().to(get_escrow)),
         )
         .await;
 
-        let req = awtest::TestRequest::get().uri("/api/escrow/7").to_request();
+        let req = awtest::TestRequest::get().uri("/api/v1/escrow/7").to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
 
@@ -1157,14 +1228,14 @@ mod tests {
 
         let app = awtest::init_service(
             App::new().route(
-                "/api/creators/{id}/reputation",
+                "/api/v1/creators/{id}/reputation",
                 web::get().to(get_creator_reputation),
             ),
         )
         .await;
 
         let req = awtest::TestRequest::get()
-            .uri("/api/creators/unknown-creator/reputation")
+            .uri("/api/v1/creators/unknown-creator/reputation")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
@@ -1180,12 +1251,12 @@ mod tests {
         use actix_web::test as awtest;
 
         let app = awtest::init_service(
-            App::new().route("/api/escrow/{id}/release", web::post().to(release_escrow)),
+            App::new().route("/api/v1/escrow/{id}/release", web::post().to(release_escrow)),
         )
         .await;
 
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/7/release")
+            .uri("/api/v1/escrow/7/release")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
@@ -1217,6 +1288,10 @@ mod tests {
                 .route("/api/escrow/create", web::post().to(create_escrow))
                 .route("/api/escrow/{id}/release", web::post().to(release_escrow))
                 .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
+                .route("/api/v1/bounties", web::post().to(create_bounty))
+                .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
+                .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow)),
         )
     }
 
@@ -1227,7 +1302,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/bounties")
+            .uri("/api/v1/bounties")
             .set_json(serde_json::json!({
                 "creator": "wallet-1",
                 "title": "Test",
@@ -1249,7 +1324,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/bounties")
+            .uri("/api/v1/bounties")
             .insert_header(("Authorization", format!("Bearer {}", token)))
             .set_json(serde_json::json!({
                 "creator": "wallet-1",
@@ -1276,7 +1351,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/bounties/1/apply")
+            .uri("/api/v1/bounties/1/apply")
             .set_json(serde_json::json!({
                 "bounty_id": 1,
                 "freelancer": "wallet-2",
@@ -1297,7 +1372,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/freelancers/register")
+            .uri("/api/v1/freelancers/register")
             .set_json(serde_json::json!({
                 "name": "Jane",
                 "discipline": "Writing",
@@ -1316,7 +1391,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/5/release")
+            .uri("/api/v1/escrow/5/release")
             .to_request();
 
         let resp = awtest::call_service(&app, req).await;
@@ -1331,7 +1406,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/5/release")
+            .uri("/api/v1/escrow/5/release")
             .insert_header(("Authorization", format!("Bearer {}", token)))
             .to_request();
 
@@ -1356,9 +1431,9 @@ mod tests {
         >,
     > {
         App::new()
-            .route("/api/bounties", web::post().to(create_bounty))
-            .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-            .route("/api/freelancers/register", web::post().to(register_freelancer))
+            .route("/api/v1/bounties", web::post().to(create_bounty))
+            .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
+            .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
     }
 
     #[actix_web::test]
@@ -1366,7 +1441,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_public_write_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/bounties")
+            .uri("/api/v1/bounties")
             .set_json(serde_json::json!({
                 "creator": "wallet-1",
                 "title": "",
@@ -1394,7 +1469,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_public_write_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/bounties")
+            .uri("/api/v1/bounties")
             .set_json(serde_json::json!({
                 "creator": "wallet-1",
                 "title": "Bounty",
@@ -1420,7 +1495,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_public_write_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/bounties")
+            .uri("/api/v1/bounties")
             .set_json(serde_json::json!({
                 "creator": "",
                 "title": "",
@@ -1444,7 +1519,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_public_write_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/freelancers/register")
+            .uri("/api/v1/freelancers/register")
             .set_json(serde_json::json!({
                 "name": "Jane",
                 "discipline": "",
@@ -1468,7 +1543,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_public_write_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/freelancers/register")
+            .uri("/api/v1/freelancers/register")
             .set_json(serde_json::json!({ "name": "", "discipline": "", "bio": "" }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
@@ -1485,7 +1560,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_public_write_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/bounties/1/apply")
+            .uri("/api/v1/bounties/1/apply")
             .set_json(serde_json::json!({
                 "bounty_id": 1,
                 "freelancer": "wallet-2",
@@ -1517,7 +1592,7 @@ mod tests {
             InitError = (),
         >,
     > {
-        App::new().route("/api/reviews", web::post().to(submit_review))
+        App::new().route("/api/v1/reviews", web::post().to(submit_review))
     }
 
     #[actix_web::test]
@@ -1525,7 +1600,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_review_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/reviews")
+            .uri("/api/v1/reviews")
             .set_json(serde_json::json!({
                 "bountyId": "b-1",
                 "creatorId": "alex-studio",
@@ -1548,7 +1623,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_review_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/reviews")
+            .uri("/api/v1/reviews")
             .set_json(serde_json::json!({
                 "bountyId": "",
                 "creatorId": "",
@@ -1573,7 +1648,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_review_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/reviews")
+            .uri("/api/v1/reviews")
             .set_json(serde_json::json!({
                 "bountyId": "b-1",
                 "creatorId": "c-1",
@@ -1600,7 +1675,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_public_write_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/bounties/1/apply")
+            .uri("/api/v1/bounties/1/apply")
             .set_json(serde_json::json!({
                 "bounty_id": 1,
                 "freelancer": "wallet-2",
@@ -1795,5 +1870,70 @@ mod tests {
             .map(|e| e["field"].as_str().unwrap())
             .collect();
         assert!(fields.contains(&"authorizerAddress"));
+    // ── API versioning ────────────────────────────────────────────────────────
+
+    #[actix_web::test]
+    async fn api_versions_endpoint_returns_current_version() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new().route("/api/versions", web::get().to(api_versions)),
+        )
+        .await;
+        let req = awtest::TestRequest::get().uri("/api/versions").to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["current"], "1");
+        assert!(json["supported"].as_array().unwrap().contains(&serde_json::json!("1")));
+    }
+
+    #[actix_web::test]
+    async fn v1_routes_respond_correctly() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new().service(
+                web::scope("/api/v1")
+                    .route("/bounties", web::get().to(list_bounties))
+                    .route("/creators", web::get().to(list_creators))
+                    .route("/freelancers", web::get().to(list_freelancers)),
+            ),
+        )
+        .await;
+
+        for uri in &["/api/v1/bounties", "/api/v1/creators", "/api/v1/freelancers"] {
+            let req = awtest::TestRequest::get().uri(uri).to_request();
+            let resp = awtest::call_service(&app, req).await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::OK, "failed for {uri}");
+        }
+    }
+
+    #[actix_web::test]
+    async fn unversioned_api_path_returns_404() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new().service(
+                web::scope("/api/v1").route("/bounties", web::get().to(list_bounties)),
+            ),
+        )
+        .await;
+        let req = awtest::TestRequest::get().uri("/api/bounties").to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn version_header_middleware_injects_x_api_version() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new()
+                .wrap(ApiVersionHeader)
+                .route("/health", web::get().to(health)),
+        )
+        .await;
+        let req = awtest::TestRequest::get().uri("/health").to_request();
+        let resp = awtest::call_service(&app, req).await;
+        let header = resp.headers().get("x-api-version").expect("x-api-version header must be present");
+        assert_eq!(header, API_VERSION);
     }
 }
