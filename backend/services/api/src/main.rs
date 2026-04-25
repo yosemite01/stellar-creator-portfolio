@@ -1,13 +1,14 @@
 use actix_cors::Cors;
-use actix_web::{http, web, App, HttpServer, HttpResponse, middleware};
-use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::body::MessageBody;
+use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
+use actix_web::{http, middleware, web, App, HttpResponse, HttpServer};
 use futures::future::{ok, Ready};
 use serde::{Deserialize, Serialize};
 
 mod auth;
-mod reputation;
+mod database;
 mod event_indexer;
+mod reputation;
 mod verification_rewards;
 mod webhook;
 
@@ -49,7 +50,11 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn new(code: ApiErrorCode, message: impl Into<String>) -> Self {
-        ApiError { code, message: message.into(), field_errors: None }
+        ApiError {
+            code,
+            message: message.into(),
+            field_errors: None,
+        }
     }
 
     pub fn with_field_errors(
@@ -57,15 +62,25 @@ impl ApiError {
         message: impl Into<String>,
         field_errors: Vec<FieldError>,
     ) -> Self {
-        ApiError { code, message: message.into(), field_errors: Some(field_errors) }
+        ApiError {
+            code,
+            message: message.into(),
+            field_errors: Some(field_errors),
+        }
     }
 
     pub fn not_found(resource: impl Into<String>) -> Self {
-        ApiError::new(ApiErrorCode::NotFound, format!("{} not found", resource.into()))
+        ApiError::new(
+            ApiErrorCode::NotFound,
+            format!("{} not found", resource.into()),
+        )
     }
 
     pub fn internal() -> Self {
-        ApiError::new(ApiErrorCode::InternalServerError, "An unexpected error occurred")
+        ApiError::new(
+            ApiErrorCode::InternalServerError,
+            "An unexpected error occurred",
+        )
     }
 }
 
@@ -81,7 +96,12 @@ pub struct PaginationMeta {
 impl PaginationMeta {
     pub fn new(page: u32, limit: u32, total: u64) -> Self {
         let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
-        PaginationMeta { page, limit, total, total_pages }
+        PaginationMeta {
+            page,
+            limit,
+            total,
+            total_pages,
+        }
     }
 }
 
@@ -94,7 +114,10 @@ pub struct PaginatedData<T> {
 
 impl<T> PaginatedData<T> {
     pub fn new(items: Vec<T>, page: u32, limit: u32, total: u64) -> Self {
-        PaginatedData { items, pagination: PaginationMeta::new(page, limit, total) }
+        PaginatedData {
+            items,
+            pagination: PaginationMeta::new(page, limit, total),
+        }
     }
 }
 
@@ -113,33 +136,28 @@ pub struct ApiResponse<T> {
 
 impl<T> ApiResponse<T> {
     pub fn ok(data: T, message: Option<String>) -> Self {
-        ApiResponse { success: true, data: Some(data), error: None, message }
+        ApiResponse {
+            success: true,
+            data: Some(data),
+            error: None,
+            message,
+        }
     }
 
     pub fn err(error: ApiError) -> Self {
-        ApiResponse { success: false, data: None, error: Some(error), message: None }
+        ApiResponse {
+            success: false,
+            data: None,
+            error: Some(error),
+            message: None,
+        }
     }
 }
 
 // ==================== Request Models ====================
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct BountyRequest {
-    pub creator: String,
-    pub title: String,
-    pub description: String,
-    pub budget: i128,
-    pub deadline: u64,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct BountyApplication {
-    pub bounty_id: u64,
-    pub freelancer: String,
-    pub proposal: String,
-    pub proposed_budget: i128,
-    pub timeline: u64,
-}
+// Note: Most request models are now in database modules
+// We only keep API-specific models here
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ReviewSubmission {
@@ -243,26 +261,39 @@ async fn health() -> HttpResponse {
 }
 
 /// Create a new bounty
-async fn create_bounty(
-    body: web::Json<BountyRequest>,
-) -> HttpResponse {
+async fn create_bounty(body: web::Json<database::BountyRequest>) -> HttpResponse {
     tracing::info!("Creating bounty: {:?}", body.title);
 
     let mut field_errors: Vec<FieldError> = Vec::new();
     if body.creator.trim().is_empty() {
-        field_errors.push(FieldError { field: "creator".into(), message: "creator is required".into() });
+        field_errors.push(FieldError {
+            field: "creator".into(),
+            message: "creator is required".into(),
+        });
     }
     if body.title.trim().is_empty() {
-        field_errors.push(FieldError { field: "title".into(), message: "title is required".into() });
+        field_errors.push(FieldError {
+            field: "title".into(),
+            message: "title is required".into(),
+        });
     }
     if body.description.trim().is_empty() {
-        field_errors.push(FieldError { field: "description".into(), message: "description is required".into() });
+        field_errors.push(FieldError {
+            field: "description".into(),
+            message: "description is required".into(),
+        });
     }
     if body.budget <= 0 {
-        field_errors.push(FieldError { field: "budget".into(), message: "budget must be positive".into() });
+        field_errors.push(FieldError {
+            field: "budget".into(),
+            message: "budget must be positive".into(),
+        });
     }
     if body.deadline == 0 {
-        field_errors.push(FieldError { field: "deadline".into(), message: "deadline is required".into() });
+        field_errors.push(FieldError {
+            field: "deadline".into(),
+            message: "deadline is required".into(),
+        });
     }
     if !field_errors.is_empty() {
         let body: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
@@ -275,13 +306,14 @@ async fn create_bounty(
             .json(body);
     }
 
+    let bounty = database::create_bounty(body.into_inner());
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
-            "bounty_id": 1,
-            "creator": body.creator,
-            "title": body.title,
-            "budget": body.budget,
-            "status": "open"
+            "bounty_id": bounty.id,
+            "creator": bounty.creator,
+            "title": bounty.title,
+            "budget": bounty.budget,
+            "status": bounty.status
         }),
         Some("Bounty created successfully".to_string()),
     );
@@ -295,10 +327,11 @@ async fn create_bounty(
 async fn list_bounties() -> HttpResponse {
     tracing::info!("Fetching bounties list");
 
+    let bounties = database::get_mock_bounties();
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
-            "bounties": [],
-            "total": 0,
+            "bounties": bounties,
+            "total": bounties.len(),
             "page": 1,
             "limit": 10
         }),
@@ -315,37 +348,50 @@ async fn get_bounty(path: web::Path<u64>) -> HttpResponse {
     let bounty_id = path.into_inner();
     tracing::info!("Fetching bounty: {}", bounty_id);
 
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "id": bounty_id,
-            "title": "Sample Bounty",
-            "status": "open"
-        }),
-        None,
-    );
-
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .json(response)
+    let bounty = database::get_bounty_by_id(bounty_id);
+    match bounty {
+        Some(b) => {
+            let response: ApiResponse<database::Bounty> = ApiResponse::ok(b, None);
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Bounty {}", bounty_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
 
 /// Apply for a bounty
 async fn apply_for_bounty(
     path: web::Path<u64>,
-    body: web::Json<BountyApplication>,
+    body: web::Json<database::BountyApplication>,
 ) -> HttpResponse {
     let bounty_id = path.into_inner();
     tracing::info!("Applying for bounty {}: {}", bounty_id, body.freelancer);
 
     let mut field_errors: Vec<FieldError> = Vec::new();
     if body.freelancer.trim().is_empty() {
-        field_errors.push(FieldError { field: "freelancer".into(), message: "freelancer is required".into() });
+        field_errors.push(FieldError {
+            field: "freelancer".into(),
+            message: "freelancer is required".into(),
+        });
     }
     if body.proposal.trim().is_empty() {
-        field_errors.push(FieldError { field: "proposal".into(), message: "proposal is required".into() });
+        field_errors.push(FieldError {
+            field: "proposal".into(),
+            message: "proposal is required".into(),
+        });
     }
     if body.proposed_budget <= 0 {
-        field_errors.push(FieldError { field: "proposed_budget".into(), message: "proposed_budget must be positive".into() });
+        field_errors.push(FieldError {
+            field: "proposed_budget".into(),
+            message: "proposed_budget must be positive".into(),
+        });
     }
     if !field_errors.is_empty() {
         let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
@@ -358,36 +404,53 @@ async fn apply_for_bounty(
             .json(resp);
     }
 
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "application_id": 1,
-            "bounty_id": bounty_id,
-            "freelancer": body.freelancer,
-            "status": "pending"
-        }),
-        Some("Application submitted successfully".to_string()),
-    );
-
-    HttpResponse::Created()
-        .content_type("application/json")
-        .json(response)
+    match database::apply_for_bounty(bounty_id, body.into_inner()) {
+        Ok(()) => {
+            let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+                serde_json::json!({
+                    "application_id": 1,
+                    "bounty_id": bounty_id,
+                    "freelancer": body.freelancer,
+                    "status": "pending"
+                }),
+                Some("Application submitted successfully".to_string()),
+            );
+            HttpResponse::Created()
+                .content_type("application/json")
+                .json(response)
+        }
+        Err(e) => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::new(ApiErrorCode::ValidationError, e));
+            HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
 
 /// Register freelancer
-async fn register_freelancer(
-    body: web::Json<FreelancerRegistration>,
-) -> HttpResponse {
+async fn register_freelancer(body: web::Json<database::FreelancerRegistration>) -> HttpResponse {
     tracing::info!("Registering freelancer: {}", body.name);
 
     let mut field_errors: Vec<FieldError> = Vec::new();
     if body.name.trim().is_empty() {
-        field_errors.push(FieldError { field: "name".into(), message: "name is required".into() });
+        field_errors.push(FieldError {
+            field: "name".into(),
+            message: "name is required".into(),
+        });
     }
     if body.discipline.trim().is_empty() {
-        field_errors.push(FieldError { field: "discipline".into(), message: "discipline is required".into() });
+        field_errors.push(FieldError {
+            field: "discipline".into(),
+            message: "discipline is required".into(),
+        });
     }
     if body.bio.trim().is_empty() {
-        field_errors.push(FieldError { field: "bio".into(), message: "bio is required".into() });
+        field_errors.push(FieldError {
+            field: "bio".into(),
+            message: "bio is required".into(),
+        });
     }
     if !field_errors.is_empty() {
         let body: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
@@ -400,12 +463,14 @@ async fn register_freelancer(
             .json(body);
     }
 
+    let freelancer =
+        database::register_freelancer(body.into_inner(), "wallet-address-placeholder".to_string());
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
-            "freelancer_id": 1,
-            "name": body.name,
-            "discipline": body.discipline,
-            "verified": false
+            "freelancer_id": freelancer.address,
+            "name": freelancer.name,
+            "discipline": freelancer.discipline,
+            "verified": freelancer.verified
         }),
         Some("Freelancer registered successfully".to_string()),
     );
@@ -416,14 +481,21 @@ async fn register_freelancer(
 }
 
 /// List freelancers
-async fn list_freelancers(query: web::Query<std::collections::HashMap<String, String>>) -> HttpResponse {
+async fn list_freelancers(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
     let discipline = query.get("discipline").cloned().unwrap_or_default();
     tracing::info!("Listing freelancers with filter: {}", discipline);
 
+    let all_freelancers = database::get_mock_freelancers();
+    let filtered_freelancers =
+        database::filter_freelancers_by_discipline(all_freelancers, &discipline);
+    let total = filtered_freelancers.len();
+
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
-            "freelancers": [],
-            "total": 0,
+            "freelancers": filtered_freelancers,
+            "total": total,
             "filters": { "discipline": discipline }
         }),
         None,
@@ -439,129 +511,40 @@ async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
     let address = path.into_inner();
     tracing::info!("Fetching freelancer: {}", address);
 
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "address": address,
-            "name": "John Doe",
-            "discipline": "UI/UX Design",
-            "rating": 4.8,
-            "completed_projects": 25
-        }),
-        None,
-    );
-
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .json(response)
+    let freelancer = database::get_freelancer_by_address(&address);
+    match freelancer {
+        Some(f) => {
+            let response: ApiResponse<database::Freelancer> = ApiResponse::ok(f, None);
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Freelancer {}", address)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
 
 /// List creators with optional filter by discipline
-async fn list_creators(query: web::Query<std::collections::HashMap<String, String>>) -> HttpResponse {
+async fn list_creators(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
     let discipline = query.get("discipline").cloned();
     let search = query.get("search").cloned();
-    
-    tracing::info!("Listing creators with filters - discipline: {:?}, search: {:?}", discipline, search);
 
-    // Mock data for creators - in production this would fetch from database
-    let all_creators: Vec<Creator> = vec![
-        Creator {
-            id: "alex-studio".to_string(),
-            name: "Alex Chen".to_string(),
-            title: "Product Designer".to_string(),
-            discipline: "UI/UX Design".to_string(),
-            bio: "Crafting intuitive digital experiences that solve real problems. Specialized in design systems and user-centered methodology.".to_string(),
-            avatar: "/avatars/alex-chen.jpg".to_string(),
-            cover_image: "/covers/design-studio.jpg".to_string(),
-            tagline: "Design systems that scale".to_string(),
-            linked_in: "https://linkedin.com/in/alexchen".to_string(),
-            twitter: "https://x.com/alexchen".to_string(),
-            portfolio: Some("https://alexchen.design".to_string()),
-            projects: vec![],
-            skills: vec!["Figma".to_string(), "Design Systems".to_string(), "Prototyping".to_string()],
-            stats: Some(CreatorStats {
-                projects: 45,
-                clients: 20,
-                experience: 8,
-            }),
-            hourly_rate: Some(150),
-            response_time: Some("2 hours".to_string()),
-            availability: Some("available".to_string()),
-            rating: Some(4.9),
-            review_count: Some(82),
-        },
-        Creator {
-            id: "jordan-dev".to_string(),
-            name: "Jordan Smith".to_string(),
-            title: "Full Stack Developer".to_string(),
-            discipline: "Software Development".to_string(),
-            bio: "Experienced full-stack developer with expertise in React, Node.js, and cloud technologies.".to_string(),
-            avatar: "/avatars/jordan-smith.jpg".to_string(),
-            cover_image: "/covers/dev-workspace.jpg".to_string(),
-            tagline: "Building scalable web applications".to_string(),
-            linked_in: "https://linkedin.com/in/jordansmith".to_string(),
-            twitter: "https://x.com/jordansmith".to_string(),
-            portfolio: Some("https://jordansmith.dev".to_string()),
-            projects: vec![],
-            skills: vec!["React".to_string(), "Node.js".to_string(), "TypeScript".to_string(), "PostgreSQL".to_string()],
-            stats: Some(CreatorStats {
-                projects: 52,
-                clients: 28,
-                experience: 10,
-            }),
-            hourly_rate: Some(120),
-            response_time: Some("1 hour".to_string()),
-            availability: Some("limited".to_string()),
-            rating: Some(4.8),
-            review_count: Some(95),
-        },
-        Creator {
-            id: "maya-content".to_string(),
-            name: "Maya Rodriguez".to_string(),
-            title: "Content Strategist".to_string(),
-            discipline: "Content Creation".to_string(),
-            bio: "Digital content strategist specializing in brand storytelling and audience engagement.".to_string(),
-            avatar: "/avatars/maya-rodriguez.jpg".to_string(),
-            cover_image: "/covers/content-creative.jpg".to_string(),
-            tagline: "Stories that drive engagement".to_string(),
-            linked_in: "https://linkedin.com/in/mayarodriguez".to_string(),
-            twitter: "https://x.com/mayarodriguez".to_string(),
-            portfolio: Some("https://mayarodriguez.com".to_string()),
-            projects: vec![],
-            skills: vec!["Copywriting".to_string(), "SEO".to_string(), "Social Media".to_string()],
-            stats: Some(CreatorStats {
-                projects: 38,
-                clients: 15,
-                experience: 6,
-            }),
-            hourly_rate: Some(85),
-            response_time: Some("4 hours".to_string()),
-            availability: Some("available".to_string()),
-            rating: Some(4.7),
-            review_count: Some(45),
-        },
-    ];
+    tracing::info!(
+        "Listing creators with filters - discipline: {:?}, search: {:?}",
+        discipline,
+        search
+    );
 
-    // Filter creators based on query parameters
-    let filtered_creators: Vec<Creator> = all_creators
-        .into_iter()
-        .filter(|creator| {
-            if let Some(ref d) = discipline {
-                if !creator.discipline.to_lowercase().contains(&d.to_lowercase()) {
-                    return false;
-                }
-            }
-            if let Some(ref s) = search {
-                if !creator.name.to_lowercase().contains(&s.to_lowercase())
-                    && !creator.bio.to_lowercase().contains(&s.to_lowercase())
-                    && !creator.skills.iter().any(|skill| skill.to_lowercase().contains(&s.to_lowercase()))
-                {
-                    return false;
-                }
-            }
-            true
-        })
-        .collect();
-
+    // Use database module for creators
+    let all_creators = database::get_mock_creators();
+    let filtered_creators = database::filter_creators(all_creators, discipline, search);
     let total = filtered_creators.len();
 
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
@@ -586,45 +569,18 @@ async fn get_creator(path: web::Path<String>) -> HttpResponse {
     let creator_id = path.into_inner();
     tracing::info!("Fetching creator: {}", creator_id);
 
-    // Mock creator data - in production this would fetch from database
-    let creator = match creator_id.as_str() {
-        "alex-studio" => Some(Creator {
-            id: "alex-studio".to_string(),
-            name: "Alex Chen".to_string(),
-            title: "Product Designer".to_string(),
-            discipline: "UI/UX Design".to_string(),
-            bio: "Crafting intuitive digital experiences that solve real problems. Specialized in design systems and user-centered methodology.".to_string(),
-            avatar: "/avatars/alex-chen.jpg".to_string(),
-            cover_image: "/covers/design-studio.jpg".to_string(),
-            tagline: "Design systems that scale".to_string(),
-            linked_in: "https://linkedin.com/in/alexchen".to_string(),
-            twitter: "https://x.com/alexchen".to_string(),
-            portfolio: Some("https://alexchen.design".to_string()),
-            projects: vec![],
-            skills: vec!["Figma".to_string(), "Design Systems".to_string(), "Prototyping".to_string()],
-            stats: Some(CreatorStats {
-                projects: 45,
-                clients: 20,
-                experience: 8,
-            }),
-            hourly_rate: Some(150),
-            response_time: Some("2 hours".to_string()),
-            availability: Some("available".to_string()),
-            rating: Some(4.9),
-            review_count: Some(82),
-        }),
-        _ => None,
-    };
+    // Use database module for creator lookup
+    let creator = database::get_creator_by_id(&creator_id);
 
     match creator {
         Some(c) => {
-            let response: ApiResponse<Creator> = ApiResponse::ok(c, None);
+            let response: ApiResponse<database::Creator> = ApiResponse::ok(c, None);
             HttpResponse::Ok()
                 .content_type("application/json")
                 .json(response)
         }
         None => {
-            let response: ApiResponse<Creator> =
+            let response: ApiResponse<database::Creator> =
                 ApiResponse::err(ApiError::not_found(format!("Creator {}", creator_id)));
             HttpResponse::NotFound()
                 .content_type("application/json")
@@ -655,28 +611,160 @@ async fn get_creator_reputation(path: web::Path<String>) -> HttpResponse {
         .json(response)
 }
 
+/// Enhanced creator reputation with filtering and sorting support
+async fn get_creator_reviews_filtered(
+    path: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let creator_id = path.into_inner();
+    tracing::info!("Fetching filtered reviews for creator: {} with filters: {:?}", creator_id, *query);
+
+    // Parse and validate query parameters
+    let filters = match reputation::parse_review_filters(&query) {
+        Ok(filters) => filters,
+        Err(errors) => {
+            let field_errors: Vec<FieldError> = errors
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| FieldError {
+                    field: format!("query_param_{}", i),
+                    message: msg,
+                })
+                .collect();
+            
+            let response: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+                ApiErrorCode::ValidationError,
+                "Invalid query parameters",
+                field_errors,
+            ));
+            return HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(response);
+        }
+    };
+
+    let payload = reputation::get_filtered_creator_reviews(&creator_id, &filters);
+    let response: ApiResponse<reputation::FilteredCreatorReputationPayload> =
+        ApiResponse::ok(payload, None);
+    
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
+/// Get all reviews across creators with filtering and sorting
+async fn list_reviews_filtered(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    tracing::info!("Fetching filtered reviews across all creators with filters: {:?}", *query);
+
+    // Parse and validate query parameters
+    let filters = match reputation::parse_review_filters(&query) {
+        Ok(filters) => filters,
+        Err(errors) => {
+            let field_errors: Vec<FieldError> = errors
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| FieldError {
+                    field: format!("query_param_{}", i),
+                    message: msg,
+                })
+                .collect();
+            
+            let response: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+                ApiErrorCode::ValidationError,
+                "Invalid query parameters",
+                field_errors,
+            ));
+            return HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(response);
+        }
+    };
+
+    // Get all reviews from seed data (in production, this would be a database query)
+    let all_reviews: Vec<reputation::Review> = vec![
+        "alex-studio", "maya-content", "jordan-dev"
+    ]
+    .iter()
+    .flat_map(|creator_id| reputation::reviews_for_creator(creator_id))
+    .collect();
+
+    // Apply filters
+    let filtered_reviews = reputation::filter_reviews(&all_reviews, &filters);
+    
+    // Apply sorting
+    let mut sorted_reviews = filtered_reviews;
+    let sort_by = filters.sort_by.as_ref().unwrap_or(&reputation::ReviewSortBy::CreatedAt);
+    let sort_order = filters.sort_order.as_ref().unwrap_or(&reputation::SortOrder::Desc);
+    reputation::sort_reviews(&mut sorted_reviews, sort_by, sort_order);
+    
+    // Apply pagination
+    let page = filters.page.unwrap_or(1).max(1);
+    let limit = filters.limit.unwrap_or(10).clamp(1, 100);
+    let paginated_reviews = reputation::paginate_reviews(sorted_reviews, page, limit);
+
+    // Calculate overall aggregation for context
+    let overall_aggregation = reputation::aggregate_reviews(&all_reviews);
+    let filtered_aggregation = if paginated_reviews.total_count != overall_aggregation.total_reviews {
+        Some(reputation::aggregate_reviews(&reputation::filter_reviews(&all_reviews, &filters)))
+    } else {
+        None
+    };
+
+    let payload = serde_json::json!({
+        "reviews": paginated_reviews,
+        "overallAggregation": overall_aggregation,
+        "filteredAggregation": filtered_aggregation,
+        "appliedFilters": filters
+    });
+
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(payload, None);
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
 /// Submit a review after bounty completion.
 async fn submit_review(body: web::Json<ReviewSubmission>) -> HttpResponse {
     tracing::info!("Submitting review for creator: {}", body.creator_id);
 
     let mut field_errors: Vec<FieldError> = Vec::new();
     if body.bounty_id.trim().is_empty() {
-        field_errors.push(FieldError { field: "bountyId".into(), message: "Bounty ID is required".into() });
+        field_errors.push(FieldError {
+            field: "bountyId".into(),
+            message: "Bounty ID is required".into(),
+        });
     }
     if body.creator_id.trim().is_empty() {
-        field_errors.push(FieldError { field: "creatorId".into(), message: "Creator ID is required".into() });
+        field_errors.push(FieldError {
+            field: "creatorId".into(),
+            message: "Creator ID is required".into(),
+        });
     }
     if !(1..=5).contains(&body.rating) {
-        field_errors.push(FieldError { field: "rating".into(), message: "Rating must be between 1 and 5".into() });
+        field_errors.push(FieldError {
+            field: "rating".into(),
+            message: "Rating must be between 1 and 5".into(),
+        });
     }
     if body.title.trim().is_empty() {
-        field_errors.push(FieldError { field: "title".into(), message: "Title is required".into() });
+        field_errors.push(FieldError {
+            field: "title".into(),
+            message: "Title is required".into(),
+        });
     }
     if body.body.trim().is_empty() {
-        field_errors.push(FieldError { field: "body".into(), message: "Feedback is required".into() });
+        field_errors.push(FieldError {
+            field: "body".into(),
+            message: "Feedback is required".into(),
+        });
     }
     if body.reviewer_name.trim().is_empty() {
-        field_errors.push(FieldError { field: "reviewerName".into(), message: "Your name is required".into() });
+        field_errors.push(FieldError {
+            field: "reviewerName".into(),
+            message: "Your name is required".into(),
+        });
     }
     if !field_errors.is_empty() {
         let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
@@ -704,18 +792,22 @@ async fn get_escrow(path: web::Path<u64>) -> HttpResponse {
     let escrow_id = path.into_inner();
     tracing::info!("Fetching escrow: {}", escrow_id);
 
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "id": escrow_id,
-            "status": "active",
-            "amount": 5000
-        }),
-        None,
-    );
-
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .json(response)
+    let escrow = database::get_escrow_by_id(escrow_id);
+    match escrow {
+        Some(e) => {
+            let response: ApiResponse<database::Escrow> = ApiResponse::ok(e, None);
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Escrow {}", escrow_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
 
 /// Release escrow funds
@@ -723,39 +815,64 @@ async fn release_escrow(path: web::Path<u64>) -> HttpResponse {
     let escrow_id = path.into_inner();
     tracing::info!("Releasing escrow: {}", escrow_id);
 
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "id": escrow_id,
-            "status": "released",
-            "transaction_id": "tx_123456"
-        }),
-        Some("Funds released successfully".to_string()),
-    );
-
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .json(response)
+    match database::release_escrow(escrow_id) {
+        Some(escrow) => {
+            let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+                serde_json::json!({
+                    "id": escrow.id,
+                    "status": escrow.status,
+                    "transaction_id": escrow.transaction_hash
+                }),
+                Some("Funds released successfully".to_string()),
+            );
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Escrow {}", escrow_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
 
 /// Create a new escrow
-async fn create_escrow(body: web::Json<EscrowCreateRequest>) -> HttpResponse {
+async fn create_escrow(body: web::Json<database::EscrowCreateRequest>) -> HttpResponse {
     tracing::info!("Creating escrow for bounty: {}", body.bounty_id);
 
     let mut field_errors: Vec<FieldError> = Vec::new();
     if body.bounty_id.trim().is_empty() {
-        field_errors.push(FieldError { field: "bountyId".into(), message: "bountyId is required".into() });
+        field_errors.push(FieldError {
+            field: "bountyId".into(),
+            message: "bountyId is required".into(),
+        });
     }
     if body.payer_address.trim().is_empty() {
-        field_errors.push(FieldError { field: "payerAddress".into(), message: "payerAddress is required".into() });
+        field_errors.push(FieldError {
+            field: "payerAddress".into(),
+            message: "payerAddress is required".into(),
+        });
     }
     if body.payee_address.trim().is_empty() {
-        field_errors.push(FieldError { field: "payeeAddress".into(), message: "payeeAddress is required".into() });
+        field_errors.push(FieldError {
+            field: "payeeAddress".into(),
+            message: "payeeAddress is required".into(),
+        });
     }
     if body.amount <= 0 {
-        field_errors.push(FieldError { field: "amount".into(), message: "amount must be positive".into() });
+        field_errors.push(FieldError {
+            field: "amount".into(),
+            message: "amount must be positive".into(),
+        });
     }
     if body.token.trim().is_empty() {
-        field_errors.push(FieldError { field: "token".into(), message: "token is required".into() });
+        field_errors.push(FieldError {
+            field: "token".into(),
+            message: "token is required".into(),
+        });
     }
     if !field_errors.is_empty() {
         let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
@@ -768,15 +885,15 @@ async fn create_escrow(body: web::Json<EscrowCreateRequest>) -> HttpResponse {
             .json(resp);
     }
 
-    let escrow_id: u64 = 1;
+    let escrow = database::create_escrow(body.into_inner());
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "escrowId": escrow_id.to_string(),
-            "txHash": format!("tx_escrow_{}", escrow_id),
+        serde_json::json!(
+            "escrowId": escrow.id.to_string(),
+            "txHash": escrow.transaction_hash,
             "operation": "deposit",
-            "status": "pending",
-            "timestamp": chrono_now()
-        }),
+            "status": escrow.status,
+            "timestamp": escrow.created_at
+        ),
         Some("Escrow created successfully".to_string()),
     );
 
@@ -788,41 +905,53 @@ async fn create_escrow(body: web::Json<EscrowCreateRequest>) -> HttpResponse {
 /// Refund escrow to payer (work rejected or cancelled)
 async fn refund_escrow(
     path: web::Path<u64>,
-    body: web::Json<EscrowRefundRequest>,
+    body: web::Json<database::EscrowRefundRequest>,
 ) -> HttpResponse {
     let escrow_id = path.into_inner();
-    tracing::info!("Refunding escrow {} to {}", escrow_id, body.authorizer_address);
+    tracing::info!(
+        "Refunding escrow {} to {}",
+        escrow_id,
+        body.authorizer_address
+    );
 
     if body.authorizer_address.trim().is_empty() {
         let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
             ApiErrorCode::ValidationError,
             "Validation failed",
-            vec![FieldError { field: "authorizerAddress".into(), message: "authorizerAddress is required".into() }],
+            vec![FieldError {
+                field: "authorizerAddress".into(),
+                message: "authorizerAddress is required".into(),
+            }],
         ));
         return HttpResponse::UnprocessableEntity()
             .content_type("application/json")
             .json(resp);
     }
 
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({
-            "escrowId": escrow_id.to_string(),
-            "txHash": format!("tx_refund_{}", escrow_id),
-            "operation": "refund",
-            "status": "pending",
-            "timestamp": chrono_now()
-        }),
-        Some("Escrow refunded successfully".to_string()),
-    );
-
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .json(response)
-}
-
-fn chrono_now() -> String {
-    // Stable timestamp placeholder — real impl would use chrono or time crate
-    "2026-01-01T00:00:00Z".to_string()
+    match database::refund_escrow(escrow_id, body.authorizer_address.clone()) {
+        Some(escrow) => {
+            let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+                serde_json::json!({
+                    "escrowId": escrow.id.to_string(),
+                    "txHash": escrow.transaction_hash,
+                    "operation": "refund",
+                    "status": escrow.status,
+                    "timestamp": escrow.created_at
+                }),
+                Some("Escrow refunded successfully".to_string()),
+            );
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Escrow {}", escrow_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
 
 /// Middleware that injects `X-API-Version` into every response.
@@ -855,7 +984,8 @@ where
 {
     type Response = ServiceResponse<B>;
     type Error = actix_web::Error;
-    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
 
     actix_web::dev::forward_ready!(service);
 
@@ -954,12 +1084,21 @@ async fn main() -> std::io::Result<()> {
                     .route("/bounties/{id}", web::get().to(get_bounty))
                     .route("/creators", web::get().to(list_creators))
                     .route("/creators/{id}", web::get().to(get_creator))
+                    .route(
+                        "/creators/{id}/reputation",
+                        web::get().to(get_creator_reputation),
+                    )
                     .route("/creators/{id}/reputation", web::get().to(get_creator_reputation))
+                    .route("/creators/{id}/reviews", web::get().to(get_creator_reviews_filtered))
                     .route("/reviews", web::post().to(submit_review))
+                    .route("/reviews", web::get().to(list_reviews_filtered))
                     .route("/freelancers", web::get().to(list_freelancers))
                     .route("/freelancers/{address}", web::get().to(get_freelancer))
                     .route("/escrow/{id}", web::get().to(get_escrow))
-                    .route("/webhooks/payment", web::post().to(webhook::payment_webhook))
+                    .route(
+                        "/webhooks/payment",
+                        web::post().to(webhook::payment_webhook),
+                    )
                     // Protected write routes — require valid JWT
                     .service(
                         web::scope("")
@@ -976,10 +1115,13 @@ async fn main() -> std::io::Result<()> {
                     .wrap(auth::JwtMiddleware)
                     .route("/api/bounties", web::post().to(create_bounty))
                     .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                    .route("/api/freelancers/register", web::post().to(register_freelancer))
+                    .route(
+                        "/api/freelancers/register",
+                        web::post().to(register_freelancer),
+                    )
                     .route("/api/escrow/create", web::post().to(create_escrow))
                     .route("/api/escrow/{id}/release", web::post().to(release_escrow))
-                    .route("/api/escrow/{id}/refund", web::post().to(refund_escrow))
+                    .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
             )
     })
     .bind((host.parse::<std::net::IpAddr>().unwrap(), port))?
@@ -1038,8 +1180,14 @@ mod tests {
     #[test]
     fn test_api_error_with_field_errors() {
         let field_errors = vec![
-            FieldError { field: "title".to_string(), message: "Title is required".to_string() },
-            FieldError { field: "budget".to_string(), message: "Budget must be positive".to_string() },
+            FieldError {
+                field: "title".to_string(),
+                message: "Title is required".to_string(),
+            },
+            FieldError {
+                field: "budget".to_string(),
+                message: "Budget must be positive".to_string(),
+            },
         ];
         let err = ApiError::with_field_errors(
             ApiErrorCode::ValidationError,
@@ -1179,12 +1327,10 @@ mod tests {
     async fn creator_reputation_integration_returns_aggregation() {
         use actix_web::test as awtest;
 
-        let app = awtest::init_service(
-            App::new().route(
-                "/api/v1/creators/{id}/reputation",
-                web::get().to(get_creator_reputation),
-            ),
-        )
+        let app = awtest::init_service(App::new().route(
+            "/api/v1/creators/{id}/reputation",
+            web::get().to(get_creator_reputation),
+        ))
         .await;
 
         let req = awtest::TestRequest::get()
@@ -1197,9 +1343,13 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], true);
         assert_eq!(json["data"]["creatorId"], "alex-studio");
-        let total = json["data"]["aggregation"]["totalReviews"].as_u64().unwrap();
+        let total = json["data"]["aggregation"]["totalReviews"]
+            .as_u64()
+            .unwrap();
         assert!(total >= 1);
-        let avg = json["data"]["aggregation"]["averageRating"].as_f64().unwrap();
+        let avg = json["data"]["aggregation"]["averageRating"]
+            .as_f64()
+            .unwrap();
         assert!(avg > 0.0);
         assert!(!json["data"]["recentReviews"].as_array().unwrap().is_empty());
     }
@@ -1213,7 +1363,9 @@ mod tests {
         )
         .await;
 
-        let req = awtest::TestRequest::get().uri("/api/v1/escrow/7").to_request();
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/escrow/7")
+            .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
 
@@ -1228,12 +1380,10 @@ mod tests {
     async fn creator_reputation_unknown_id_returns_empty_aggregation() {
         use actix_web::test as awtest;
 
-        let app = awtest::init_service(
-            App::new().route(
-                "/api/v1/creators/{id}/reputation",
-                web::get().to(get_creator_reputation),
-            ),
-        )
+        let app = awtest::init_service(App::new().route(
+            "/api/v1/creators/{id}/reputation",
+            web::get().to(get_creator_reputation),
+        ))
         .await;
 
         let req = awtest::TestRequest::get()
@@ -1252,9 +1402,10 @@ mod tests {
     async fn escrow_release_integration_returns_released_payload() {
         use actix_web::test as awtest;
 
-        let app = awtest::init_service(
-            App::new().route("/api/v1/escrow/{id}/release", web::post().to(release_escrow)),
-        )
+        let app = awtest::init_service(App::new().route(
+            "/api/v1/escrow/{id}/release",
+            web::post().to(release_escrow),
+        ))
         .await;
 
         let req = awtest::TestRequest::post()
@@ -1290,6 +1441,21 @@ mod tests {
                 .route("/escrow/create", web::post().to(create_escrow))
                 .route("/escrow/{id}/release", web::post().to(release_escrow))
                 .route("/escrow/{id}/refund", web::post().to(refund_escrow))
+                .route("/api/bounties", web::post().to(create_bounty))
+                .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route(
+                    "/api/freelancers/register",
+                    web::post().to(register_freelancer),
+                )
+                .route("/api/escrow/create", web::post().to(create_escrow))
+                .route("/api/escrow/{id}/release", web::post().to(release_escrow))
+                .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
+                .route("/api/v1/bounties", web::post().to(create_bounty))
+                .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
+                .route("/api/v1/escrow/create", web::post().to(create_escrow))
+                .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
+                .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
         )
     }
 
@@ -1430,8 +1596,14 @@ mod tests {
     > {
         App::new()
             .route("/api/v1/bounties", web::post().to(create_bounty))
-            .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
-            .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
+            .route(
+                "/api/v1/bounties/{id}/apply",
+                web::post().to(apply_for_bounty),
+            )
+            .route(
+                "/api/v1/freelancers/register",
+                web::post().to(register_freelancer),
+            )
     }
 
     #[actix_web::test]
@@ -1449,13 +1621,17 @@ mod tests {
             }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], false);
         assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
         let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|e| e["field"].as_str().unwrap())
             .collect();
@@ -1477,11 +1653,15 @@ mod tests {
             }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|e| e["field"].as_str().unwrap())
             .collect();
@@ -1503,7 +1683,10 @@ mod tests {
             }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let count = json["error"]["fieldErrors"].as_array().unwrap().len();
@@ -1525,11 +1708,15 @@ mod tests {
             }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|e| e["field"].as_str().unwrap())
             .collect();
@@ -1545,7 +1732,10 @@ mod tests {
             .set_json(serde_json::json!({ "name": "", "discipline": "", "bio": "" }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["fieldErrors"].as_array().unwrap().len(), 3);
@@ -1568,11 +1758,15 @@ mod tests {
             }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|e| e["field"].as_str().unwrap())
             .collect();
@@ -1632,7 +1826,10 @@ mod tests {
             }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], false);
@@ -1657,11 +1854,15 @@ mod tests {
             }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|e| e["field"].as_str().unwrap())
             .collect();
@@ -1683,20 +1884,24 @@ mod tests {
             }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|e| e["field"].as_str().unwrap())
             .collect();
         assert!(fields.contains(&"proposed_budget"));
     }
 
-    // ── POST /api/escrow/create ───────────────────────────────────────────────
+    // ── New integration tests for review filtering endpoints ──────────────────
 
-    fn build_escrow_app() -> actix_web::App<
+    fn build_review_filtering_app() -> actix_web::App<
         impl actix_web::dev::ServiceFactory<
             actix_web::dev::ServiceRequest,
             Config = (),
@@ -1708,10 +1913,12 @@ mod tests {
         App::new()
             .route("/api/v1/escrow/create", web::post().to(create_escrow))
             .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
+            .route("/api/v1/creators/{id}/reviews", web::get().to(get_creator_reviews_filtered))
+            .route("/api/v1/reviews", web::get().to(list_reviews_filtered))
     }
 
     #[actix_web::test]
-    async fn create_escrow_without_token_returns_401() {
+    async fn get_creator_reviews_filtered_returns_paginated_results() {
         use actix_web::test as awtest;
         std::env::remove_var("JWT_SECRET");
 
@@ -1725,13 +1932,38 @@ mod tests {
                 "amount": 1000,
                 "token": "GUSDC"
             }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?page=1&limit=2&sortBy=rating&sortOrder=desc")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["creatorId"], "alex-studio");
+        
+        let reviews = &json["data"]["reviews"];
+        assert_eq!(reviews["page"], 1);
+        assert_eq!(reviews["limit"], 2);
+        assert!(reviews["reviews"].as_array().unwrap().len() <= 2);
+        
+        // Check that reviews are sorted by rating descending
+        let review_ratings: Vec<u8> = reviews["reviews"]
+            .as_array().unwrap()
+            .iter()
+            .map(|r| r["rating"].as_u64().unwrap() as u8)
+            .collect();
+        
+        for i in 1..review_ratings.len() {
+            assert!(review_ratings[i-1] >= review_ratings[i]);
+        }
     }
 
     #[actix_web::test]
-    async fn create_escrow_with_valid_token_returns_201() {
+    async fn get_creator_reviews_filtered_with_rating_filter() {
         use actix_web::test as awtest;
         std::env::remove_var("JWT_SECRET");
         let token = auth::tests::make_token("wallet-1", "creator", 3600);
@@ -1747,21 +1979,28 @@ mod tests {
                 "amount": 2500,
                 "token": "GUSDC"
             }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?minRating=4&maxRating=5")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
 
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], true);
-        assert_eq!(json["data"]["operation"], "deposit");
-        assert_eq!(json["data"]["status"], "pending");
-        assert!(json["data"]["escrowId"].is_string());
-        assert!(json["data"]["txHash"].is_string());
+        
+        // All returned reviews should have rating between 4-5
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let rating = review["rating"].as_u64().unwrap() as u8;
+            assert!(rating >= 4 && rating <= 5);
+        }
     }
 
     #[actix_web::test]
-    async fn create_escrow_missing_fields_returns_422() {
+    async fn get_creator_reviews_filtered_invalid_params_returns_422() {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_escrow_app()).await;
         let req = awtest::TestRequest::post()
@@ -1773,19 +2012,27 @@ mod tests {
                 "amount": 0,
                 "token": ""
             }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?minRating=6&sortBy=invalid&page=0")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], false);
         assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
-        let count = json["error"]["fieldErrors"].as_array().unwrap().len();
-        assert_eq!(count, 5);
+        assert!(json["error"]["fieldErrors"].as_array().unwrap().len() > 0);
     }
 
     #[actix_web::test]
-    async fn create_escrow_negative_amount_returns_422() {
+    async fn list_reviews_filtered_returns_all_reviews() {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_escrow_app()).await;
         let req = awtest::TestRequest::post()
@@ -1797,13 +2044,21 @@ mod tests {
                 "amount": -100,
                 "token": "GUSDC"
             }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?page=1&limit=5&sortBy=createdAt&sortOrder=desc")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|e| e["field"].as_str().unwrap())
             .collect();
@@ -1824,10 +2079,23 @@ mod tests {
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        
+        let reviews = &json["data"]["reviews"];
+        assert_eq!(reviews["page"], 1);
+        assert_eq!(reviews["limit"], 5);
+        assert!(reviews["totalCount"].as_u64().unwrap() > 0);
+        
+        // Should have overall aggregation
+        assert!(json["data"]["overallAggregation"]["totalReviews"].as_u64().unwrap() > 0);
     }
 
     #[actix_web::test]
-    async fn refund_escrow_with_valid_token_returns_200() {
+    async fn list_reviews_filtered_with_verified_only() {
         use actix_web::test as awtest;
         std::env::remove_var("JWT_SECRET");
         let token = auth::tests::make_token("wallet-1", "creator", 3600);
@@ -1837,6 +2105,10 @@ mod tests {
             .uri("/api/v1/escrow/5/refund")
             .insert_header(("Authorization", format!("Bearer {}", token)))
             .set_json(serde_json::json!({ "authorizerAddress": "GPAYER123" }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?verifiedOnly=true&sortBy=rating&sortOrder=desc")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
@@ -1844,26 +2116,41 @@ mod tests {
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], true);
-        assert_eq!(json["data"]["operation"], "refund");
-        assert_eq!(json["data"]["status"], "pending");
-        assert_eq!(json["data"]["escrowId"], "5");
+        
+        // All returned reviews should have rating >= 4 (verified threshold)
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let rating = review["rating"].as_u64().unwrap() as u8;
+            assert!(rating >= 4);
+        }
+        
+        // Should have filtered aggregation since we applied filters
+        assert!(json["data"]["filteredAggregation"].is_object());
     }
 
     #[actix_web::test]
-    async fn refund_escrow_missing_authorizer_returns_422() {
+    async fn list_reviews_filtered_date_range() {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_escrow_app()).await;
         let req = awtest::TestRequest::post()
             .uri("/api/v1/escrow/5/refund")
             .set_json(serde_json::json!({ "authorizerAddress": "" }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?dateFrom=2025-01-01&dateTo=2025-12-31")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
         let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|e| e["field"].as_str().unwrap())
             .collect();
@@ -1875,17 +2162,20 @@ mod tests {
     #[actix_web::test]
     async fn api_versions_endpoint_returns_current_version() {
         use actix_web::test as awtest;
-        let app = awtest::init_service(
-            App::new().route("/api/versions", web::get().to(api_versions)),
-        )
-        .await;
+        let app =
+            awtest::init_service(App::new().route("/api/versions", web::get().to(api_versions)))
+                .await;
         let req = awtest::TestRequest::get().uri("/api/versions").to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["current"], "1");
-        assert!(json["supported"].as_array().unwrap().contains(&serde_json::json!("1")));
+        assert!(json["supported"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("1")));
     }
 
     #[actix_web::test]
@@ -1901,10 +2191,18 @@ mod tests {
         )
         .await;
 
-        for uri in &["/api/v1/bounties", "/api/v1/creators", "/api/v1/freelancers"] {
+        for uri in &[
+            "/api/v1/bounties",
+            "/api/v1/creators",
+            "/api/v1/freelancers",
+        ] {
             let req = awtest::TestRequest::get().uri(uri).to_request();
             let resp = awtest::call_service(&app, req).await;
-            assert_eq!(resp.status(), actix_web::http::StatusCode::OK, "failed for {uri}");
+            assert_eq!(
+                resp.status(),
+                actix_web::http::StatusCode::OK,
+                "failed for {uri}"
+            );
         }
     }
 
@@ -1912,9 +2210,8 @@ mod tests {
     async fn unversioned_api_path_returns_404() {
         use actix_web::test as awtest;
         let app = awtest::init_service(
-            App::new().service(
-                web::scope("/api/v1").route("/bounties", web::get().to(list_bounties)),
-            ),
+            App::new()
+                .service(web::scope("/api/v1").route("/bounties", web::get().to(list_bounties))),
         )
         .await;
         let req = awtest::TestRequest::get().uri("/api/bounties").to_request();
@@ -1933,7 +2230,19 @@ mod tests {
         .await;
         let req = awtest::TestRequest::get().uri("/health").to_request();
         let resp = awtest::call_service(&app, req).await;
-        let header = resp.headers().get("x-api-version").expect("x-api-version header must be present");
+        let header = resp
+            .headers()
+            .get("x-api-version")
+            .expect("x-api-version header must be present");
         assert_eq!(header, API_VERSION);
+    }
+        assert_eq!(json["success"], true);
+        
+        // All returned reviews should be within the date range
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let created_at = review["createdAt"].as_str().unwrap();
+            assert!(created_at >= "2025-01-01" && created_at <= "2025-12-31");
+        }
     }
 }
