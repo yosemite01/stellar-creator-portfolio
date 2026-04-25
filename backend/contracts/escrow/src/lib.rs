@@ -1,7 +1,4 @@
-﻿#![no_std]
-
-extern crate alloc;
-use alloc::format;
+#![no_std]
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
@@ -118,8 +115,8 @@ impl EscrowContract {
             fee_collected: fee,
         };
 
-        env.storage().persistent().set(&Symbol::new(&env, &format!("escrow_{}", counter)), &escrow);
-        env.storage().persistent().set(&Symbol::new(&env, &format!("b_esc_{}", bounty_id)), &counter);
+        env.storage().persistent().set(&(Symbol::new(&env, "escrow"), counter), &escrow);
+        env.storage().persistent().set(&(Symbol::new(&env, "b_esc"), bounty_id), &counter);
         env.storage().persistent().set(&counter_key, &counter);
 
         // Emit escrow_deposited event for indexers
@@ -134,7 +131,7 @@ impl EscrowContract {
     pub fn get_escrow(env: Env, escrow_id: u64) -> EscrowAccount {
         env.storage()
             .persistent()
-            .get::<Symbol, EscrowAccount>(&Symbol::new(&env, &format!("escrow_{}", escrow_id)))
+            .get::<(Symbol, u64), EscrowAccount>(&(Symbol::new(&env, "escrow"), escrow_id))
             .expect("Escrow not found")
     }
 
@@ -142,8 +139,8 @@ impl EscrowContract {
     pub fn release_funds(env: Env, authorizer: Address, escrow_id: u64) -> bool {
         authorizer.require_auth();
 
-        let key = Symbol::new(&env, &format!("escrow_{}", escrow_id));
-        let mut escrow = env.storage().persistent().get::<Symbol, EscrowAccount>(&key).expect("Escrow not found");
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
 
         assert!(authorizer == escrow.payer || authorizer == escrow.payee, "Unauthorized");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
@@ -169,8 +166,8 @@ impl EscrowContract {
     pub fn refund_escrow(env: Env, authorizer: Address, escrow_id: u64) -> bool {
         authorizer.require_auth();
 
-        let key = Symbol::new(&env, &format!("escrow_{}", escrow_id));
-        let mut escrow = env.storage().persistent().get::<Symbol, EscrowAccount>(&key).expect("Escrow not found");
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
 
         assert_eq!(authorizer, escrow.payer, "Only payer can refund");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
@@ -195,8 +192,8 @@ impl EscrowContract {
     pub fn dispute_escrow(env: Env, authorizer: Address, escrow_id: u64) -> bool {
         authorizer.require_auth();
 
-        let key = Symbol::new(&env, &format!("escrow_{}", escrow_id));
-        let mut escrow = env.storage().persistent().get::<Symbol, EscrowAccount>(&key).expect("Escrow not found");
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
 
         assert!(authorizer == escrow.payer || authorizer == escrow.payee, "Unauthorized");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
@@ -233,11 +230,11 @@ impl EscrowContract {
             .expect("Platform admin not set");
         assert_eq!(admin, stored_admin, "Only platform admin can resolve disputes");
 
-        let key = Symbol::new(&env, &format!("escrow_{}", escrow_id));
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
         let mut escrow = env
             .storage()
             .persistent()
-            .get::<Symbol, EscrowAccount>(&key)
+            .get::<(Symbol, u64), EscrowAccount>(&key)
             .expect("Escrow not found");
 
         assert!(escrow.status == EscrowStatus::Disputed, "Escrow is not disputed");
@@ -304,9 +301,9 @@ impl EscrowContract {
         assert!(amount > 0, "Milestone amount must be positive");
         assert!(amount <= escrow.amount, "Milestone amount exceeds escrow");
 
-        let m_key = Symbol::new(&env, &format!("ms_{}_{}", escrow_id, index));
+        let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         assert!(
-            env.storage().persistent().get::<Symbol, Milestone>(&m_key).is_none(),
+            env.storage().persistent().get::<(Symbol, u64, u32), Milestone>(&m_key).is_none(),
             "Milestone already exists"
         );
 
@@ -322,9 +319,9 @@ impl EscrowContract {
         assert_eq!(authorizer, escrow.payer, "Only payer can release milestones");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
 
-        let m_key = Symbol::new(&env, &format!("ms_{}_{}", escrow_id, index));
+        let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         let mut milestone = env.storage().persistent()
-            .get::<Symbol, Milestone>(&m_key)
+            .get::<(Symbol, u64, u32), Milestone>(&m_key)
             .expect("Milestone not found");
 
         assert!(!milestone.released, "Milestone already released");
@@ -347,7 +344,7 @@ impl EscrowContract {
     pub fn get_milestone(env: Env, escrow_id: u64, index: u32) -> Milestone {
         env.storage()
             .persistent()
-            .get::<Symbol, Milestone>(&Symbol::new(&env, &format!("ms_{}_{}", escrow_id, index)))
+            .get::<(Symbol, u64, u32), Milestone>(&(Symbol::new(&env, "ms"), escrow_id, index))
             .expect("Milestone not found")
     }
 
@@ -376,7 +373,7 @@ impl EscrowContract {
     pub fn get_escrow_id_for_bounty(env: Env, bounty_id: u64) -> u64 {
         env.storage()
             .persistent()
-            .get::<Symbol, u64>(&Symbol::new(&env, &format!("b_esc_{}", bounty_id)))
+            .get::<(Symbol, u64), u64>(&(Symbol::new(&env, "b_esc"), bounty_id))
             .unwrap_or(0)
     }
 

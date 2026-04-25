@@ -1,8 +1,5 @@
 #![no_std]
 
-extern crate alloc;
-use alloc::format;
-
 use soroban_sdk::{contract, contractimpl, contracttype, Env, String, Symbol};
 
 /// Epoch validation contract for tracking historical data
@@ -26,7 +23,7 @@ impl StellarInsights {
         // Simplified validation: epoch must be positive and not too far in future
         match validate_epoch_range(epoch, current_timestamp) {
             EpochValidation::Valid => {
-                let epoch_key = Symbol::new(&env, &format!("epoch_{}", epoch));
+                let epoch_key = (Symbol::new(&env, "epoch"), epoch);
                 let epoch_data = EpochData {
                     epoch,
                     timestamp: current_timestamp,
@@ -40,10 +37,10 @@ impl StellarInsights {
     }
 
     pub fn get_epoch_data(env: Env, epoch: u64) -> Option<EpochData> {
-        let epoch_key = Symbol::new(&env, &format!("epoch_{}", epoch));
+        let epoch_key = (Symbol::new(&env, "epoch"), epoch);
         env.storage()
             .persistent()
-            .get::<Symbol, EpochData>(&epoch_key)
+            .get::< (Symbol, u64), EpochData>(&epoch_key)
     }
 }
 

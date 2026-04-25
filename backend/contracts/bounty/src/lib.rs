@@ -1,8 +1,5 @@
 #![no_std]
 
-extern crate alloc;
-use alloc::format;
-
 use soroban_sdk::{
     contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
 };
@@ -84,7 +81,7 @@ impl BountyContract {
             completed_at: None,
         };
 
-        let bounty_key = Symbol::new(&env, &format!("bounty_{}", bounty_id));
+        let bounty_key = (Symbol::new(&env, "bounty"), bounty_id);
         env.storage().persistent().set(&bounty_key, &bounty);
         env.storage()
             .persistent()
@@ -94,10 +91,10 @@ impl BountyContract {
     }
 
     pub fn get_bounty(env: Env, bounty_id: u64) -> Bounty {
-        let bounty_key = Symbol::new(&env, &format!("bounty_{}", bounty_id));
+        let bounty_key = (Symbol::new(&env, "bounty"), bounty_id);
         env.storage()
             .persistent()
-            .get::<Symbol, Bounty>(&bounty_key)
+            .get::<(Symbol, u64), Bounty>(&bounty_key)
             .expect("Bounty not found")
     }
 
@@ -132,7 +129,7 @@ impl BountyContract {
             created_at: env.ledger().timestamp(),
         };
 
-        let app_key = Symbol::new(&env, &format!("application_{}", application_id));
+        let app_key = (Symbol::new(&env, "application"), application_id);
         env.storage().persistent().set(&app_key, &application);
         env.storage()
             .persistent()
@@ -142,10 +139,10 @@ impl BountyContract {
     }
 
     pub fn get_application(env: Env, application_id: u64) -> BountyApplication {
-        let app_key = Symbol::new(&env, &format!("application_{}", application_id));
+        let app_key = (Symbol::new(&env, "application"), application_id);
         env.storage()
             .persistent()
-            .get::<Symbol, BountyApplication>(&app_key)
+            .get::<(Symbol, u64), BountyApplication>(&app_key)
             .expect("Application not found")
     }
 
@@ -154,11 +151,11 @@ impl BountyContract {
         bounty_id: u64,
         application_id: u64,
     ) -> bool {
-        let bounty_key = Symbol::new(&env, &format!("bounty_{}", bounty_id));
+        let bounty_key = (Symbol::new(&env, "bounty"), bounty_id);
         let mut bounty = env
             .storage()
             .persistent()
-            .get::<Symbol, Bounty>(&bounty_key)
+            .get::<(Symbol, u64), Bounty>(&bounty_key)
             .expect("Bounty not found");
 
         bounty.creator.require_auth();
@@ -175,11 +172,11 @@ impl BountyContract {
     }
 
     pub fn complete_bounty(env: Env, bounty_id: u64) -> bool {
-        let bounty_key = Symbol::new(&env, &format!("bounty_{}", bounty_id));
+        let bounty_key = (Symbol::new(&env, "bounty"), bounty_id);
         let mut bounty = env
             .storage()
             .persistent()
-            .get::<Symbol, Bounty>(&bounty_key)
+            .get::<(Symbol, u64), Bounty>(&bounty_key)
             .expect("Bounty not found");
 
         bounty.creator.require_auth();
@@ -194,11 +191,11 @@ impl BountyContract {
     }
 
     pub fn cancel_bounty(env: Env, bounty_id: u64) -> bool {
-        let bounty_key = Symbol::new(&env, &format!("bounty_{}", bounty_id));
+        let bounty_key = (Symbol::new(&env, "bounty"), bounty_id);
         let mut bounty = env
             .storage()
             .persistent()
-            .get::<Symbol, Bounty>(&bounty_key)
+            .get::<(Symbol, u64), Bounty>(&bounty_key)
             .expect("Bounty not found");
 
         bounty.creator.require_auth();
@@ -225,8 +222,8 @@ impl BountyContract {
         let mut result = Vec::new(&env);
         let counter = Self::get_bounties_count(env.clone());
         for i in 1..=counter {
-            let key = Symbol::new(&env, &format!("bounty_{}", i));
-            if let Some(bounty) = env.storage().persistent().get::<Symbol, Bounty>(&key) {
+            let key = (Symbol::new(&env, "bounty"), i);
+            if let Some(bounty) = env.storage().persistent().get::<(Symbol, u64), Bounty>(&key) {
                 if bounty.status == status {
                     result.push_back(bounty);
                 }
@@ -243,8 +240,8 @@ impl BountyContract {
         let start = offset + 1; // storage keys are 1-based
         let end = (start + limit).min(counter + 1);
         for i in start..end {
-            let key = Symbol::new(&env, &format!("bounty_{}", i));
-            if let Some(bounty) = env.storage().persistent().get::<Symbol, Bounty>(&key) {
+            let key = (Symbol::new(&env, "bounty"), i);
+            if let Some(bounty) = env.storage().persistent().get::<(Symbol, u64), Bounty>(&key) {
                 result.push_back(bounty);
             }
         }
@@ -261,11 +258,11 @@ impl BountyContract {
             .unwrap_or(0);
 
         for i in 1..=counter {
-            let app_key = Symbol::new(&env, &format!("application_{}", i));
+            let app_key = (Symbol::new(&env, "application"), i);
             if let Some(app) = env
                 .storage()
                 .persistent()
-                .get::<Symbol, BountyApplication>(&app_key)
+                .get::<(Symbol, u64), BountyApplication>(&app_key)
             {
                 if app.bounty_id == bounty_id {
                     applications.push_back(app);
