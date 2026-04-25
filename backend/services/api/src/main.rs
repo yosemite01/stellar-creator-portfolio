@@ -739,12 +739,8 @@ async fn list_reviews_filtered(
 /// Submit a review after bounty completion.
 async fn submit_review(
     body: web::Json<ReviewSubmission>,
-    pool: web::Data<PgPool>,
 ) -> HttpResponse {
     tracing::info!("Submitting review for creator: {}", body.creator_id);
-
-    // Set the database pool for reputation operations
-    reputation::set_database_pool(pool.get_ref().clone());
 
     let mut field_errors: Vec<FieldError> = Vec::new();
     if body.bounty_id.trim().is_empty() {

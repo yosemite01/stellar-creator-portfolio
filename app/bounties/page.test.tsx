@@ -114,9 +114,10 @@ describe('ApplyModal', () => {
     await vi.runAllTimersAsync();
     vi.useRealTimers();
 
-    await waitFor(() => expect(screen.getByTestId('apply-success')).toBeTruthy());
+    const successEl = await waitFor(() => screen.getByTestId('apply-success'));
+    expect(successEl).toBeTruthy();
     expect(screen.getByText(/application submitted/i)).toBeTruthy();
-    expect(screen.getByText(/escrow/i)).toBeTruthy();
+    expect(successEl.textContent).toMatch(/escrow/i);
   });
 
   it('pre-fills budget from bounty', () => {
