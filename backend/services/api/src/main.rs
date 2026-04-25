@@ -164,12 +164,14 @@ pub struct EscrowCreateRequest {
     pub payee_address: String,
     pub amount: i64,
     pub token: String,
+    #[allow(dead_code)]
     pub timelock: Option<u64>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct EscrowRefundRequest {
     #[serde(rename = "authorizerAddress")]
+    #[allow(dead_code)]
     pub authorizer_address: String,
 }
 
@@ -1280,14 +1282,14 @@ mod tests {
         >,
     > {
         App::new().service(
-            web::scope("")
+            web::scope("/api/v1")
                 .wrap(auth::JwtMiddleware)
-                .route("/api/bounties", web::post().to(create_bounty))
-                .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                .route("/api/freelancers/register", web::post().to(register_freelancer))
-                .route("/api/escrow/create", web::post().to(create_escrow))
-                .route("/api/escrow/{id}/release", web::post().to(release_escrow))
-                .route("/api/escrow/{id}/refund", web::post().to(refund_escrow))
+                .route("/bounties", web::post().to(create_bounty))
+                .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route("/freelancers/register", web::post().to(register_freelancer))
+                .route("/escrow/create", web::post().to(create_escrow))
+                .route("/escrow/{id}/release", web::post().to(release_escrow))
+                .route("/escrow/{id}/refund", web::post().to(refund_escrow))
         )
     }
 
