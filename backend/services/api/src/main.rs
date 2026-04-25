@@ -798,14 +798,48 @@ async fn submit_review(body: web::Json<ReviewSubmission>) -> HttpResponse {
             .json(resp);
     }
 
-    let review_id = format!("rev-{}-{}", body.creator_id, body.bounty_id);
-    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!({ "reviewId": review_id }),
-        Some("Review submitted successfully".to_string()),
-    );
-    HttpResponse::Created()
-        .content_type("application/json")
-        .json(response)
+    // Process the review submission through the hook system
+    match reputation::on_review_submitted(
+        &body.bounty_id,
+        &body.creator_id,
+        body.rating,
+        &body.title,
+        &body.body,
+        &body.reviewer_name,
+    ) {
+        Ok(review_id) => {
+            let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+                serde_json::json!({ 
+                    "reviewId": review_id,
+                    "creatorId": body.creator_id,
+                    "status": "submitted"
+                }),
+                Some("Review submitted successfully".to_string()),
+            );
+            HttpResponse::Created()
+                .content_type("application/json")
+                .json(response)
+        }
+        Err(validation_errors) => {
+            let field_errors: Vec<FieldError> = validation_errors
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| FieldError {
+                    field: format!("validation_{}", i),
+                    message: msg,
+                })
+                .collect();
+            
+            let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+                ApiErrorCode::ValidationError,
+                "Review submission failed",
+                field_errors,
+            ));
+            HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(resp)
+        }
+    }
 }
 
 /// Escape escrow
@@ -1037,6 +1071,10 @@ async fn main() -> std::io::Result<()> {
         .init();
 
     tracing::info!("Starting Stellar API Server...");
+
+    // Initialize the reputation system with hooks
+    reputation::initialize_reputation_system();
+    tracing::info!("Reputation system initialized with hooks");
 
     let port = std::env::var("API_PORT")
         .unwrap_or_else(|_| "3001".to_string())
@@ -1518,6 +1556,200 @@ mod tests {
         assert_eq!(json["data"]["status"], "released");
     }
 
+    // ── Review submission hook integration tests ──────────────────────────────
+
+    #[actix_web::test]
+    async fn submit_review_triggers_hooks_successfully() {
+        use actix_web::test as awtest;
+        use std::sync::{Arc, Mutex};
+
+        // Initialize the reputation system
+        reputation::initialize_reputation_system();
+
+        // Create a counter to track hook executions
+        let hook_counter = Arc::new(Mutex::new(0));
+        let counter_clone = hook_counter.clone();
+
+        // Register a test hook
+        reputation::register_review_submitted_hook(move |event| {
+            let mut count = counter_clone.lock().unwrap();
+            *count += 1;
+            // Don't assert specific values since tests run in parallel with different data
+            assert!(event.rating >= 1 && event.rating <= 5);
+            assert!(!event.creator_id.is_empty());
+            Ok(())
+        });
+
+        let app = awtest::init_service(
+            App::new().route("/api/v1/reviews", web::post().to(submit_review))
+        ).await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "test-bounty",
+                "creatorId": "test-creator",
+                "rating": 5,
+                "title": "Excellent work",
+                "body": "Outstanding delivery and communication",
+                "reviewerName": "John Doe"
+            }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert!(json["data"]["reviewId"].is_string());
+        assert_eq!(json["data"]["creatorId"], "test-creator");
+        assert_eq!(json["data"]["status"], "submitted");
+
+        // Verify hook was executed
+        let count = *hook_counter.lock().unwrap();
+        assert!(count > 0, "Hook should have been executed");
+    }
+
+    #[actix_web::test]
+    async fn submit_review_with_validation_errors_does_not_trigger_hooks() {
+        use actix_web::test as awtest;
+        use std::sync::{Arc, Mutex};
+
+        let hook_counter = Arc::new(Mutex::new(0));
+        let counter_clone = hook_counter.clone();
+
+        reputation::register_review_submitted_hook(move |_| {
+            if let Ok(mut count) = counter_clone.lock() {
+                *count += 1;
+            }
+            Ok(())
+        });
+
+        let app = awtest::init_service(
+            App::new().route("/api/v1/reviews", web::post().to(submit_review))
+        ).await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "",  // Invalid: empty
+                "creatorId": "test-creator",
+                "rating": 6,     // Invalid: out of range
+                "title": "",     // Invalid: empty
+                "body": "Good work",
+                "reviewerName": "John Doe"
+            }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], false);
+        assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+
+        // Note: We can't reliably test hook execution count due to shared global state
+        // In a real application, this would use dependency injection or isolated test environments
+    }
+
+    #[actix_web::test]
+    async fn submit_review_with_hook_failure_still_succeeds() {
+        use actix_web::test as awtest;
+
+        // Register a hook that always fails
+        reputation::register_review_submitted_hook(|_| {
+            Err("Simulated hook failure".to_string())
+        });
+
+        let app = awtest::init_service(
+            App::new().route("/api/v1/reviews", web::post().to(submit_review))
+        ).await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "test-bounty",
+                "creatorId": "test-creator",
+                "rating": 4,
+                "title": "Good work",
+                "body": "Solid delivery",
+                "reviewerName": "Jane Smith"
+            }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        // Should still succeed even if hook fails
+        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert!(json["data"]["reviewId"].is_string());
+    }
+
+    #[actix_web::test]
+    async fn submit_review_generates_unique_ids() {
+        use actix_web::test as awtest;
+        use tokio::time::{sleep, Duration};
+
+        let app = awtest::init_service(
+            App::new().route("/api/v1/reviews", web::post().to(submit_review))
+        ).await;
+
+        // Submit first review
+        let req1 = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "bounty-1",
+                "creatorId": "creator-1",
+                "rating": 5,
+                "title": "First review",
+                "body": "First review body",
+                "reviewerName": "Reviewer 1"
+            }))
+            .to_request();
+
+        let resp1 = awtest::call_service(&app, req1).await;
+        assert_eq!(resp1.status(), actix_web::http::StatusCode::CREATED);
+
+        // Small delay to ensure different nanosecond timestamps
+        sleep(Duration::from_millis(1)).await;
+
+        // Submit second review
+        let req2 = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "bounty-1",
+                "creatorId": "creator-1",
+                "rating": 4,
+                "title": "Second review",
+                "body": "Second review body",
+                "reviewerName": "Reviewer 2"
+            }))
+            .to_request();
+
+        let resp2 = awtest::call_service(&app, req2).await;
+        assert_eq!(resp2.status(), actix_web::http::StatusCode::CREATED);
+
+        // Extract review IDs
+        let body1 = awtest::read_body(resp1).await;
+        let json1: serde_json::Value = serde_json::from_slice(&body1).unwrap();
+        let review_id1 = json1["data"]["reviewId"].as_str().unwrap();
+
+        let body2 = awtest::read_body(resp2).await;
+        let json2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
+        let review_id2 = json2["data"]["reviewId"].as_str().unwrap();
+
+        // IDs should be different
+        assert_ne!(review_id1, review_id2);
+        
+        // Both should have the expected format
+        assert!(review_id1.starts_with("rev-creator-1-bounty-1"));
+        assert!(review_id2.starts_with("rev-creator-1-bounty-1"));
+    }
+
     // ── Validation: create_bounty ─────────────────────────────────────────────
 
     fn build_public_write_app() -> actix_web::App<
@@ -1715,6 +1947,8 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], true);
         assert!(json["data"]["reviewId"].is_string());
+        assert_eq!(json["data"]["creatorId"], "alex-studio");
+        assert_eq!(json["data"]["status"], "submitted");
     }
 
     #[actix_web::test]

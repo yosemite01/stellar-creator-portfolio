@@ -25,6 +25,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 jsonwebtoken.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
 
 [profile.release]
 opt-level = 3
