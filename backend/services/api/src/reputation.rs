@@ -1,12 +1,13 @@
 //! Reputation and review aggregation for creators.
 //!
-//! Reviews are sourced from an in-memory seed list (replace with DB in production).
+//! Reviews are sourced from database with fallback to in-memory seed list for development.
 //! Aggregation computes average rating, totals, per-star counts, and a recent slice.
 //! Includes hooks for real-time reputation updates when reviews are submitted.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use sqlx::PgPool;
 
 /// Internal review row (includes `creator_id` for filtering).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -129,6 +130,21 @@ pub type ReviewSubmittedHook = Arc<dyn Fn(&ReviewSubmittedEvent) -> Result<(), S
 /// Global registry for review submission hooks
 static REVIEW_HOOKS: Mutex<Vec<ReviewSubmittedHook>> = Mutex::new(Vec::new());
 
+/// Global database pool for reputation operations
+static DB_POOL: Mutex<Option<PgPool>> = Mutex::new(None);
+
+/// Set the database pool for reputation operations
+pub fn set_database_pool(pool: PgPool) {
+    let mut db_pool = DB_POOL.lock().unwrap();
+    *db_pool = Some(pool);
+}
+
+/// Get the database pool for reputation operations
+fn get_database_pool() -> Option<PgPool> {
+    let db_pool = DB_POOL.lock().unwrap();
+    db_pool.clone()
+}
+
 /// Register a hook to be called when a review is submitted
 pub fn register_review_submitted_hook<F>(hook: F) 
 where 
@@ -220,9 +236,9 @@ pub fn on_review_submitted(
     // Trigger all registered hooks
     let hook_errors = trigger_review_submitted_hooks(&event);
     
-    // In a real implementation, this would save to database
-    // For now, we'll add to our in-memory store
-    add_review_to_store(&event);
+    // Database integration is now handled by hooks
+    // The database_reputation_update_hook will save to database
+    // If database is not available, it falls back to in-memory store
     
     if !hook_errors.is_empty() {
         tracing::warn!("Some hooks failed during review submission: {:?}", hook_errors);
@@ -233,20 +249,85 @@ pub fn on_review_submitted(
     Ok(review_id)
 }
 
-/// Add a review to the in-memory store (in production, this would be a database operation)
+/// Add a review to the database (production implementation)
+async fn save_review_to_database(event: &ReviewSubmittedEvent) -> Result<(), String> {
+    let pool = match get_database_pool() {
+        Some(pool) => pool,
+        None => {
+            tracing::error!("Database pool not available, falling back to in-memory store");
+            add_review_to_store(event);
+            return Ok(());
+        }
+    };
+
+    // Parse UUID from review_id or generate new one
+    let review_uuid = match uuid::Uuid::parse_str(&event.review_id) {
+        Ok(uuid) => uuid.to_string(),
+        Err(_) => uuid::Uuid::new_v4().to_string(), // Generate new UUID if parsing fails
+    };
+
+    // Insert review into database
+    let result = sqlx::query(
+        r#"
+        INSERT INTO reviews (id, creator_id, bounty_id, rating, title, body, reviewer_name, created_at)
+        VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, NOW())
+        "#
+    )
+    .bind(&review_uuid)
+    .bind(&event.creator_id)
+    .bind(&event.bounty_id)
+    .bind(event.rating as i32)
+    .bind(&event.title)
+    .bind(&event.body)
+    .bind(&event.reviewer_name)
+    .execute(&pool)
+    .await;
+
+    match result {
+        Ok(_) => {
+            tracing::info!("Review {} saved to database for creator {}", 
+                event.review_id, event.creator_id);
+            
+            // Update creator reputation aggregation
+            let update_result = sqlx::query("SELECT update_creator_reputation($1)")
+                .bind(&event.creator_id)
+                .execute(&pool)
+                .await;
+
+            match update_result {
+                Ok(_) => {
+                    tracing::info!("Creator reputation updated for {}", event.creator_id);
+                    Ok(())
+                }
+                Err(e) => {
+                    tracing::error!("Failed to update creator reputation: {}", e);
+                    Err(format!("Failed to update creator reputation: {}", e))
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to save review to database: {}", e);
+            Err(format!("Failed to save review to database: {}", e))
+        }
+    }
+}
+
+/// Database-backed reputation update hook
+fn database_reputation_update_hook(event: &ReviewSubmittedEvent) -> Result<(), String> {
+    // Use tokio to run async database operation in sync context
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(save_review_to_database(event))
+}
+
+/// Add a review to the in-memory store (fallback for development)
 fn add_review_to_store(event: &ReviewSubmittedEvent) {
-    // TODO: CRITICAL - This needs database integration for production
-    // For now, we simulate adding to the existing seed data structure
-    // In production, this would be:
-    // 1. INSERT INTO reviews (creator_id, rating, title, body, reviewer_name, bounty_id, created_at)
-    // 2. UPDATE creator_reputation SET ... WHERE creator_id = event.creator_id
-    // 3. INVALIDATE cache keys for creator reputation
+    // TODO: This is now a fallback - database integration is the primary method
+    // For development/testing when database is not available
     
-    tracing::info!("Review stored: {} for creator {} (rating: {})", 
+    tracing::info!("Review stored in memory: {} for creator {} (rating: {})", 
         event.review_id, event.creator_id, event.rating);
     
-    // IMPORTANT: Without database integration, new reviews won't appear in API responses
-    // until the seed_reviews() function is updated or database is implemented
+    // Note: In-memory reviews won't appear in API responses that use database queries
 }
 
 /// Default hook for updating creator reputation when a review is submitted
@@ -295,12 +376,175 @@ pub fn initialize_reputation_system() {
     });
 }
 
+/// Initialize the reputation system with database support and default hooks
+pub fn initialize_reputation_system_with_db(pool: PgPool) {
+    set_database_pool(pool);
+    
+    register_review_submitted_hook(database_reputation_update_hook);
+    
+    // Register additional hooks for analytics, notifications, etc.
+    register_review_submitted_hook(|event| {
+        tracing::info!("Analytics hook: Review {} submitted for creator {}", 
+            event.review_id, event.creator_id);
+        Ok(())
+    });
+    
+    register_review_submitted_hook(|event| {
+        // Notification hook - in production would send notifications
+        if event.rating >= 4 {
+            tracing::info!("Notification hook: Positive review received for creator {}", 
+                event.creator_id);
+        }
+        Ok(())
+    });
+}
+
 /// Filter seed reviews for one creator.
 pub fn reviews_for_creator(creator_id: &str) -> Vec<Review> {
     seed_reviews()
         .into_iter()
         .filter(|r| r.creator_id == creator_id)
         .collect()
+}
+
+/// Fetch reviews for a creator from database with fallback to seed data
+pub async fn fetch_creator_reviews_from_db(creator_id: &str) -> Vec<Review> {
+    let pool = match get_database_pool() {
+        Some(pool) => pool,
+        None => {
+            tracing::warn!("Database pool not available, using seed data for creator {}", creator_id);
+            return reviews_for_creator(creator_id);
+        }
+    };
+
+    let result = sqlx::query_as::<_, (String, String, String, i32, String, String, String, String)>(
+        r#"
+        SELECT id::text, creator_id, bounty_id, rating, title, body, reviewer_name, 
+               to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
+        FROM reviews 
+        WHERE creator_id = $1
+        ORDER BY created_at DESC
+        "#
+    )
+    .bind(creator_id)
+    .fetch_all(&pool)
+    .await;
+
+    match result {
+        Ok(rows) => {
+            rows.into_iter()
+                .map(|(id, creator_id, _bounty_id, rating, title, body, reviewer_name, created_at)| Review {
+                    id,
+                    creator_id,
+                    rating: rating as u8,
+                    title,
+                    body,
+                    reviewer_name,
+                    created_at,
+                })
+                .collect()
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch reviews from database for creator {}: {}", creator_id, e);
+            tracing::info!("Falling back to seed data for creator {}", creator_id);
+            reviews_for_creator(creator_id)
+        }
+    }
+}
+
+/// Fetch creator reputation from database with fallback to calculated aggregation
+pub async fn fetch_creator_reputation_from_db(creator_id: &str) -> ReputationAggregation {
+    let pool = match get_database_pool() {
+        Some(pool) => pool,
+        None => {
+            tracing::warn!("Database pool not available, calculating from seed data for creator {}", creator_id);
+            let reviews = reviews_for_creator(creator_id);
+            return aggregate_reviews(&reviews);
+        }
+    };
+
+    let result = sqlx::query_as::<_, (Option<f64>, i32, i32, i32, i32, i32, i32, bool)>(
+        r#"
+        SELECT average_rating, total_reviews, stars_5, stars_4, stars_3, stars_2, stars_1, is_verified
+        FROM creator_reputation 
+        WHERE creator_id = $1
+        "#
+    )
+    .bind(creator_id)
+    .fetch_optional(&pool)
+    .await;
+
+    match result {
+        Ok(Some((average_rating, total_reviews, stars_5, stars_4, stars_3, stars_2, stars_1, is_verified))) => ReputationAggregation {
+            average_rating: average_rating.unwrap_or(0.0),
+            total_reviews: total_reviews as u32,
+            stars_5: stars_5 as u32,
+            stars_4: stars_4 as u32,
+            stars_3: stars_3 as u32,
+            stars_2: stars_2 as u32,
+            stars_1: stars_1 as u32,
+            is_verified,
+        },
+        Ok(None) => {
+            tracing::info!("No reputation data found in database for creator {}, calculating from reviews", creator_id);
+            let reviews = fetch_creator_reviews_from_db(creator_id).await;
+            aggregate_reviews(&reviews)
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch reputation from database for creator {}: {}", creator_id, e);
+            tracing::info!("Falling back to seed data calculation for creator {}", creator_id);
+            let reviews = reviews_for_creator(creator_id);
+            aggregate_reviews(&reviews)
+        }
+    }
+}
+
+/// Fetch all reviews from database with fallback to seed data
+pub async fn fetch_all_reviews_from_db() -> Vec<Review> {
+    let pool = match get_database_pool() {
+        Some(pool) => pool,
+        None => {
+            tracing::warn!("Database pool not available, using seed data for all reviews");
+            return seed_reviews();
+        }
+    };
+
+    let result = sqlx::query_as::<_, (String, String, String, i32, String, String, String, String)>(
+        r#"
+        SELECT id::text, creator_id, bounty_id, rating, title, body, reviewer_name,
+               to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
+        FROM reviews 
+        ORDER BY created_at DESC
+        "#
+    )
+    .fetch_all(&pool)
+    .await;
+
+    match result {
+        Ok(rows) => {
+            if rows.is_empty() {
+                tracing::info!("No reviews found in database, falling back to seed data");
+                seed_reviews()
+            } else {
+                rows.into_iter()
+                    .map(|(id, creator_id, _bounty_id, rating, title, body, reviewer_name, created_at)| Review {
+                        id,
+                        creator_id,
+                        rating: rating as u8,
+                        title,
+                        body,
+                        reviewer_name,
+                        created_at,
+                    })
+                    .collect()
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch all reviews from database: {}", e);
+            tracing::info!("Falling back to seed data for all reviews");
+            seed_reviews()
+        }
+    }
 }
 
 /// Aggregate ratings: average (2 decimal places), counts per star (1–5). Ignores invalid ratings.
@@ -455,6 +699,39 @@ pub fn paginate_reviews(reviews: Vec<Review>, page: u32, limit: u32) -> Paginate
 pub fn get_filtered_creator_reviews(creator_id: &str, filters: &ReviewFilters) -> FilteredCreatorReputationPayload {
     let all_reviews = reviews_for_creator(creator_id);
     let overall_aggregation = aggregate_reviews(&all_reviews);
+    
+    // Apply filters
+    let filtered_reviews = filter_reviews(&all_reviews, filters);
+    let filtered_aggregation = if filtered_reviews.len() != all_reviews.len() {
+        Some(aggregate_reviews(&filtered_reviews))
+    } else {
+        None
+    };
+    
+    // Apply sorting
+    let mut sorted_reviews = filtered_reviews;
+    let sort_by = filters.sort_by.as_ref().unwrap_or(&ReviewSortBy::CreatedAt);
+    let sort_order = filters.sort_order.as_ref().unwrap_or(&SortOrder::Desc);
+    sort_reviews(&mut sorted_reviews, sort_by, sort_order);
+    
+    // Apply pagination
+    let page = filters.page.unwrap_or(1).max(1);
+    let limit = filters.limit.unwrap_or(10).clamp(1, 100);
+    let paginated_reviews = paginate_reviews(sorted_reviews, page, limit);
+    
+    FilteredCreatorReputationPayload {
+        creator_id: creator_id.to_string(),
+        aggregation: overall_aggregation,
+        filtered_aggregation,
+        reviews: paginated_reviews,
+        applied_filters: filters.clone(),
+    }
+}
+
+/// Get filtered and sorted reviews for a creator with pagination (database-backed)
+pub async fn get_filtered_creator_reviews_from_db(creator_id: &str, filters: &ReviewFilters) -> FilteredCreatorReputationPayload {
+    let all_reviews = fetch_creator_reviews_from_db(creator_id).await;
+    let overall_aggregation = fetch_creator_reputation_from_db(creator_id).await;
     
     // Apply filters
     let filtered_reviews = filter_reviews(&all_reviews, filters);

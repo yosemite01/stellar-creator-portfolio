@@ -4,6 +4,7 @@ use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::{http, middleware, web, App, HttpResponse, HttpServer};
 use futures::future::{ok, Ready};
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 
 mod analytics;
 mod auth;
@@ -591,12 +592,18 @@ async fn get_creator(path: web::Path<String>) -> HttpResponse {
 }
 
 /// Aggregated reputation and recent reviews for a creator profile.
-async fn get_creator_reputation(path: web::Path<String>) -> HttpResponse {
+async fn get_creator_reputation(
+    path: web::Path<String>,
+    pool: web::Data<PgPool>,
+) -> HttpResponse {
     let creator_id = path.into_inner();
     tracing::info!("Fetching reputation for creator: {}", creator_id);
 
-    let reviews = reputation::reviews_for_creator(&creator_id);
-    let aggregation = reputation::aggregate_reviews(&reviews);
+    // Set the database pool for reputation operations
+    reputation::set_database_pool(pool.get_ref().clone());
+
+    let reviews = reputation::fetch_creator_reviews_from_db(&creator_id).await;
+    let aggregation = reputation::fetch_creator_reputation_from_db(&creator_id).await;
     let recent_reviews = reputation::recent_reviews(&reviews, 8);
 
     let payload = reputation::CreatorReputationPayload {
@@ -616,9 +623,13 @@ async fn get_creator_reputation(path: web::Path<String>) -> HttpResponse {
 async fn get_creator_reviews_filtered(
     path: web::Path<String>,
     query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<PgPool>,
 ) -> HttpResponse {
     let creator_id = path.into_inner();
     tracing::info!("Fetching filtered reviews for creator: {} with filters: {:?}", creator_id, *query);
+
+    // Set the database pool for reputation operations
+    reputation::set_database_pool(pool.get_ref().clone());
 
     // Parse and validate query parameters
     let filters = match reputation::parse_review_filters(&query) {
@@ -644,7 +655,7 @@ async fn get_creator_reviews_filtered(
         }
     };
 
-    let payload = reputation::get_filtered_creator_reviews(&creator_id, &filters);
+    let payload = reputation::get_filtered_creator_reviews_from_db(&creator_id, &filters).await;
     let response: ApiResponse<reputation::FilteredCreatorReputationPayload> =
         ApiResponse::ok(payload, None);
     
@@ -656,8 +667,12 @@ async fn get_creator_reviews_filtered(
 /// Get all reviews across creators with filtering and sorting
 async fn list_reviews_filtered(
     query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<PgPool>,
 ) -> HttpResponse {
     tracing::info!("Fetching filtered reviews across all creators with filters: {:?}", *query);
+
+    // Set the database pool for reputation operations
+    reputation::set_database_pool(pool.get_ref().clone());
 
     // Parse and validate query parameters
     let filters = match reputation::parse_review_filters(&query) {
@@ -683,13 +698,8 @@ async fn list_reviews_filtered(
         }
     };
 
-    // Get all reviews from seed data (in production, this would be a database query)
-    let all_reviews: Vec<reputation::Review> = vec![
-        "alex-studio", "maya-content", "jordan-dev"
-    ]
-    .iter()
-    .flat_map(|creator_id| reputation::reviews_for_creator(creator_id))
-    .collect();
+    // Get all reviews from database (with fallback to seed data)
+    let all_reviews = reputation::fetch_all_reviews_from_db().await;
 
     // Apply filters
     let filtered_reviews = reputation::filter_reviews(&all_reviews, &filters);
@@ -727,8 +737,14 @@ async fn list_reviews_filtered(
 }
 
 /// Submit a review after bounty completion.
-async fn submit_review(body: web::Json<ReviewSubmission>) -> HttpResponse {
+async fn submit_review(
+    body: web::Json<ReviewSubmission>,
+    pool: web::Data<PgPool>,
+) -> HttpResponse {
     tracing::info!("Submitting review for creator: {}", body.creator_id);
+
+    // Set the database pool for reputation operations
+    reputation::set_database_pool(pool.get_ref().clone());
 
     let mut field_errors: Vec<FieldError> = Vec::new();
     if body.bounty_id.trim().is_empty() {
@@ -1150,9 +1166,29 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("Starting Stellar API Server...");
 
-    // Initialize the reputation system with hooks
-    reputation::initialize_reputation_system();
-    tracing::info!("Reputation system initialized with hooks");
+    // Initialize database connection
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://stellar:stellar_dev_password@localhost:5432/stellar_db".to_string());
+    
+    tracing::info!("Connecting to database: {}", database_url.replace("stellar_dev_password", "***"));
+    
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    // Run migrations
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("Failed to run database migrations");
+
+    tracing::info!("Database connected and migrations applied");
+
+    // Initialize the reputation system with hooks and database
+    reputation::initialize_reputation_system_with_db(pool.clone());
+    tracing::info!("Reputation system initialized with hooks and database");
 
     let port = std::env::var("API_PORT")
         .unwrap_or_else(|_| "3001".to_string())
@@ -1163,8 +1199,9 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("Server starting on {}:{}", host, port);
 
-    HttpServer::new(|| {
+    HttpServer::new(move || {
         App::new()
+            .app_data(web::Data::new(pool.clone()))
             .wrap(cors_middleware())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
@@ -1490,6 +1527,14 @@ mod tests {
     async fn creator_reputation_integration_returns_aggregation() {
         use actix_web::test as awtest;
 
+        let app = awtest::init_service(
+            App::new()
+                .app_data(web::Data::new(create_test_pool()))
+                .route(
+                    "/api/v1/creators/{id}/reputation",
+                    web::get().to(get_creator_reputation),
+                ),
+        )
         let app = awtest::init_service(App::new().route(
             "/api/v1/creators/{id}/reputation",
             web::get().to(get_creator_reputation),
@@ -1543,6 +1588,14 @@ mod tests {
     async fn creator_reputation_unknown_id_returns_empty_aggregation() {
         use actix_web::test as awtest;
 
+        let app = awtest::init_service(
+            App::new()
+                .app_data(web::Data::new(create_test_pool()))
+                .route(
+                    "/api/v1/creators/{id}/reputation",
+                    web::get().to(get_creator_reputation),
+                ),
+        )
         let app = awtest::init_service(App::new().route(
             "/api/v1/creators/{id}/reputation",
             web::get().to(get_creator_reputation),
@@ -1585,6 +1638,14 @@ mod tests {
     }
 
     // ── JWT-protected route integration tests ─────────────────────────────────
+
+    fn create_test_pool() -> PgPool {
+        let database_url = "postgres://test:test@localhost:5432/test_db";
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy(database_url)
+            .expect("Failed to create test database pool")
+    }
 
     fn build_protected_app() -> actix_web::App<
         impl actix_web::dev::ServiceFactory<
@@ -1770,8 +1831,11 @@ mod tests {
             Ok(())
         });
 
+        // Create a mock database pool for testing
         let app = awtest::init_service(
-            App::new().route("/api/v1/reviews", web::post().to(submit_review))
+            App::new()
+                .app_data(web::Data::new(create_test_pool()))
+                .route("/api/v1/reviews", web::post().to(submit_review))
         ).await;
 
         let req = awtest::TestRequest::post()
@@ -1816,9 +1880,7 @@ mod tests {
             Ok(())
         });
 
-        let app = awtest::init_service(
-            App::new().route("/api/v1/reviews", web::post().to(submit_review))
-        ).await;
+        let app = awtest::init_service(build_review_app()).await;
 
         let req = awtest::TestRequest::post()
             .uri("/api/v1/reviews")
@@ -1853,9 +1915,7 @@ mod tests {
             Err("Simulated hook failure".to_string())
         });
 
-        let app = awtest::init_service(
-            App::new().route("/api/v1/reviews", web::post().to(submit_review))
-        ).await;
+        let app = awtest::init_service(build_review_app()).await;
 
         let req = awtest::TestRequest::post()
             .uri("/api/v1/reviews")
@@ -1884,9 +1944,7 @@ mod tests {
         use actix_web::test as awtest;
         use tokio::time::{sleep, Duration};
 
-        let app = awtest::init_service(
-            App::new().route("/api/v1/reviews", web::post().to(submit_review))
-        ).await;
+        let app = awtest::init_service(build_review_app()).await;
 
         // Submit first review
         let req1 = awtest::TestRequest::post()
@@ -2141,7 +2199,9 @@ mod tests {
             InitError = (),
         >,
     > {
-        App::new().route("/api/v1/reviews", web::post().to(submit_review))
+        App::new()
+            .app_data(web::Data::new(create_test_pool()))
+            .route("/api/v1/reviews", web::post().to(submit_review))
     }
 
     #[actix_web::test]
@@ -2270,6 +2330,7 @@ mod tests {
         >,
     > {
         App::new()
+            .app_data(web::Data::new(create_test_pool()))
             .route("/api/v1/escrow/create", web::post().to(create_escrow))
             .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
             .route("/api/v1/creators/{id}/reviews", web::get().to(get_creator_reviews_filtered))
