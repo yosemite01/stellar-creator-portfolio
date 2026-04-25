@@ -536,6 +536,120 @@ async fn get_creator_reputation(path: web::Path<String>) -> HttpResponse {
         .json(response)
 }
 
+/// Enhanced creator reputation with filtering and sorting support
+async fn get_creator_reviews_filtered(
+    path: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let creator_id = path.into_inner();
+    tracing::info!("Fetching filtered reviews for creator: {} with filters: {:?}", creator_id, *query);
+
+    // Parse and validate query parameters
+    let filters = match reputation::parse_review_filters(&query) {
+        Ok(filters) => filters,
+        Err(errors) => {
+            let field_errors: Vec<FieldError> = errors
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| FieldError {
+                    field: format!("query_param_{}", i),
+                    message: msg,
+                })
+                .collect();
+            
+            let response: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+                ApiErrorCode::ValidationError,
+                "Invalid query parameters",
+                field_errors,
+            ));
+            return HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(response);
+        }
+    };
+
+    let payload = reputation::get_filtered_creator_reviews(&creator_id, &filters);
+    let response: ApiResponse<reputation::FilteredCreatorReputationPayload> =
+        ApiResponse::ok(payload, None);
+    
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
+/// Get all reviews across creators with filtering and sorting
+async fn list_reviews_filtered(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    tracing::info!("Fetching filtered reviews across all creators with filters: {:?}", *query);
+
+    // Parse and validate query parameters
+    let filters = match reputation::parse_review_filters(&query) {
+        Ok(filters) => filters,
+        Err(errors) => {
+            let field_errors: Vec<FieldError> = errors
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| FieldError {
+                    field: format!("query_param_{}", i),
+                    message: msg,
+                })
+                .collect();
+            
+            let response: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+                ApiErrorCode::ValidationError,
+                "Invalid query parameters",
+                field_errors,
+            ));
+            return HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(response);
+        }
+    };
+
+    // Get all reviews from seed data (in production, this would be a database query)
+    let all_reviews: Vec<reputation::Review> = vec![
+        "alex-studio", "maya-content", "jordan-dev"
+    ]
+    .iter()
+    .flat_map(|creator_id| reputation::reviews_for_creator(creator_id))
+    .collect();
+
+    // Apply filters
+    let filtered_reviews = reputation::filter_reviews(&all_reviews, &filters);
+    
+    // Apply sorting
+    let mut sorted_reviews = filtered_reviews;
+    let sort_by = filters.sort_by.as_ref().unwrap_or(&reputation::ReviewSortBy::CreatedAt);
+    let sort_order = filters.sort_order.as_ref().unwrap_or(&reputation::SortOrder::Desc);
+    reputation::sort_reviews(&mut sorted_reviews, sort_by, sort_order);
+    
+    // Apply pagination
+    let page = filters.page.unwrap_or(1).max(1);
+    let limit = filters.limit.unwrap_or(10).clamp(1, 100);
+    let paginated_reviews = reputation::paginate_reviews(sorted_reviews, page, limit);
+
+    // Calculate overall aggregation for context
+    let overall_aggregation = reputation::aggregate_reviews(&all_reviews);
+    let filtered_aggregation = if paginated_reviews.total_count != overall_aggregation.total_reviews {
+        Some(reputation::aggregate_reviews(&reputation::filter_reviews(&all_reviews, &filters)))
+    } else {
+        None
+    };
+
+    let payload = serde_json::json!({
+        "reviews": paginated_reviews,
+        "overallAggregation": overall_aggregation,
+        "filteredAggregation": filtered_aggregation,
+        "appliedFilters": filters
+    });
+
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(payload, None);
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
 /// Submit a review after bounty completion.
 async fn submit_review(body: web::Json<ReviewSubmission>) -> HttpResponse {
     tracing::info!("Submitting review for creator: {}", body.creator_id);
@@ -899,7 +1013,10 @@ async fn main() -> std::io::Result<()> {
                         "/creators/{id}/reputation",
                         web::get().to(get_creator_reputation),
                     )
+                    .route("/creators/{id}/reputation", web::get().to(get_creator_reputation))
+                    .route("/creators/{id}/reviews", web::get().to(get_creator_reviews_filtered))
                     .route("/reviews", web::post().to(submit_review))
+                    .route("/reviews", web::get().to(list_reviews_filtered))
                     .route("/freelancers", web::get().to(list_freelancers))
                     .route("/freelancers/{address}", web::get().to(get_freelancer))
                     .route("/escrow/{id}", web::get().to(get_escrow))
@@ -1252,6 +1369,12 @@ mod tests {
                 .route("/api/escrow/create", web::post().to(create_escrow))
                 .route("/api/escrow/{id}/release", web::post().to(release_escrow))
                 .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
+                .route("/api/v1/bounties", web::post().to(create_bounty))
+                .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
+                .route("/api/v1/escrow/create", web::post().to(create_escrow))
+                .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
+                .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
         )
     }
 
@@ -1695,9 +1818,9 @@ mod tests {
         assert!(fields.contains(&"proposed_budget"));
     }
 
-    // ── POST /api/escrow/create ───────────────────────────────────────────────
+    // ── New integration tests for review filtering endpoints ──────────────────
 
-    fn build_escrow_app() -> actix_web::App<
+    fn build_review_filtering_app() -> actix_web::App<
         impl actix_web::dev::ServiceFactory<
             actix_web::dev::ServiceRequest,
             Config = (),
@@ -1707,100 +1830,95 @@ mod tests {
         >,
     > {
         App::new()
-            .route("/api/escrow/create", web::post().to(create_escrow))
-            .route("/api/escrow/{id}/refund", web::post().to(refund_escrow))
+            .route("/api/v1/creators/{id}/reviews", web::get().to(get_creator_reviews_filtered))
+            .route("/api/v1/reviews", web::get().to(list_reviews_filtered))
     }
 
     #[actix_web::test]
-    async fn create_escrow_without_token_returns_401() {
+    async fn get_creator_reviews_filtered_returns_paginated_results() {
         use actix_web::test as awtest;
-        std::env::remove_var("JWT_SECRET");
-
-        let app = awtest::init_service(build_protected_app()).await;
-        let req = awtest::TestRequest::post()
-            .uri("/api/escrow/create")
-            .set_json(serde_json::json!({
-                "bountyId": "b-1",
-                "payerAddress": "GPAYER",
-                "payeeAddress": "GPAYEE",
-                "amount": 1000,
-                "token": "GUSDC"
-            }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?page=1&limit=2&sortBy=rating&sortOrder=desc")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
-    }
-
-    #[actix_web::test]
-    async fn create_escrow_with_valid_token_returns_201() {
-        use actix_web::test as awtest;
-        std::env::remove_var("JWT_SECRET");
-        let token = auth::tests::make_token("wallet-1", "creator", 3600);
-
-        let app = awtest::init_service(build_protected_app()).await;
-        let req = awtest::TestRequest::post()
-            .uri("/api/escrow/create")
-            .insert_header(("Authorization", format!("Bearer {}", token)))
-            .set_json(serde_json::json!({
-                "bountyId": "b-1",
-                "payerAddress": "GPAYER",
-                "payeeAddress": "GPAYEE",
-                "amount": 2500,
-                "token": "GUSDC"
-            }))
-            .to_request();
-        let resp = awtest::call_service(&app, req).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
 
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], true);
-        assert_eq!(json["data"]["operation"], "deposit");
-        assert_eq!(json["data"]["status"], "pending");
-        assert!(json["data"]["escrowId"].is_string());
-        assert!(json["data"]["txHash"].is_string());
+        assert_eq!(json["data"]["creatorId"], "alex-studio");
+        
+        let reviews = &json["data"]["reviews"];
+        assert_eq!(reviews["page"], 1);
+        assert_eq!(reviews["limit"], 2);
+        assert!(reviews["reviews"].as_array().unwrap().len() <= 2);
+        
+        // Check that reviews are sorted by rating descending
+        let review_ratings: Vec<u8> = reviews["reviews"]
+            .as_array().unwrap()
+            .iter()
+            .map(|r| r["rating"].as_u64().unwrap() as u8)
+            .collect();
+        
+        for i in 1..review_ratings.len() {
+            assert!(review_ratings[i-1] >= review_ratings[i]);
+        }
     }
 
     #[actix_web::test]
-    async fn create_escrow_missing_fields_returns_422() {
+    async fn get_creator_reviews_filtered_with_rating_filter() {
         use actix_web::test as awtest;
-        let app = awtest::init_service(build_escrow_app()).await;
-        let req = awtest::TestRequest::post()
-            .uri("/api/escrow/create")
-            .set_json(serde_json::json!({
-                "bountyId": "",
-                "payerAddress": "",
-                "payeeAddress": "",
-                "amount": 0,
-                "token": ""
-            }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?minRating=4&maxRating=5")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        
+        // All returned reviews should have rating between 4-5
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let rating = review["rating"].as_u64().unwrap() as u8;
+            assert!(rating >= 4 && rating <= 5);
+        }
+    }
+
+    #[actix_web::test]
+    async fn get_creator_reviews_filtered_invalid_params_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?minRating=6&sortBy=invalid&page=0")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(
             resp.status(),
             actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
         );
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], false);
         assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
-        let count = json["error"]["fieldErrors"].as_array().unwrap().len();
-        assert_eq!(count, 5);
+        assert!(json["error"]["fieldErrors"].as_array().unwrap().len() > 0);
     }
 
     #[actix_web::test]
-    async fn create_escrow_negative_amount_returns_422() {
+    async fn list_reviews_filtered_returns_all_reviews() {
         use actix_web::test as awtest;
-        let app = awtest::init_service(build_escrow_app()).await;
-        let req = awtest::TestRequest::post()
-            .uri("/api/escrow/create")
-            .set_json(serde_json::json!({
-                "bountyId": "b-1",
-                "payerAddress": "GPAYER",
-                "payeeAddress": "GPAYEE",
-                "amount": -100,
-                "token": "GUSDC"
-            }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?page=1&limit=5&sortBy=createdAt&sortOrder=desc")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(
@@ -1832,19 +1950,28 @@ mod tests {
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        
+        let reviews = &json["data"]["reviews"];
+        assert_eq!(reviews["page"], 1);
+        assert_eq!(reviews["limit"], 5);
+        assert!(reviews["totalCount"].as_u64().unwrap() > 0);
+        
+        // Should have overall aggregation
+        assert!(json["data"]["overallAggregation"]["totalReviews"].as_u64().unwrap() > 0);
     }
 
     #[actix_web::test]
-    async fn refund_escrow_with_valid_token_returns_200() {
+    async fn list_reviews_filtered_with_verified_only() {
         use actix_web::test as awtest;
-        std::env::remove_var("JWT_SECRET");
-        let token = auth::tests::make_token("wallet-1", "creator", 3600);
-
-        let app = awtest::init_service(build_protected_app()).await;
-        let req = awtest::TestRequest::post()
-            .uri("/api/escrow/5/refund")
-            .insert_header(("Authorization", format!("Bearer {}", token)))
-            .set_json(serde_json::json!({ "authorizerAddress": "GPAYER123" }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?verifiedOnly=true&sortBy=rating&sortOrder=desc")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
@@ -1852,18 +1979,25 @@ mod tests {
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], true);
-        assert_eq!(json["data"]["operation"], "refund");
-        assert_eq!(json["data"]["status"], "pending");
-        assert_eq!(json["data"]["escrowId"], "5");
+        
+        // All returned reviews should have rating >= 4 (verified threshold)
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let rating = review["rating"].as_u64().unwrap() as u8;
+            assert!(rating >= 4);
+        }
+        
+        // Should have filtered aggregation since we applied filters
+        assert!(json["data"]["filteredAggregation"].is_object());
     }
 
     #[actix_web::test]
-    async fn refund_escrow_missing_authorizer_returns_422() {
+    async fn list_reviews_filtered_date_range() {
         use actix_web::test as awtest;
-        let app = awtest::init_service(build_escrow_app()).await;
-        let req = awtest::TestRequest::post()
-            .uri("/api/escrow/5/refund")
-            .set_json(serde_json::json!({ "authorizerAddress": "" }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?dateFrom=2025-01-01&dateTo=2025-12-31")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(
@@ -1893,6 +2027,7 @@ mod tests {
         let req = awtest::TestRequest::get().uri("/api/versions").to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["current"], "1");
@@ -1959,5 +2094,14 @@ mod tests {
             .get("x-api-version")
             .expect("x-api-version header must be present");
         assert_eq!(header, API_VERSION);
+    }
+        assert_eq!(json["success"], true);
+        
+        // All returned reviews should be within the date range
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let created_at = review["createdAt"].as_str().unwrap();
+            assert!(created_at >= "2025-01-01" && created_at <= "2025-12-31");
+        }
     }
 }

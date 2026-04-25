@@ -4,6 +4,7 @@
 //! Aggregation computes average rating, totals, per-star counts, and a recent slice.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Internal review row (includes `creator_id` for filtering).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -48,6 +49,62 @@ pub struct CreatorReputationPayload {
     pub creator_id: String,
     pub aggregation: ReputationAggregation,
     pub recent_reviews: Vec<PublicReview>,
+}
+
+/// Query parameters for filtering and sorting reviews
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewFilters {
+    pub min_rating: Option<u8>,
+    pub max_rating: Option<u8>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub verified_only: Option<bool>,
+    pub sort_by: Option<ReviewSortBy>,
+    pub sort_order: Option<SortOrder>,
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+/// Available sorting options for reviews
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewSortBy {
+    CreatedAt,
+    Rating,
+    ReviewerName,
+}
+
+/// Sort order options
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+/// Paginated review response
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedReviews {
+    pub reviews: Vec<PublicReview>,
+    pub total_count: u32,
+    pub page: u32,
+    pub limit: u32,
+    pub total_pages: u32,
+    pub has_next: bool,
+    pub has_prev: bool,
+}
+
+/// Enhanced creator reputation payload with filtering support
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilteredCreatorReputationPayload {
+    pub creator_id: String,
+    pub aggregation: ReputationAggregation,
+    pub filtered_aggregation: Option<ReputationAggregation>,
+    pub reviews: PaginatedReviews,
+    pub applied_filters: ReviewFilters,
 }
 
 /// Filter seed reviews for one creator.
@@ -113,6 +170,225 @@ pub fn recent_reviews(reviews: &[Review], limit: usize) -> Vec<PublicReview> {
     owned.into_iter().take(limit).map(|r| to_public_review(&r)).collect()
 }
 
+/// Filter reviews based on provided criteria
+pub fn filter_reviews(reviews: &[Review], filters: &ReviewFilters) -> Vec<Review> {
+    reviews
+        .iter()
+        .filter(|review| {
+            // Rating filter
+            if let Some(min_rating) = filters.min_rating {
+                if review.rating < min_rating {
+                    return false;
+                }
+            }
+            if let Some(max_rating) = filters.max_rating {
+                if review.rating > max_rating {
+                    return false;
+                }
+            }
+            
+            // Date filters (simple string comparison for ISO dates)
+            if let Some(ref date_from) = filters.date_from {
+                if review.created_at < *date_from {
+                    return false;
+                }
+            }
+            if let Some(ref date_to) = filters.date_to {
+                if review.created_at > *date_to {
+                    return false;
+                }
+            }
+            
+            // Verified filter (high rating reviews only)
+            if let Some(true) = filters.verified_only {
+                if review.rating < 4 {
+                    return false;
+                }
+            }
+            
+            true
+        })
+        .cloned()
+        .collect()
+}
+
+/// Sort reviews based on specified criteria
+pub fn sort_reviews(reviews: &mut [Review], sort_by: &ReviewSortBy, sort_order: &SortOrder) {
+    match sort_by {
+        ReviewSortBy::CreatedAt => {
+            reviews.sort_by(|a, b| match sort_order {
+                SortOrder::Asc => a.created_at.cmp(&b.created_at),
+                SortOrder::Desc => b.created_at.cmp(&a.created_at),
+            });
+        }
+        ReviewSortBy::Rating => {
+            reviews.sort_by(|a, b| match sort_order {
+                SortOrder::Asc => a.rating.cmp(&b.rating),
+                SortOrder::Desc => b.rating.cmp(&a.rating),
+            });
+        }
+        ReviewSortBy::ReviewerName => {
+            reviews.sort_by(|a, b| match sort_order {
+                SortOrder::Asc => a.reviewer_name.cmp(&b.reviewer_name),
+                SortOrder::Desc => b.reviewer_name.cmp(&a.reviewer_name),
+            });
+        }
+    }
+}
+
+/// Paginate reviews and return paginated result
+pub fn paginate_reviews(reviews: Vec<Review>, page: u32, limit: u32) -> PaginatedReviews {
+    let total_count = reviews.len() as u32;
+    let total_pages = if total_count == 0 { 0 } else { (total_count + limit - 1) / limit };
+    let start_index = ((page - 1) * limit) as usize;
+    let end_index = (start_index + limit as usize).min(reviews.len());
+    
+    let paginated_reviews = if start_index < reviews.len() {
+        reviews[start_index..end_index]
+            .iter()
+            .map(to_public_review)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    
+    PaginatedReviews {
+        reviews: paginated_reviews,
+        total_count,
+        page,
+        limit,
+        total_pages,
+        has_next: page < total_pages,
+        has_prev: page > 1,
+    }
+}
+
+/// Get filtered and sorted reviews for a creator with pagination
+pub fn get_filtered_creator_reviews(creator_id: &str, filters: &ReviewFilters) -> FilteredCreatorReputationPayload {
+    let all_reviews = reviews_for_creator(creator_id);
+    let overall_aggregation = aggregate_reviews(&all_reviews);
+    
+    // Apply filters
+    let filtered_reviews = filter_reviews(&all_reviews, filters);
+    let filtered_aggregation = if filtered_reviews.len() != all_reviews.len() {
+        Some(aggregate_reviews(&filtered_reviews))
+    } else {
+        None
+    };
+    
+    // Apply sorting
+    let mut sorted_reviews = filtered_reviews;
+    let sort_by = filters.sort_by.as_ref().unwrap_or(&ReviewSortBy::CreatedAt);
+    let sort_order = filters.sort_order.as_ref().unwrap_or(&SortOrder::Desc);
+    sort_reviews(&mut sorted_reviews, sort_by, sort_order);
+    
+    // Apply pagination
+    let page = filters.page.unwrap_or(1).max(1);
+    let limit = filters.limit.unwrap_or(10).clamp(1, 100);
+    let paginated_reviews = paginate_reviews(sorted_reviews, page, limit);
+    
+    FilteredCreatorReputationPayload {
+        creator_id: creator_id.to_string(),
+        aggregation: overall_aggregation,
+        filtered_aggregation,
+        reviews: paginated_reviews,
+        applied_filters: filters.clone(),
+    }
+}
+
+/// Parse query parameters into ReviewFilters
+pub fn parse_review_filters(query: &HashMap<String, String>) -> Result<ReviewFilters, Vec<String>> {
+    let mut errors = Vec::new();
+    
+    let min_rating = query.get("minRating").and_then(|v| {
+        v.parse::<u8>().ok().and_then(|r| if (1..=5).contains(&r) { Some(r) } else { 
+            errors.push("minRating must be between 1 and 5".to_string());
+            None
+        })
+    });
+    
+    let max_rating = query.get("maxRating").and_then(|v| {
+        v.parse::<u8>().ok().and_then(|r| if (1..=5).contains(&r) { Some(r) } else {
+            errors.push("maxRating must be between 1 and 5".to_string());
+            None
+        })
+    });
+    
+    // Validate rating range
+    if let (Some(min), Some(max)) = (min_rating, max_rating) {
+        if min > max {
+            errors.push("minRating cannot be greater than maxRating".to_string());
+        }
+    }
+    
+    let date_from = query.get("dateFrom").cloned();
+    let date_to = query.get("dateTo").cloned();
+    
+    let verified_only = query.get("verifiedOnly").and_then(|v| {
+        match v.to_lowercase().as_str() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => {
+                errors.push("verifiedOnly must be true or false".to_string());
+                None
+            }
+        }
+    });
+    
+    let sort_by = query.get("sortBy").and_then(|v| {
+        match v.to_lowercase().as_str() {
+            "createdat" | "created_at" | "date" => Some(ReviewSortBy::CreatedAt),
+            "rating" => Some(ReviewSortBy::Rating),
+            "reviewername" | "reviewer_name" | "reviewer" => Some(ReviewSortBy::ReviewerName),
+            _ => {
+                errors.push("sortBy must be one of: createdAt, rating, reviewerName".to_string());
+                None
+            }
+        }
+    });
+    
+    let sort_order = query.get("sortOrder").and_then(|v| {
+        match v.to_lowercase().as_str() {
+            "asc" | "ascending" => Some(SortOrder::Asc),
+            "desc" | "descending" => Some(SortOrder::Desc),
+            _ => {
+                errors.push("sortOrder must be asc or desc".to_string());
+                None
+            }
+        }
+    });
+    
+    let page = query.get("page").and_then(|v| {
+        v.parse::<u32>().ok().and_then(|p| if p >= 1 { Some(p) } else {
+            errors.push("page must be >= 1".to_string());
+            None
+        })
+    });
+    
+    let limit = query.get("limit").and_then(|v| {
+        v.parse::<u32>().ok().and_then(|l| if (1..=100).contains(&l) { Some(l) } else {
+            errors.push("limit must be between 1 and 100".to_string());
+            None
+        })
+    });
+    
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    
+    Ok(ReviewFilters {
+        min_rating,
+        max_rating,
+        date_from,
+        date_to,
+        verified_only,
+        sort_by,
+        sort_order,
+        page,
+        limit,
+    })
+}
+
 fn seed_reviews() -> Vec<Review> {
     vec![
         Review {
@@ -144,7 +420,7 @@ fn seed_reviews() -> Vec<Review> {
         },
         Review {
             id: "r-maya-1".into(),
-            creator_id: "maya-writes".into(),
+            creator_id: "maya-content".into(),
             rating: 5,
             title: "Brilliant strategist".into(),
             body: "Content calendar and tone guide were exactly what we needed.".into(),
@@ -153,7 +429,7 @@ fn seed_reviews() -> Vec<Review> {
         },
         Review {
             id: "r-maya-2".into(),
-            creator_id: "maya-writes".into(),
+            creator_id: "maya-content".into(),
             rating: 4,
             title: "Great collaborator".into(),
             body: "Fast turnaround on technical docs.".into(),
@@ -162,7 +438,7 @@ fn seed_reviews() -> Vec<Review> {
         },
         Review {
             id: "r-jordan-1".into(),
-            creator_id: "jordan-creative".into(),
+            creator_id: "jordan-dev".into(),
             rating: 5,
             title: "Campaign crushed metrics".into(),
             body: "Video series drove 2x engagement vs prior quarter.".into(),
@@ -171,30 +447,12 @@ fn seed_reviews() -> Vec<Review> {
         },
         Review {
             id: "r-jordan-2".into(),
-            creator_id: "jordan-creative".into(),
+            creator_id: "jordan-dev".into(),
             rating: 3,
             title: "Good creative, tight deadlines".into(),
             body: "Quality was high; a few deliverables needed small revisions.".into(),
             reviewer_name: "Studio 9".into(),
             created_at: "2024-12-10".into(),
-        },
-        Review {
-            id: "r-sophia-1".into(),
-            creator_id: "sophia-ux".into(),
-            rating: 5,
-            title: "Research excellence".into(),
-            body: "Usability study findings directly shaped our roadmap.".into(),
-            reviewer_name: "HealthApp".into(),
-            created_at: "2025-10-01".into(),
-        },
-        Review {
-            id: "r-sophia-2".into(),
-            creator_id: "sophia-ux".into(),
-            rating: 5,
-            title: "Accessibility champion".into(),
-            body: "WCAG remediation plan was thorough and actionable.".into(),
-            reviewer_name: "OpenGov".into(),
-            created_at: "2025-01-15".into(),
         },
     ]
 }
@@ -333,7 +591,7 @@ mod tests {
 
     #[test]
     fn seed_covers_profile_creator_ids() {
-        let ids = ["alex-studio", "maya-writes", "jordan-creative", "sophia-ux"];
+        let ids = ["alex-studio", "maya-content", "jordan-dev"];
         for id in ids {
             assert!(
                 !reviews_for_creator(id).is_empty(),
@@ -504,5 +762,254 @@ mod tests {
         assert_eq!(agg.total_reviews, 3);
         assert!((agg.average_rating - 4.33).abs() < 0.01); // Should be 4.33
         assert!(!agg.is_verified); // < 4.5 average
+    }
+
+    // ── New tests for filtering and sorting functionality ────────────────────
+
+    fn test_reviews() -> Vec<Review> {
+        vec![
+            Review {
+                id: "r1".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "Excellent".into(),
+                body: "Great work".into(),
+                reviewer_name: "Alice".into(),
+                created_at: "2025-01-15".into(),
+            },
+            Review {
+                id: "r2".into(),
+                creator_id: "c1".into(),
+                rating: 3,
+                title: "Average".into(),
+                body: "Okay work".into(),
+                reviewer_name: "Bob".into(),
+                created_at: "2025-01-10".into(),
+            },
+            Review {
+                id: "r3".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "Good".into(),
+                body: "Nice work".into(),
+                reviewer_name: "Charlie".into(),
+                created_at: "2025-01-20".into(),
+            },
+            Review {
+                id: "r4".into(),
+                creator_id: "c1".into(),
+                rating: 2,
+                title: "Poor".into(),
+                body: "Needs improvement".into(),
+                reviewer_name: "David".into(),
+                created_at: "2025-01-05".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_filter_reviews_by_rating() {
+        let reviews = test_reviews();
+        
+        // Filter for high ratings (4-5)
+        let filters = ReviewFilters {
+            min_rating: Some(4),
+            max_rating: Some(5),
+            date_from: None,
+            date_to: None,
+            verified_only: None,
+            sort_by: None,
+            sort_order: None,
+            page: None,
+            limit: None,
+        };
+        
+        let filtered = filter_reviews(&reviews, &filters);
+        assert_eq!(filtered.len(), 2); // r1 (5) and r3 (4)
+        assert!(filtered.iter().all(|r| r.rating >= 4));
+    }
+
+    #[test]
+    fn test_filter_reviews_by_date_range() {
+        let reviews = test_reviews();
+        
+        let filters = ReviewFilters {
+            min_rating: None,
+            max_rating: None,
+            date_from: Some("2025-01-10".into()),
+            date_to: Some("2025-01-15".into()),
+            verified_only: None,
+            sort_by: None,
+            sort_order: None,
+            page: None,
+            limit: None,
+        };
+        
+        let filtered = filter_reviews(&reviews, &filters);
+        assert_eq!(filtered.len(), 2); // r1 and r2
+    }
+
+    #[test]
+    fn test_filter_reviews_verified_only() {
+        let reviews = test_reviews();
+        
+        let filters = ReviewFilters {
+            min_rating: None,
+            max_rating: None,
+            date_from: None,
+            date_to: None,
+            verified_only: Some(true),
+            sort_by: None,
+            sort_order: None,
+            page: None,
+            limit: None,
+        };
+        
+        let filtered = filter_reviews(&reviews, &filters);
+        assert_eq!(filtered.len(), 2); // r1 (5) and r3 (4)
+        assert!(filtered.iter().all(|r| r.rating >= 4));
+    }
+
+    #[test]
+    fn test_sort_reviews_by_rating() {
+        let reviews = test_reviews();
+        let mut reviews_copy = reviews.clone();
+        
+        sort_reviews(&mut reviews_copy, &ReviewSortBy::Rating, &SortOrder::Desc);
+        
+        // Should be sorted: 5, 4, 3, 2
+        assert_eq!(reviews_copy[0].rating, 5);
+        assert_eq!(reviews_copy[1].rating, 4);
+        assert_eq!(reviews_copy[2].rating, 3);
+        assert_eq!(reviews_copy[3].rating, 2);
+    }
+
+    #[test]
+    fn test_sort_reviews_by_date() {
+        let reviews = test_reviews();
+        let mut reviews_copy = reviews.clone();
+        
+        sort_reviews(&mut reviews_copy, &ReviewSortBy::CreatedAt, &SortOrder::Desc);
+        
+        // Should be sorted by date descending: 2025-01-20, 2025-01-15, 2025-01-10, 2025-01-05
+        assert_eq!(reviews_copy[0].created_at, "2025-01-20");
+        assert_eq!(reviews_copy[1].created_at, "2025-01-15");
+        assert_eq!(reviews_copy[2].created_at, "2025-01-10");
+        assert_eq!(reviews_copy[3].created_at, "2025-01-05");
+    }
+
+    #[test]
+    fn test_sort_reviews_by_reviewer_name() {
+        let reviews = test_reviews();
+        let mut reviews_copy = reviews.clone();
+        
+        sort_reviews(&mut reviews_copy, &ReviewSortBy::ReviewerName, &SortOrder::Asc);
+        
+        // Should be sorted alphabetically: Alice, Bob, Charlie, David
+        assert_eq!(reviews_copy[0].reviewer_name, "Alice");
+        assert_eq!(reviews_copy[1].reviewer_name, "Bob");
+        assert_eq!(reviews_copy[2].reviewer_name, "Charlie");
+        assert_eq!(reviews_copy[3].reviewer_name, "David");
+    }
+
+    #[test]
+    fn test_paginate_reviews() {
+        let reviews = test_reviews();
+        
+        // Test first page
+        let page1 = paginate_reviews(reviews.clone(), 1, 2);
+        assert_eq!(page1.reviews.len(), 2);
+        assert_eq!(page1.total_count, 4);
+        assert_eq!(page1.total_pages, 2);
+        assert!(page1.has_next);
+        assert!(!page1.has_prev);
+        
+        // Test second page
+        let page2 = paginate_reviews(reviews.clone(), 2, 2);
+        assert_eq!(page2.reviews.len(), 2);
+        assert_eq!(page2.page, 2);
+        assert!(!page2.has_next);
+        assert!(page2.has_prev);
+    }
+
+    #[test]
+    fn test_paginate_reviews_empty() {
+        let reviews = Vec::new();
+        let paginated = paginate_reviews(reviews, 1, 10);
+        
+        assert_eq!(paginated.reviews.len(), 0);
+        assert_eq!(paginated.total_count, 0);
+        assert_eq!(paginated.total_pages, 0);
+        assert!(!paginated.has_next);
+        assert!(!paginated.has_prev);
+    }
+
+    #[test]
+    fn test_parse_review_filters_valid() {
+        let mut query = HashMap::new();
+        query.insert("minRating".to_string(), "3".to_string());
+        query.insert("maxRating".to_string(), "5".to_string());
+        query.insert("sortBy".to_string(), "rating".to_string());
+        query.insert("sortOrder".to_string(), "desc".to_string());
+        query.insert("page".to_string(), "2".to_string());
+        query.insert("limit".to_string(), "20".to_string());
+        
+        let filters = parse_review_filters(&query).unwrap();
+        assert_eq!(filters.min_rating, Some(3));
+        assert_eq!(filters.max_rating, Some(5));
+        assert_eq!(filters.sort_by, Some(ReviewSortBy::Rating));
+        assert_eq!(filters.sort_order, Some(SortOrder::Desc));
+        assert_eq!(filters.page, Some(2));
+        assert_eq!(filters.limit, Some(20));
+    }
+
+    #[test]
+    fn test_parse_review_filters_invalid_rating_range() {
+        let mut query = HashMap::new();
+        query.insert("minRating".to_string(), "5".to_string());
+        query.insert("maxRating".to_string(), "3".to_string());
+        
+        let result = parse_review_filters(&query);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("minRating cannot be greater than maxRating")));
+    }
+
+    #[test]
+    fn test_parse_review_filters_invalid_values() {
+        let mut query = HashMap::new();
+        query.insert("minRating".to_string(), "0".to_string()); // Invalid: too low
+        query.insert("sortBy".to_string(), "invalid".to_string()); // Invalid sort field
+        query.insert("page".to_string(), "0".to_string()); // Invalid: must be >= 1
+        
+        let result = parse_review_filters(&query);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 3);
+    }
+
+    #[test]
+    fn test_get_filtered_creator_reviews_integration() {
+        // This test uses the seed data, so we test with a known creator
+        let filters = ReviewFilters {
+            min_rating: Some(4),
+            max_rating: None,
+            date_from: None,
+            date_to: None,
+            verified_only: None,
+            sort_by: Some(ReviewSortBy::Rating),
+            sort_order: Some(SortOrder::Desc),
+            page: Some(1),
+            limit: Some(10),
+        };
+        
+        let result = get_filtered_creator_reviews("alex-studio", &filters);
+        
+        assert_eq!(result.creator_id, "alex-studio");
+        assert!(result.aggregation.total_reviews > 0);
+        assert!(result.reviews.total_count <= result.aggregation.total_reviews);
+        
+        // All returned reviews should have rating >= 4
+        assert!(result.reviews.reviews.iter().all(|r| r.rating >= 4));
     }
 }
