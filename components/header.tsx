@@ -69,6 +69,7 @@ export function Header() {
                   size="icon"
                   onClick={toggleTheme}
                   aria-label="Toggle theme"
+                  aria-pressed={theme === 'dark'}
                 >
                   {theme === 'dark' ? (
                     <Sun size={20} className="text-accent" />
