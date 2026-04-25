@@ -32,6 +32,7 @@ pub struct VerificationRewardsService {
     max_retries: u32,
 }
 
+#[allow(dead_code)]
 impl VerificationRewardsService {
     pub fn new(stellar_rpc_url: String) -> Self {
         VerificationRewardsService {

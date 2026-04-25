@@ -18,6 +18,7 @@ pub struct EventIndexer {
     base_backoff_ms: u64,
 }
 
+#[allow(dead_code)]
 impl EventIndexer {
     pub fn new(rpc_url: String) -> Self {
         EventIndexer {

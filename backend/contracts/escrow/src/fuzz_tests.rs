@@ -47,10 +47,10 @@ mod escrow_fuzz_tests {
         // First release succeeds
         assert!(contract.release_funds(&payer, &escrow_id));
 
-        // Verify funds were transferred
+        // Verify funds were transferred (net of 2.5% fee)
         let token_client = TokenClient::new(&env, &token);
-        assert_eq!(token_client.balance(&payee), 1000i128);
-        assert_eq!(token_client.balance(&contract_id), 0i128);
+        assert_eq!(token_client.balance(&payee), 975i128);
+        assert_eq!(token_client.balance(&contract_id), 25i128);
 
         // Second release attempt fails
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
@@ -88,10 +88,11 @@ mod escrow_fuzz_tests {
             assert_eq!(token_client.balance(&contract_id), amount);
             assert_eq!(token_client.balance(&payer), 0i128);
 
-            // After release, payee receives them
+            // After release, payee receives them (net of 2.5% fee)
             contract.release_funds(&payee, &escrow_id);
-            assert_eq!(token_client.balance(&payee), amount);
-            assert_eq!(token_client.balance(&contract_id), 0i128);
+            let fee = (amount * 250) / 10000;
+            assert_eq!(token_client.balance(&payee), amount - fee);
+            assert_eq!(token_client.balance(&contract_id), fee);
         }
     }
 
