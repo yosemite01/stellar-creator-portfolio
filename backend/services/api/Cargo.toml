@@ -25,6 +25,9 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 jsonwebtoken.workspace = true
+hmac = { version = "0.12", features = ["std"] }
+sha2.workspace = true
+hex.workspace = true
 
 [profile.release]
 opt-level = 3

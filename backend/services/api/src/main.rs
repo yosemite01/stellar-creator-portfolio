@@ -9,6 +9,7 @@ mod auth;
 mod reputation;
 mod event_indexer;
 mod verification_rewards;
+mod webhook;
 
 pub const API_VERSION: &str = "1";
 pub const API_PREFIX: &str = "/api/v1";
@@ -956,6 +957,16 @@ async fn main() -> std::io::Result<()> {
                     .route("/freelancers", web::get().to(list_freelancers))
                     .route("/freelancers/{address}", web::get().to(get_freelancer))
                     .route("/escrow/{id}", web::get().to(get_escrow))
+                    .route("/webhooks/payment", web::post().to(webhook::payment_webhook))
+                    // Protected write routes — require valid JWT
+                    .service(
+                        web::scope("")
+                            .wrap(auth::JwtMiddleware)
+                            .route("/bounties", web::post().to(create_bounty))
+                            .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                            .route("/freelancers/register", web::post().to(register_freelancer))
+                            .route("/escrow/{id}/release", web::post().to(release_escrow)),
+                    ),
             )
             // Protected write routes — require valid JWT
             .service(

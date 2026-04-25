@@ -37,6 +37,7 @@ diesel = { version = "2.1", features = ["postgres"] }
 # Cryptography & Blockchain
 ed25519-dalek = "2.1"
 sha2 = "0.10"
+hmac = { version = "0.12", features = ["std"] }
 hex = "0.4"
 stellar-sdk = "21.0"
 
