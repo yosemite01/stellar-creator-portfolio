@@ -164,6 +164,86 @@ export async function fetchCreatorReputation(
   return apiFetch(`${API_BASE}/creators/${id}/reputation`);
 }
 
+/** GET /api/v1/creators/:id/reviews - Enhanced with filtering support */
+export async function fetchCreatorReviews(
+  id: string,
+  filters?: {
+    minRating?: number;
+    maxRating?: number;
+    dateFrom?: string;
+    dateTo?: string;
+    verifiedOnly?: boolean;
+    sortBy?: 'createdAt' | 'rating' | 'reviewerName';
+    sortOrder?: 'asc' | 'desc';
+    page?: number;
+    limit?: number;
+  }
+): Promise<{
+  creatorId: string;
+  aggregation: ReputationAggregation;
+  filteredAggregation?: ReputationAggregation;
+  reviews: {
+    reviews: PublicReview[];
+    totalCount: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+  appliedFilters: any;
+}> {
+  const params = new URLSearchParams();
+  if (filters) {
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, value.toString());
+      }
+    });
+  }
+  const query = params.toString() ? `?${params}` : '';
+  return apiFetch(`${API_BASE}/creators/${id}/reviews${query}`);
+}
+
+/** GET /api/v1/reviews - List all reviews with filtering */
+export async function fetchAllReviews(
+  filters?: {
+    minRating?: number;
+    maxRating?: number;
+    dateFrom?: string;
+    dateTo?: string;
+    verifiedOnly?: boolean;
+    sortBy?: 'createdAt' | 'rating' | 'reviewerName';
+    sortOrder?: 'asc' | 'desc';
+    page?: number;
+    limit?: number;
+  }
+): Promise<{
+  reviews: {
+    reviews: PublicReview[];
+    totalCount: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+  overallAggregation: ReputationAggregation;
+  filteredAggregation?: ReputationAggregation;
+  appliedFilters: any;
+}> {
+  const params = new URLSearchParams();
+  if (filters) {
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, value.toString());
+      }
+    });
+  }
+  const query = params.toString() ? `?${params}` : '';
+  return apiFetch(`${API_BASE}/reviews${query}`);
+}
+
 /** GET /api/v1/bounties — optionally paginated. */
 export async function fetchBounties(params?: {
   page?: number;

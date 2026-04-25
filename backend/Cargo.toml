@@ -4,6 +4,7 @@ members = [
     "contracts/escrow",
     "contracts/freelancer",
     "contracts/governance",
+    "contracts/stellar_insights",
     "services/api",
     "services/auth",
     "tests",

@@ -7,7 +7,6 @@
 /// Security: every incoming request must carry a valid HMAC-SHA256
 /// signature in the `X-Webhook-Signature` header.  The secret is read
 /// from the `WEBHOOK_SECRET` environment variable.
-
 use actix_web::{web, HttpRequest, HttpResponse};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;

@@ -1,8 +1,5 @@
 #![no_std]
 
-extern crate alloc;
-use alloc::format;
-
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
 
 /// Governance Configuration
@@ -73,7 +70,7 @@ impl GovernanceContract {
 
         // Extend TTL for config storage (30 days in ledgers)
         let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&config_key, ledger_ttl);
+        env.storage().persistent().extend_ttl(&config_key, 4096, ledger_ttl);
 
         true
     }
@@ -101,7 +98,7 @@ impl GovernanceContract {
 
         // Extend TTL for config storage (30 days in ledgers)
         let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&config_key, ledger_ttl);
+        env.storage().persistent().extend_ttl(&config_key, 4096, ledger_ttl);
 
         true
     }
@@ -137,7 +134,7 @@ impl GovernanceContract {
             voting_deadline: env.ledger().timestamp() + voting_period,
         };
 
-        let proposal_key = Symbol::new(&env, &format!("proposal_{}", proposal_id));
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         env.storage().persistent().set(&proposal_key, &proposal);
         env.storage()
             .persistent()
@@ -145,8 +142,8 @@ impl GovernanceContract {
 
         // Extend TTL for proposal storage (30 days in ledgers)
         let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&proposal_key, ledger_ttl);
-        env.storage().persistent().extend_ttl(&proposal_counter_key, ledger_ttl);
+        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
+        env.storage().persistent().extend_ttl(&proposal_counter_key, 4096, ledger_ttl);
 
         proposal_id
     }
@@ -159,11 +156,11 @@ impl GovernanceContract {
     ) -> bool {
         voter.require_auth();
 
-        let proposal_key = Symbol::new(&env, &format!("proposal_{}", proposal_id));
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         let mut proposal = env
             .storage()
             .persistent()
-            .get::<Symbol, Proposal>(&proposal_key)
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
             .expect("Proposal not found");
 
         let pending = String::from_str(&env, "pending");
@@ -174,10 +171,7 @@ impl GovernanceContract {
         );
 
         // Check if voter already voted (simplified - in reality use a mapping)
-        let vote_key = Symbol::new(
-            &env,
-            &format!("vote_{}_{:?}", proposal_id, voter),
-        );
+        let vote_key = (Symbol::new(&env, "vote"), proposal_id, voter.clone());
         assert!(
             !env.storage().persistent().has(&vote_key),
             "Already voted"
@@ -194,26 +188,26 @@ impl GovernanceContract {
 
         // Extend TTL for vote storage (30 days in ledgers)
         let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&proposal_key, ledger_ttl);
-        env.storage().persistent().extend_ttl(&vote_key, ledger_ttl);
+        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
+        env.storage().persistent().extend_ttl(&vote_key, 4096, ledger_ttl);
 
         true
     }
 
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
-        let proposal_key = Symbol::new(&env, &format!("proposal_{}", proposal_id));
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         env.storage()
             .persistent()
-            .get::<Symbol, Proposal>(&proposal_key)
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
             .expect("Proposal not found")
     }
 
     pub fn execute_proposal(env: Env, proposal_id: u64) -> bool {
-        let proposal_key = Symbol::new(&env, &format!("proposal_{}", proposal_id));
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         let mut proposal = env
             .storage()
             .persistent()
-            .get::<Symbol, Proposal>(&proposal_key)
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
             .expect("Proposal not found");
 
         assert!(
@@ -233,7 +227,7 @@ impl GovernanceContract {
 
         // Extend TTL for proposal storage (30 days in ledgers)
         let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&proposal_key, ledger_ttl);
+        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
 
         true
     }

@@ -149,6 +149,39 @@ export interface CreatorReputationPayload {
   recentReviews: PublicReview[];
 }
 
+/** Paginated reviews response */
+export interface PaginatedReviews {
+  reviews: PublicReview[];
+  totalCount: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
+/** Review filter options */
+export interface ReviewFilterOptions {
+  minRating?: number;
+  maxRating?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  verifiedOnly?: boolean;
+  sortBy?: 'createdAt' | 'rating' | 'reviewerName';
+  sortOrder?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+}
+
+/** Enhanced creator reputation payload with filtering support */
+export interface FilteredCreatorReputationPayload {
+  creatorId: string;
+  aggregation: ReputationAggregation;
+  filteredAggregation?: ReputationAggregation;
+  reviews: PaginatedReviews;
+  appliedFilters: ReviewFilterOptions;
+}
+
 // ── Review submission ─────────────────────────────────────────────────────────────
 
 /** Payload sent when submitting a review after bounty completion. */

@@ -3,9 +3,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CreatorReputation } from './creator-reputation';
 import { apiSuccess, apiFailure } from '@/lib/api-models';
-import type { CreatorReputationPayload } from '@/lib/api-models';
+import type { FilteredCreatorReputationPayload } from '@/lib/api-models';
 
-const mockPayload: CreatorReputationPayload = {
+const mockPayload: FilteredCreatorReputationPayload = {
   creatorId: 'alex-studio',
   aggregation: {
     averageRating: 4.67,
@@ -15,17 +15,27 @@ const mockPayload: CreatorReputationPayload = {
     stars3: 0,
     stars2: 0,
     stars1: 0,
+    isVerified: true,
   },
-  recentReviews: [
-    {
-      id: 'r-1',
-      rating: 5,
-      title: 'Exceptional design partner',
-      body: 'Delivered a full design system on time.',
-      reviewerName: 'Sam K.',
-      createdAt: new Date(Date.now() - 86400000).toISOString(),
-    },
-  ],
+  reviews: {
+    reviews: [
+      {
+        id: 'r-1',
+        rating: 5,
+        title: 'Exceptional design partner',
+        body: 'Delivered a full design system on time.',
+        reviewerName: 'Sam K.',
+        createdAt: new Date(Date.now() - 86400000).toISOString(),
+      },
+    ],
+    totalCount: 1,
+    page: 1,
+    limit: 10,
+    totalPages: 1,
+    hasNext: false,
+    hasPrev: false,
+  },
+  appliedFilters: {},
 };
 
 function mockFetch(body: unknown, ok = true, status = 200) {
@@ -77,10 +87,18 @@ describe('CreatorReputation', () => {
   });
 
   it('renders nothing when totalReviews is 0', async () => {
-    const emptyPayload: CreatorReputationPayload = {
+    const emptyPayload: FilteredCreatorReputationPayload = {
       ...mockPayload,
       aggregation: { ...mockPayload.aggregation, totalReviews: 0, averageRating: 0 },
-      recentReviews: [],
+      reviews: {
+        reviews: [],
+        totalCount: 0,
+        page: 1,
+        limit: 10,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false,
+      },
     };
     mockFetch(apiSuccess(emptyPayload));
     const { container } = render(<CreatorReputation creatorId="alex-studio" />);
@@ -106,7 +124,7 @@ describe('CreatorReputation', () => {
   });
 
   it('uses singular "review" for count of 1', async () => {
-    const singleReview: CreatorReputationPayload = {
+    const singleReview: FilteredCreatorReputationPayload = {
       ...mockPayload,
       aggregation: { ...mockPayload.aggregation, totalReviews: 1 },
     };

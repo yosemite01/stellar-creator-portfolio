@@ -3,12 +3,14 @@ use tokio::time::sleep;
 use tracing::{error, warn, info};
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum HealthStatus {
     Healthy,
     Degraded(String),
     Unhealthy(String),
 }
 
+#[allow(dead_code)]
 pub struct EventIndexer {
     rpc_url: String,
     health_status: HealthStatus,
@@ -16,6 +18,7 @@ pub struct EventIndexer {
     base_backoff_ms: u64,
 }
 
+#[allow(dead_code)]
 impl EventIndexer {
     pub fn new(rpc_url: String) -> Self {
         EventIndexer {
@@ -89,7 +92,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_status_degraded_on_retry() {
-        let mut indexer = EventIndexer::new("http://localhost:8000".to_string());
+        let indexer = EventIndexer::new("http://localhost:8000".to_string());
         
         // Initially healthy
         match indexer.get_health_status() {

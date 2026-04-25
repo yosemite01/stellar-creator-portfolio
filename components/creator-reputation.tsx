@@ -1,14 +1,32 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { ApiResponse, CreatorReputationPayload } from '@/lib/api-models';
+import type { ApiResponse, CreatorReputationPayload, PublicReview, ReputationAggregation } from '@/lib/api-models';
 import { isApiSuccess } from '@/lib/api-models';
 import { ReviewList } from '@/components/review-list';
+import { ReviewFilters, type ReviewFilterOptions } from '@/components/review-filters';
 import { ErrorAlert } from '@/components/error-alert';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { CheckCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+interface FilteredReputationPayload {
+  creatorId: string;
+  aggregation: ReputationAggregation;
+  filteredAggregation?: ReputationAggregation;
+  reviews: {
+    reviews: PublicReview[];
+    totalCount: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+  appliedFilters: ReviewFilterOptions;
+}
 
 function StarRow({ value, max = 5 }: { value: number; max?: number }) {
   const rounded = Math.round(value);
@@ -29,8 +47,10 @@ function StarRow({ value, max = 5 }: { value: number; max?: number }) {
 
 function Histogram({
   aggregation,
+  title = "Rating breakdown"
 }: {
-  aggregation: CreatorReputationPayload['aggregation'];
+  aggregation: ReputationAggregation;
+  title?: string;
 }) {
   const total = aggregation.totalReviews;
   if (total === 0) return null;
@@ -45,7 +65,7 @@ function Histogram({
 
   return (
     <div className="space-y-2 mt-6" aria-label="Rating distribution">
-      <p className="text-sm font-semibold text-foreground">Rating breakdown</p>
+      <p className="text-sm font-semibold text-foreground">{title}</p>
       {rows.map((row) => {
         const pct = Math.round((row.count / total) * 100);
         return (
@@ -66,40 +86,65 @@ function Histogram({
 }
 
 export function CreatorReputation({ creatorId }: { creatorId: string }) {
-  const [payload, setPayload] = useState<CreatorReputationPayload | null>(null);
+  const [payload, setPayload] = useState<FilteredReputationPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [filters, setFilters] = useState<ReviewFilterOptions>({
+    page: 1,
+    limit: 10,
+    sortBy: 'createdAt',
+    sortOrder: 'desc'
+  });
+
+  const loadReviews = async (newFilters: ReviewFilterOptions) => {
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const params = new URLSearchParams();
+      Object.entries(newFilters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          params.set(key, value.toString());
+        }
+      });
+      
+      const queryString = params.toString();
+      const url = `${API_BASE}/api/v1/creators/${encodeURIComponent(creatorId)}/reviews${queryString ? `?${queryString}` : ''}`;
+      
+      const res = await fetch(url, { 
+        headers: { Accept: 'application/json' } 
+      });
+      
+      if (!res.ok) {
+        setError('Failed to load reviews');
+        return;
+      }
+      
+      const body = (await res.json()) as ApiResponse<FilteredReputationPayload>;
+      if (isApiSuccess(body)) {
+        setPayload(body.data);
+        setError(null);
+      } else {
+        setError(body.error.message || 'Failed to load reviews');
+      }
+    } catch (err) {
+      setError('Failed to load reviews');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
+    loadReviews(filters);
+  }, [creatorId, filters]);
 
-    async function load() {
-      try {
-        const res = await fetch(
-          `${API_BASE}/api/creators/${encodeURIComponent(creatorId)}/reputation`,
-          { headers: { Accept: 'application/json' } },
-        );
-        if (!res.ok) {
-          if (!cancelled) setError('Failed to load reviews');
-          return;
-        }
-        const body = (await res.json()) as ApiResponse<CreatorReputationPayload>;
-        if (cancelled) return;
-        if (isApiSuccess(body) && body.data.aggregation.totalReviews > 0) {
-          setPayload(body.data);
-          setError(null);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError('Failed to load reviews');
-        }
-      }
-    }
+  const handleFiltersChange = (newFilters: ReviewFilterOptions) => {
+    setFilters(newFilters);
+  };
 
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [creatorId]);
+  const handlePageChange = (newPage: number) => {
+    setFilters(prev => ({ ...prev, page: newPage }));
+  };
 
   if (error) {
     return (
@@ -112,11 +157,19 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
     );
   }
 
-  if (!payload) {
+  // Return null while loading or if no payload exists
+  if (isLoading || !payload) {
     return null;
   }
 
-  const { aggregation, recentReviews } = payload;
+  const { aggregation, filteredAggregation, reviews } = payload;
+  const displayAggregation = filteredAggregation || aggregation;
+  const hasFilters = filteredAggregation !== undefined;
+
+  // Return null if there are no reviews at all
+  if (aggregation.totalReviews === 0) {
+    return null;
+  }
 
   return (
     <section className="border-b border-border bg-muted/20 py-12">
@@ -138,23 +191,76 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
           <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-8">
             <div className="text-center sm:text-left">
               <div className="text-4xl font-bold text-primary tabular-nums">
-                {aggregation.averageRating.toFixed(2)}
+                {displayAggregation.averageRating.toFixed(2)}
               </div>
               <div className="text-sm text-muted-foreground">out of 5</div>
             </div>
             <div className="flex flex-col gap-2">
-              <StarRow value={aggregation.averageRating} />
+              <StarRow value={displayAggregation.averageRating} />
               <p className="text-sm text-muted-foreground">
-                Based on {aggregation.totalReviews}{' '}
-                {aggregation.totalReviews === 1 ? 'review' : 'reviews'}
+                Based on {displayAggregation.totalReviews}{' '}
+                {displayAggregation.totalReviews === 1 ? 'review' : 'reviews'}
+                {hasFilters && ` (filtered from ${aggregation.totalReviews} total)`}
               </p>
             </div>
           </div>
 
-          <Histogram aggregation={aggregation} />
+          <Histogram 
+            aggregation={displayAggregation} 
+            title={hasFilters ? "Filtered rating breakdown" : "Rating breakdown"}
+          />
+
+          {/* Show overall stats when filtered */}
+          {hasFilters && (
+            <div className="mt-6 p-4 bg-muted/50 rounded-lg">
+              <h4 className="text-sm font-semibold mb-2">Overall Statistics</h4>
+              <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                <span>Total Reviews: {aggregation.totalReviews}</span>
+                <span>Overall Rating: {aggregation.averageRating.toFixed(2)}</span>
+                <span>Verified: {aggregation.isVerified ? 'Yes' : 'No'}</span>
+              </div>
+            </div>
+          )}
 
           <div className="mt-10">
-            <ReviewList reviews={recentReviews} />
+            <ReviewFilters
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              totalReviews={reviews?.totalCount || 0}
+              isLoading={isLoading}
+            />
+            
+            <ReviewList reviews={reviews?.reviews || []} />
+            
+            {/* Pagination */}
+            {reviews && reviews.totalPages > 1 && (
+              <div className="flex items-center justify-between mt-6 pt-6 border-t">
+                <div className="text-sm text-muted-foreground">
+                  Page {reviews.page} of {reviews.totalPages} 
+                  ({reviews.totalCount} total reviews)
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(reviews.page - 1)}
+                    disabled={!reviews.hasPrev || isLoading}
+                  >
+                    <ChevronLeft size={16} />
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(reviews.page + 1)}
+                    disabled={!reviews.hasNext || isLoading}
+                  >
+                    Next
+                    <ChevronRight size={16} />
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

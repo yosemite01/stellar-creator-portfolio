@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { CreatorReputation } from './creator-reputation';
-import { apiSuccess, apiFailure, type CreatorReputationPayload } from '@/lib/api-models';
+import { apiSuccess, apiFailure, type FilteredCreatorReputationPayload } from '@/lib/api-models';
 
 describe('Rating Math - UI Component Tests', () => {
   beforeEach(() => {
@@ -22,7 +22,7 @@ describe('Rating Math - UI Component Tests', () => {
 
   describe('Rating Display Accuracy', () => {
     it('displays average rating with correct precision', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 4.67,
@@ -34,7 +34,16 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: true,
         },
-        recentReviews: [],
+        reviews: {
+          reviews: [],
+          totalCount: 0,
+          page: 1,
+          limit: 10,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false,
+        },
+        appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -45,7 +54,7 @@ describe('Rating Math - UI Component Tests', () => {
     });
 
     it('displays review count correctly', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 4.2,
@@ -57,7 +66,16 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: true,
         },
-        recentReviews: [],
+        reviews: {
+          reviews: [],
+          totalCount: 0,
+          page: 1,
+          limit: 10,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false,
+        },
+        appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -67,7 +85,7 @@ describe('Rating Math - UI Component Tests', () => {
     });
 
     it('handles singular vs plural review count', async () => {
-      const singleReviewPayload: CreatorReputationPayload = {
+      const singleReviewPayload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 5.0,
@@ -79,7 +97,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: false,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(singleReviewPayload));
@@ -91,7 +109,7 @@ describe('Rating Math - UI Component Tests', () => {
 
   describe('Star Distribution Visualization', () => {
     it('displays star distribution histogram correctly', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 4.2,
@@ -103,7 +121,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: false,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -117,7 +135,7 @@ describe('Rating Math - UI Component Tests', () => {
     });
 
     it('calculates percentage distribution correctly', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 4.0,
@@ -129,7 +147,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,  // 0%
           isVerified: false,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -144,7 +162,7 @@ describe('Rating Math - UI Component Tests', () => {
     });
 
     it('handles edge case: all reviews are 5-star', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'perfect-creator',
         aggregation: {
           averageRating: 5.0,
@@ -156,7 +174,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: true,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -167,7 +185,7 @@ describe('Rating Math - UI Component Tests', () => {
     });
 
     it('handles edge case: all reviews are 1-star', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'poor-creator',
         aggregation: {
           averageRating: 1.0,
@@ -179,7 +197,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 5,
           isVerified: false,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -192,7 +210,7 @@ describe('Rating Math - UI Component Tests', () => {
 
   describe('Verification Status Display', () => {
     it('displays verification badge for verified creators', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'verified-creator',
         aggregation: {
           averageRating: 4.8,
@@ -204,7 +222,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: true,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -218,7 +236,7 @@ describe('Rating Math - UI Component Tests', () => {
     });
 
     it('does not display verification for unverified creators', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'unverified-creator',
         aggregation: {
           averageRating: 4.2,
@@ -230,7 +248,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: false,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -247,7 +265,7 @@ describe('Rating Math - UI Component Tests', () => {
 
   describe('Individual Review Display', () => {
     it('displays individual review ratings correctly', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 4.5,
@@ -259,24 +277,33 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: true,
         },
-        recentReviews: [
-          {
-            id: 'r-1',
-            rating: 5,
-            title: 'Excellent work',
-            body: 'Delivered exactly what was needed on time.',
-            reviewerName: 'John D.',
-            createdAt: '2025-01-15',
-          },
-          {
-            id: 'r-2',
-            rating: 4,
-            title: 'Good collaboration',
-            body: 'Professional and responsive throughout the project.',
-            reviewerName: 'Sarah M.',
-            createdAt: '2025-01-10',
-          },
-        ],
+        reviews: {
+          reviews: [
+            {
+              id: 'r-1',
+              rating: 5,
+              title: 'Excellent work',
+              body: 'Delivered exactly what was needed on time.',
+              reviewerName: 'John D.',
+              createdAt: '2025-01-15',
+            },
+            {
+              id: 'r-2',
+              rating: 4,
+              title: 'Good collaboration',
+              body: 'Professional and responsive throughout the project.',
+              reviewerName: 'Sarah M.',
+              createdAt: '2025-01-10',
+            },
+          ],
+          totalCount: 2,
+          page: 1,
+          limit: 10,
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false,
+        },
+        appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -293,7 +320,7 @@ describe('Rating Math - UI Component Tests', () => {
     });
 
     it('validates individual review ratings are within range', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 3.0,
@@ -305,32 +332,41 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 1,
           isVerified: false,
         },
-        recentReviews: [
-          {
-            id: 'r-1',
-            rating: 5,
-            title: 'Great',
-            body: 'Excellent work',
-            reviewerName: 'Alice',
-            createdAt: '2025-01-15',
-          },
-          {
-            id: 'r-2',
-            rating: 3,
-            title: 'OK',
-            body: 'Average work',
-            reviewerName: 'Bob',
-            createdAt: '2025-01-10',
-          },
-          {
-            id: 'r-3',
-            rating: 1,
-            title: 'Poor',
-            body: 'Not satisfied',
-            reviewerName: 'Charlie',
-            createdAt: '2025-01-05',
-          },
-        ],
+        reviews: {
+          reviews: [
+            {
+              id: 'r-1',
+              rating: 5,
+              title: 'Great',
+              body: 'Excellent work',
+              reviewerName: 'Alice',
+              createdAt: '2025-01-15',
+            },
+            {
+              id: 'r-2',
+              rating: 3,
+              title: 'OK',
+              body: 'Average work',
+              reviewerName: 'Bob',
+              createdAt: '2025-01-10',
+            },
+            {
+              id: 'r-3',
+              rating: 1,
+              title: 'Poor',
+              body: 'Not satisfied',
+              reviewerName: 'Charlie',
+              createdAt: '2025-01-05',
+            },
+          ],
+          totalCount: 3,
+          page: 1,
+          limit: 10,
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false,
+        },
+        appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -349,7 +385,7 @@ describe('Rating Math - UI Component Tests', () => {
 
   describe('Error States and Edge Cases', () => {
     it('handles zero reviews gracefully', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'new-creator',
         aggregation: {
           averageRating: 0.0,
@@ -361,7 +397,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: false,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -390,7 +426,7 @@ describe('Rating Math - UI Component Tests', () => {
 
   describe('Mathematical Consistency Validation', () => {
     it('validates that displayed data is mathematically consistent', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 3.6,
@@ -402,7 +438,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 1,
           isVerified: false,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));
@@ -426,7 +462,7 @@ describe('Rating Math - UI Component Tests', () => {
     });
 
     it('validates verification logic consistency', async () => {
-      const verifiedPayload: CreatorReputationPayload = {
+      const verifiedPayload: FilteredCreatorReputationPayload = {
         creatorId: 'verified-creator',
         aggregation: {
           averageRating: 4.7,
@@ -438,7 +474,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: true,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(verifiedPayload));
@@ -457,7 +493,7 @@ describe('Rating Math - UI Component Tests', () => {
 
   describe('Accessibility and User Experience', () => {
     it('provides accessible labels for rating information', async () => {
-      const payload: CreatorReputationPayload = {
+      const payload: FilteredCreatorReputationPayload = {
         creatorId: 'test-creator',
         aggregation: {
           averageRating: 4.5,
@@ -469,7 +505,7 @@ describe('Rating Math - UI Component Tests', () => {
           stars1: 0,
           isVerified: true,
         },
-        recentReviews: [],
+        reviews: { reviews: [], totalCount: 0, page: 1, limit: 10, totalPages: 0, hasNext: false, hasPrev: false }, appliedFilters: {},
       };
 
       mockFetch(apiSuccess(payload));

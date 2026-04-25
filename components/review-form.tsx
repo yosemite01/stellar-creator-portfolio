@@ -70,11 +70,22 @@ export interface ReviewFormProps {
   creatorName: string;
   /** Called after a successful submission. */
   onSuccess?: () => void;
+  /** Called when form is cancelled. */
+  onCancel?: () => void;
+  /** Show as modal or inline form */
+  variant?: 'modal' | 'inline';
 }
 
 type FormState = 'idle' | 'submitting' | 'success' | 'error';
 
-export function ReviewForm({ bountyId, creatorId, creatorName, onSuccess }: ReviewFormProps) {
+export function ReviewForm({ 
+  bountyId, 
+  creatorId, 
+  creatorName, 
+  onSuccess, 
+  onCancel,
+  variant = 'inline' 
+}: ReviewFormProps) {
   const [rating, setRating] = useState(0);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -242,6 +253,18 @@ export function ReviewForm({ bountyId, creatorId, creatorName, onSuccess }: Revi
       >
         {formState === 'submitting' ? 'Submitting…' : 'Submit review'}
       </Button>
+
+      {variant === 'modal' && onCancel && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full mt-2"
+          onClick={onCancel}
+          disabled={formState === 'submitting'}
+        >
+          Cancel
+        </Button>
+      )}
     </form>
   );
 }

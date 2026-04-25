@@ -54,6 +54,9 @@ export function Header() {
             <Link href="/bounties" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
               Bounties
             </Link>
+            <Link href="/reviews" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
+              Reviews
+            </Link>
             <Link href="/about" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
               About
             </Link>
@@ -105,6 +108,9 @@ export function Header() {
             </Link>
             <Link href="/bounties" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
               Bounties
+            </Link>
+            <Link href="/reviews" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
+              Reviews
             </Link>
             <Link href="/about" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
               About

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RewardCalculation {
     pub recipient: String,
     pub amount: i128,
@@ -9,6 +10,7 @@ pub struct RewardCalculation {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct PaymentResult {
     pub transaction_id: String,
     pub recipient: String,
@@ -17,17 +19,20 @@ pub struct PaymentResult {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[allow(dead_code)]
 pub enum PaymentStatus {
     Success,
     Failed,
     Pending,
 }
 
+#[allow(dead_code)]
 pub struct VerificationRewardsService {
     stellar_rpc_url: String,
     max_retries: u32,
 }
 
+#[allow(dead_code)]
 impl VerificationRewardsService {
     pub fn new(stellar_rpc_url: String) -> Self {
         VerificationRewardsService {

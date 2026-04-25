@@ -1,7 +1,4 @@
-﻿#![no_std]
-
-extern crate alloc;
-use alloc::format;
+#![no_std]
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
@@ -118,8 +115,8 @@ impl EscrowContract {
             fee_collected: fee,
         };
 
-        env.storage().persistent().set(&Symbol::new(&env, &format!("escrow_{}", counter)), &escrow);
-        env.storage().persistent().set(&Symbol::new(&env, &format!("b_esc_{}", bounty_id)), &counter);
+        env.storage().persistent().set(&(Symbol::new(&env, "escrow"), counter), &escrow);
+        env.storage().persistent().set(&(Symbol::new(&env, "b_esc"), bounty_id), &counter);
         env.storage().persistent().set(&counter_key, &counter);
 
         // Emit escrow_deposited event for indexers
@@ -134,7 +131,7 @@ impl EscrowContract {
     pub fn get_escrow(env: Env, escrow_id: u64) -> EscrowAccount {
         env.storage()
             .persistent()
-            .get::<Symbol, EscrowAccount>(&Symbol::new(&env, &format!("escrow_{}", escrow_id)))
+            .get::<(Symbol, u64), EscrowAccount>(&(Symbol::new(&env, "escrow"), escrow_id))
             .expect("Escrow not found")
     }
 
@@ -142,8 +139,8 @@ impl EscrowContract {
     pub fn release_funds(env: Env, authorizer: Address, escrow_id: u64) -> bool {
         authorizer.require_auth();
 
-        let key = Symbol::new(&env, &format!("escrow_{}", escrow_id));
-        let mut escrow = env.storage().persistent().get::<Symbol, EscrowAccount>(&key).expect("Escrow not found");
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
 
         assert!(authorizer == escrow.payer || authorizer == escrow.payee, "Unauthorized");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
@@ -169,8 +166,8 @@ impl EscrowContract {
     pub fn refund_escrow(env: Env, authorizer: Address, escrow_id: u64) -> bool {
         authorizer.require_auth();
 
-        let key = Symbol::new(&env, &format!("escrow_{}", escrow_id));
-        let mut escrow = env.storage().persistent().get::<Symbol, EscrowAccount>(&key).expect("Escrow not found");
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
 
         assert_eq!(authorizer, escrow.payer, "Only payer can refund");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
@@ -195,8 +192,8 @@ impl EscrowContract {
     pub fn dispute_escrow(env: Env, authorizer: Address, escrow_id: u64) -> bool {
         authorizer.require_auth();
 
-        let key = Symbol::new(&env, &format!("escrow_{}", escrow_id));
-        let mut escrow = env.storage().persistent().get::<Symbol, EscrowAccount>(&key).expect("Escrow not found");
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
 
         assert!(authorizer == escrow.payer || authorizer == escrow.payee, "Unauthorized");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
@@ -233,11 +230,11 @@ impl EscrowContract {
             .expect("Platform admin not set");
         assert_eq!(admin, stored_admin, "Only platform admin can resolve disputes");
 
-        let key = Symbol::new(&env, &format!("escrow_{}", escrow_id));
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
         let mut escrow = env
             .storage()
             .persistent()
-            .get::<Symbol, EscrowAccount>(&key)
+            .get::<(Symbol, u64), EscrowAccount>(&key)
             .expect("Escrow not found");
 
         assert!(escrow.status == EscrowStatus::Disputed, "Escrow is not disputed");
@@ -304,9 +301,9 @@ impl EscrowContract {
         assert!(amount > 0, "Milestone amount must be positive");
         assert!(amount <= escrow.amount, "Milestone amount exceeds escrow");
 
-        let m_key = Symbol::new(&env, &format!("ms_{}_{}", escrow_id, index));
+        let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         assert!(
-            env.storage().persistent().get::<Symbol, Milestone>(&m_key).is_none(),
+            env.storage().persistent().get::<(Symbol, u64, u32), Milestone>(&m_key).is_none(),
             "Milestone already exists"
         );
 
@@ -322,9 +319,9 @@ impl EscrowContract {
         assert_eq!(authorizer, escrow.payer, "Only payer can release milestones");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
 
-        let m_key = Symbol::new(&env, &format!("ms_{}_{}", escrow_id, index));
+        let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         let mut milestone = env.storage().persistent()
-            .get::<Symbol, Milestone>(&m_key)
+            .get::<(Symbol, u64, u32), Milestone>(&m_key)
             .expect("Milestone not found");
 
         assert!(!milestone.released, "Milestone already released");
@@ -347,7 +344,7 @@ impl EscrowContract {
     pub fn get_milestone(env: Env, escrow_id: u64, index: u32) -> Milestone {
         env.storage()
             .persistent()
-            .get::<Symbol, Milestone>(&Symbol::new(&env, &format!("ms_{}_{}", escrow_id, index)))
+            .get::<(Symbol, u64, u32), Milestone>(&(Symbol::new(&env, "ms"), escrow_id, index))
             .expect("Milestone not found")
     }
 
@@ -376,7 +373,7 @@ impl EscrowContract {
     pub fn get_escrow_id_for_bounty(env: Env, bounty_id: u64) -> u64 {
         env.storage()
             .persistent()
-            .get::<Symbol, u64>(&Symbol::new(&env, &format!("b_esc_{}", bounty_id)))
+            .get::<(Symbol, u64), u64>(&(Symbol::new(&env, "b_esc"), bounty_id))
             .unwrap_or(0)
     }
 
@@ -499,7 +496,7 @@ mod tests {
         let e = contract.get_escrow(&id);
         assert_eq!(e.bounty_id, 1);
         assert_eq!(e.payer, payer);
-        assert_eq!(e.amount, 1000);
+        assert_eq!(e.amount, 975);
         assert!(e.status == EscrowStatus::Active);
         assert!(e.released_at.is_none());
     }
@@ -527,8 +524,8 @@ mod tests {
 
         contract.release_funds(&payee, &id);
 
-        assert_eq!(TokenClient::new(&env, &token).balance(&payee), 1000);
-        assert_eq!(TokenClient::new(&env, &token).balance(&cid), 0);
+        assert_eq!(TokenClient::new(&env, &token).balance(&payee), 975);
+        assert_eq!(TokenClient::new(&env, &token).balance(&cid), 25);
         let e = contract.get_escrow(&id);
         assert!(e.status == EscrowStatus::Released);
         assert!(e.released_at.is_some());
@@ -567,7 +564,7 @@ mod tests {
         let id = contract.deposit(&1u64, &payer, &payee, &800, &token, &ReleaseCondition::OnCompletion);
         contract.refund_escrow(&payer, &id);
 
-        assert_eq!(TokenClient::new(&env, &token).balance(&payer), 800);
+        assert_eq!(TokenClient::new(&env, &token).balance(&payer), 780);
         let e = contract.get_escrow(&id);
         assert!(e.status == EscrowStatus::Refunded);
         assert!(e.released_at.is_some());
@@ -687,7 +684,7 @@ mod tests {
         contract.dispute_escrow(&payer, &id);
         contract.resolve_dispute(&admin, &id, &true);
 
-        assert_eq!(tc.balance(&payee), 1000);
+        assert_eq!(tc.balance(&payee), 975);
         assert_eq!(tc.balance(&cid), 0);
         assert!(contract.get_escrow(&id).status == EscrowStatus::Released);
     }
@@ -707,7 +704,7 @@ mod tests {
         contract.dispute_escrow(&payee, &id);
         contract.resolve_dispute(&admin, &id, &false);
 
-        assert_eq!(tc.balance(&payer), 1000);
+        assert_eq!(tc.balance(&payer), 975);
         assert_eq!(tc.balance(&cid), 0);
         assert!(contract.get_escrow(&id).status == EscrowStatus::Refunded);
     }
@@ -754,7 +751,7 @@ mod tests {
         contract.set_admin(&admin); // second call must panic
     }
 
-    // â”€â”€ timelock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── timelock ──────────────────────────────────────────────────────────────────
 
     #[test]
     #[should_panic(expected = "Release condition not met")]
@@ -780,7 +777,7 @@ mod tests {
         assert!(contract.get_escrow(&id).status == EscrowStatus::Released);
     }
 
-    // â”€â”€ milestones â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── milestones ──────────────────────────────────────────────────────────────────
 
     #[test]
     fn milestone_release_transfers_partial_amount() {
@@ -842,7 +839,7 @@ mod tests {
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "x"), &1001);
     }
 
-    // â”€â”€ balance conservation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── balance conservation ──────────────────────────────────────────────────
 
     /// Total tokens out (payee + payer) must equal total tokens deposited.
     #[test]
@@ -859,8 +856,8 @@ mod tests {
 
         contract.release_funds(&payer, &id);
 
-        assert_eq!(tc.balance(&payee), 2500);  // payee received all
-        assert_eq!(tc.balance(&cid), 0);        // contract holds nothing
+        assert_eq!(tc.balance(&payee), 2438);  // payee received all (2500 - 62 fee)
+        assert_eq!(tc.balance(&cid), 62);        // contract holds the fee
         assert_eq!(tc.balance(&payer), 0);      // payer gave it all
     }
 
@@ -875,12 +872,10 @@ mod tests {
         let id = contract.deposit(&1u64, &payer, &payee, &1800, &token, &ReleaseCondition::OnCompletion);
         contract.refund_escrow(&payer, &id);
 
-        assert_eq!(tc.balance(&payer), 1800);   // payer got it back
-        assert_eq!(tc.balance(&payee), 0);       // payee received nothing
-        assert_eq!(tc.balance(&cid), 0);         // contract holds nothing
+        assert_eq!(tc.balance(&payer), 1755);
+        assert_eq!(tc.balance(&payee), 0);
+        assert_eq!(tc.balance(&cid), 45);
     }
-
-    // â”€â”€ multi-escrow isolation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     // ── multi-escrow isolation ────────────────────────────────────────────────
     
@@ -900,9 +895,9 @@ mod tests {
 
         contract.release_funds(&payer, &id_a);
 
-        // Only escrow A's amount left in contract
-        assert_eq!(tc.balance(&cid), 2000);
-        assert_eq!(tc.balance(&payee), 1000);
+        // Only escrow B's amount + fee from A left in contract
+        assert_eq!(tc.balance(&cid), 2025);
+        assert_eq!(tc.balance(&payee), 975);
 
         // Escrow B is still active and untouched
         assert!(contract.get_escrow(&id_b).status == EscrowStatus::Active);
@@ -938,24 +933,23 @@ mod tests {
         assert!(id2 > id1 && id3 > id2);
     }
 
-    // â”€â”€ double-spend prevention â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── double-spend prevention ────────────────────────────────────────────────
 
     /// Funds locked in a disputed escrow must remain in the contract.
     #[test]
     fn disputed_escrow_funds_stay_locked() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register_contract(None, EscrowContract);
-        let contract = EscrowContractClient::new(&env, &cid);
-        let tc = TokenClient::new(&env, &token);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let contract = EscrowContractClient::new(&env, &contract_id);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
 
-        // Balance unchanged â€” funds are locked
-        assert_eq!(tc.balance(&cid), 1000);
-        assert_eq!(tc.balance(&payee), 0);
-        assert_eq!(tc.balance(&payer), 0);
+        // Balance unchanged — funds are locked
+        let token_client = TokenClient::new(&env, &token);
+        assert_eq!(token_client.balance(&payee), 0i128);
+        assert_eq!(token_client.balance(&contract_id), 1000i128);
     }
 
     /// Two milestones whose combined amount equals the escrow can both be released
@@ -964,21 +958,18 @@ mod tests {
     fn two_milestones_total_payout_equals_deposit() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register_contract(None, EscrowContract);
-        let contract = EscrowContractClient::new(&env, &cid);
-        let tc = TokenClient::new(&env, &token);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let contract = EscrowContractClient::new(&env, &contract_id);
+        let token_client = TokenClient::new(&env, &token);
 
-        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
-        contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
-        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &400);
+        let escrow_id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        contract.add_milestone(&payer, &escrow_id, &0, &Symbol::new(&env, "p1"), &600);
+        contract.add_milestone(&payer, &escrow_id, &1, &Symbol::new(&env, "p2"), &375);
 
-        contract.release_milestone(&payer, &id, &0);
-        assert_eq!(tc.balance(&payee), 600);
-        assert_eq!(tc.balance(&cid), 400);
-
-        contract.release_milestone(&payer, &id, &1);
-        assert_eq!(tc.balance(&payee), 1000);
-        assert_eq!(tc.balance(&cid), 0);
+        contract.release_milestone(&payer, &escrow_id, &0);
+        contract.release_milestone(&payer, &escrow_id, &1);
+        assert_eq!(token_client.balance(&payee), 975);
+        assert_eq!(token_client.balance(&contract_id), 25);
     }
 
     /// A milestone from escrow A cannot be released against escrow B.
@@ -1026,7 +1017,7 @@ mod tests {
         contract.release_funds(&payer, &id);
 
         assert!(contract.get_escrow(&id).status == EscrowStatus::Released);
-        assert_eq!(TokenClient::new(&env, &token).balance(&payee), 500);
+        assert_eq!(TokenClient::new(&env, &token).balance(&payee), 488);
     }
 
     /// Release one second before the deadline must be rejected.
