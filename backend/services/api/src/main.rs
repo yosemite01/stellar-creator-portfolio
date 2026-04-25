@@ -1706,8 +1706,8 @@ mod tests {
         >,
     > {
         App::new()
-            .route("/api/escrow/create", web::post().to(create_escrow))
-            .route("/api/escrow/{id}/refund", web::post().to(refund_escrow))
+            .route("/api/v1/escrow/create", web::post().to(create_escrow))
+            .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
     }
 
     #[actix_web::test]
@@ -1717,7 +1717,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/create")
+            .uri("/api/v1/escrow/create")
             .set_json(serde_json::json!({
                 "bountyId": "b-1",
                 "payerAddress": "GPAYER",
@@ -1738,7 +1738,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/create")
+            .uri("/api/v1/escrow/create")
             .insert_header(("Authorization", format!("Bearer {}", token)))
             .set_json(serde_json::json!({
                 "bountyId": "b-1",
@@ -1765,7 +1765,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_escrow_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/create")
+            .uri("/api/v1/escrow/create")
             .set_json(serde_json::json!({
                 "bountyId": "",
                 "payerAddress": "",
@@ -1789,7 +1789,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_escrow_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/create")
+            .uri("/api/v1/escrow/create")
             .set_json(serde_json::json!({
                 "bountyId": "b-1",
                 "payerAddress": "GPAYER",
@@ -1819,7 +1819,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/5/refund")
+            .uri("/api/v1/escrow/5/refund")
             .set_json(serde_json::json!({ "authorizerAddress": "GPAYER" }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
@@ -1834,7 +1834,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/5/refund")
+            .uri("/api/v1/escrow/5/refund")
             .insert_header(("Authorization", format!("Bearer {}", token)))
             .set_json(serde_json::json!({ "authorizerAddress": "GPAYER123" }))
             .to_request();
@@ -1854,7 +1854,7 @@ mod tests {
         use actix_web::test as awtest;
         let app = awtest::init_service(build_escrow_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/escrow/5/refund")
+            .uri("/api/v1/escrow/5/refund")
             .set_json(serde_json::json!({ "authorizerAddress": "" }))
             .to_request();
         let resp = awtest::call_service(&app, req).await;
