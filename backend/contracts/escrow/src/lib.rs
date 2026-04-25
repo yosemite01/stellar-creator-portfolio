@@ -1,4 +1,4 @@
-#![no_std]
+﻿#![no_std]
 
 extern crate alloc;
 use alloc::format;
@@ -26,6 +26,21 @@ pub enum ReleaseCondition {
     Timelock(u64),
 }
 
+// â”€â”€ Fee constants (#344) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/// Platform fee in basis points (2.5 %).
+pub const PLATFORM_FEE_BPS: i128 = 250;
+
+/// Maximum platform fee in token units (500 USDC-equivalent).
+pub const PLATFORM_FEE_CAP: i128 = 500;
+
+/// Compute the platform fee for a given gross amount.
+/// Fee = min(amount * 250 / 10_000, 500)
+pub fn platform_fee(amount: i128) -> i128 {
+    let raw = amount * PLATFORM_FEE_BPS / 10_000;
+    if raw > PLATFORM_FEE_CAP { PLATFORM_FEE_CAP } else { raw }
+}
+
 /// Escrow Account
 #[contracttype]
 pub struct EscrowAccount {
@@ -39,9 +54,10 @@ pub struct EscrowAccount {
     pub release_condition: ReleaseCondition,
     pub created_at: u64,
     pub released_at: Option<u64>,
+    pub fee_collected: i128,
 }
 
-/// Milestone — a named portion of the total escrow amount
+/// Milestone â€” a named portion of the total escrow amount
 #[contracttype]
 pub struct Milestone {
     pub escrow_id: u64,
@@ -76,17 +92,30 @@ impl EscrowContract {
         let mut counter: u64 = env.storage().persistent().get::<Symbol, u64>(&counter_key).unwrap_or(0);
         counter += 1;
 
+        let fee = platform_fee(amount);
+        let net_amount = amount - fee;
+
+        // Collect platform fee to admin if set, otherwise hold in contract
+        let admin_key = Symbol::new(&env, "platform_admin");
+        if let Some(admin_addr) = env.storage().persistent().get::<Symbol, Address>(&admin_key) {
+            if fee > 0 {
+                TokenClient::new(&env, &token)
+                    .transfer(&env.current_contract_address(), &admin_addr, &fee);
+            }
+        }
+
         let escrow = EscrowAccount {
             id: counter,
             bounty_id,
             payer,
             payee,
-            amount,
+            amount: net_amount,
             token,
             status: EscrowStatus::Active,
             release_condition,
             created_at: env.ledger().timestamp(),
             released_at: None,
+            fee_collected: fee,
         };
 
         env.storage().persistent().set(&Symbol::new(&env, &format!("escrow_{}", counter)), &escrow);
@@ -95,7 +124,7 @@ impl EscrowContract {
         // Emit escrow_deposited event for indexers
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("deposited")),
-            (counter, bounty_id, escrow.payer.clone(), escrow.payee.clone(), amount),
+            (counter, bounty_id, escrow.payer.clone(), escrow.payee.clone(), net_amount, fee),
         );
 
         counter
@@ -185,7 +214,7 @@ impl EscrowContract {
 
     /// Resolve a disputed escrow. Only the platform admin may call this.
     ///
-    /// `resolution`: `true` → release funds to payee; `false` → refund to payer.
+    /// `resolution`: `true` â†’ release funds to payee; `false` â†’ refund to payer.
     pub fn resolve_dispute(
         env: Env,
         admin: Address,
@@ -329,6 +358,12 @@ impl EscrowContract {
         }
     }
 
+    /// Return the platform fee that would be charged for a given gross amount.
+    /// Mirrors the `platform_fee` free function for on-chain queries.
+    pub fn calculate_fee(_env: Env, gross_amount: i128) -> i128 {
+        platform_fee(gross_amount)
+    }
+
     pub fn get_active_escrows_count(env: Env) -> u64 {
         env.storage()
             .persistent()
@@ -399,7 +434,50 @@ mod tests {
         (admin, token, payer, payee)
     }
 
-    // ── deposit ───────────────────────────────────────────────────────────────
+    // fee calculation (#344)
+    #[test]
+    fn fee_is_2_5_percent_of_amount() {
+        assert_eq!(platform_fee(1000), 25);
+        assert_eq!(platform_fee(400), 10);
+    }
+
+    #[test]
+    fn fee_is_capped_at_500() {
+        assert_eq!(platform_fee(30_000), 500);
+        assert_eq!(platform_fee(1_000_000), 500);
+    }
+
+    #[test]
+    fn fee_at_exact_cap_boundary() {
+        assert_eq!(platform_fee(20_000), 500);
+    }
+
+    #[test]
+    fn fee_is_zero_for_zero_amount() {
+        assert_eq!(platform_fee(0), 0);
+    }
+
+    #[test]
+    fn deposit_net_amount_reflects_fee_deduction() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let cid = env.register_contract(None, EscrowContract);
+        let contract = EscrowContractClient::new(&env, &cid);
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        let escrow = contract.get_escrow(&id);
+        assert_eq!(escrow.amount, 975);
+        assert_eq!(escrow.fee_collected, 25);
+    }
+
+    #[test]
+    fn calculate_fee_public_fn_matches_platform_fee() {
+        let env = Env::default();
+        let cid = env.register_contract(None, EscrowContract);
+        let contract = EscrowContractClient::new(&env, &cid);
+        assert_eq!(contract.calculate_fee(&1000), 25);
+        assert_eq!(contract.calculate_fee(&30_000), 500);
+    }
+    // â”€â”€ deposit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_deposit_escrow() {
@@ -426,7 +504,7 @@ mod tests {
         contract.deposit(&1u64, &payer, &payee, &0, &token, &ReleaseCondition::OnCompletion);
     }
 
-    // ── release ───────────────────────────────────────────────────────────────
+    // â”€â”€ release â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn release_moves_balance_once_to_payee() {
@@ -468,7 +546,7 @@ mod tests {
         contract.release_funds(&Address::generate(&env), &id);
     }
 
-    // ── refund ────────────────────────────────────────────────────────────────
+    // â”€â”€ refund â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn refund_returns_funds_to_payer_and_sets_released_at() {
@@ -529,7 +607,7 @@ mod tests {
         contract.release_funds(&payee, &id);
     }
 
-    // ── dispute ───────────────────────────────────────────────────────────────
+    // â”€â”€ dispute â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn payer_can_dispute_active_escrow() {
@@ -583,7 +661,7 @@ mod tests {
         contract.release_funds(&payee, &id);
     }
 
-    // ── resolve_dispute ───────────────────────────────────────────────────────
+    // â”€â”€ resolve_dispute â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn admin_can_resolve_dispute_to_payee() {
@@ -667,7 +745,7 @@ mod tests {
         contract.set_admin(&admin); // second call must panic
     }
 
-    // ── timelock ──────────────────────────────────────────────────────────────
+    // â”€â”€ timelock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     #[should_panic(expected = "Release condition not met")]
@@ -693,7 +771,7 @@ mod tests {
         assert!(contract.get_escrow(&id).status == EscrowStatus::Released);
     }
 
-    // ── milestones ────────────────────────────────────────────────────────────
+    // â”€â”€ milestones â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn milestone_release_transfers_partial_amount() {
@@ -755,7 +833,7 @@ mod tests {
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "x"), &1001);
     }
 
-    // ── balance conservation ──────────────────────────────────────────────────
+    // â”€â”€ balance conservation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Total tokens out (payee + payer) must equal total tokens deposited.
     #[test]
@@ -793,7 +871,7 @@ mod tests {
         assert_eq!(tc.balance(&cid), 0);         // contract holds nothing
     }
 
-    // ── multi-escrow isolation ────────────────────────────────────────────────
+    // â”€â”€ multi-escrow isolation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Releasing escrow A must not affect escrow B's locked balance.
     #[test]
@@ -836,7 +914,7 @@ mod tests {
         assert!(id2 > id1 && id3 > id2);
     }
 
-    // ── double-spend prevention ───────────────────────────────────────────────
+    // â”€â”€ double-spend prevention â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Funds locked in a disputed escrow must remain in the contract.
     #[test]
@@ -850,7 +928,7 @@ mod tests {
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
 
-        // Balance unchanged — funds are locked
+        // Balance unchanged â€” funds are locked
         assert_eq!(tc.balance(&cid), 1000);
         assert_eq!(tc.balance(&payee), 0);
         assert_eq!(tc.balance(&payer), 0);
@@ -906,7 +984,7 @@ mod tests {
         contract.deposit(&1u64, &payer, &payee, &-1, &token, &ReleaseCondition::OnCompletion);
     }
 
-    // ── timelock boundary ─────────────────────────────────────────────────────
+    // â”€â”€ timelock boundary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Release at exactly the deadline timestamp must succeed.
     #[test]

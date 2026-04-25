@@ -232,3 +232,42 @@ export async function releaseEscrow(
     body: JSON.stringify({ authorizerAddress }),
   });
 }
+
+// ── Webhook types ─────────────────────────────────────────────────────────────
+
+export type WebhookEventType =
+  | 'payment_succeeded'
+  | 'payment_failed'
+  | 'payment_refunded'
+  | 'dispute_opened'
+  | 'dispute_resolved';
+
+export interface WebhookPayload {
+  event_type: WebhookEventType;
+  escrow_id: string;
+  amount: number;
+  timestamp: string;
+  provider_event_id: string;
+}
+
+export interface WebhookAck {
+  received: boolean;
+  escrow_id: string;
+  action_taken: string;
+}
+
+/**
+ * POST /api/v1/webhooks/payment — forward an external payment event to the
+ * backend webhook handler. Primarily used in server-side code or tests;
+ * the real webhook endpoint is called directly by the payment provider.
+ */
+export async function forwardPaymentWebhook(
+  payload: WebhookPayload,
+  signature: string,
+): Promise<WebhookAck> {
+  return apiFetch(`${API_BASE}/webhooks/payment`, {
+    method: 'POST',
+    headers: { 'X-Webhook-Signature': signature },
+    body: JSON.stringify(payload),
+  });
+}
