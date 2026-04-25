@@ -2,7 +2,6 @@
 
 import React from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { ErrorBoundary } from './error-boundary';
 
 interface ChartData {
   name: string;
@@ -56,9 +55,5 @@ const ChartContent: React.FC<CorridorChartsProps> = ({ data = [], title = 'Chart
 };
 
 export const CorridorCharts: React.FC<CorridorChartsProps> = (props) => {
-  return (
-    <ErrorBoundary>
-      <ChartContent {...props} />
-    </ErrorBoundary>
-  );
+  return <ChartContent {...props} />;
 };
