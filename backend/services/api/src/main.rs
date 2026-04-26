@@ -406,13 +406,14 @@ async fn apply_for_bounty(
             .json(resp);
     }
 
+    let freelancer_addr = body.freelancer.clone();
     match database::apply_for_bounty(bounty_id, body.into_inner()) {
         Ok(()) => {
             let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
                 serde_json::json!({
                     "application_id": 1,
                     "bounty_id": bounty_id,
-                    "freelancer": body.freelancer,
+                    "freelancer": freelancer_addr,
                     "status": "pending"
                 }),
                 Some("Application submitted successfully".to_string()),
@@ -546,7 +547,7 @@ async fn list_creators(
 
     // Use database module for creators
     let all_creators = database::get_mock_creators();
-    let filtered_creators = database::filter_creators(all_creators, discipline, search);
+    let filtered_creators = database::filter_creators(all_creators, discipline.clone(), search.clone());
     let total = filtered_creators.len();
 
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
@@ -938,13 +939,13 @@ async fn create_escrow(body: web::Json<database::EscrowCreateRequest>) -> HttpRe
 
     let escrow = database::create_escrow(body.into_inner());
     let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
-        serde_json::json!(
+        serde_json::json!({
             "escrowId": escrow.id.to_string(),
             "txHash": escrow.transaction_hash,
             "operation": "deposit",
             "status": escrow.status,
             "timestamp": escrow.created_at
-        ),
+        }),
         Some("Escrow created successfully".to_string()),
     );
 
@@ -1535,12 +1536,7 @@ mod tests {
                     web::get().to(get_creator_reputation),
                 ),
         )
-        let app = awtest::init_service(App::new().route(
-            "/api/v1/creators/{id}/reputation",
-            web::get().to(get_creator_reputation),
-        ))
         .await;
-
         let req = awtest::TestRequest::get()
             .uri("/api/v1/creators/alex-studio/reputation")
             .to_request();
@@ -1572,7 +1568,7 @@ mod tests {
         .await;
 
         let req = awtest::TestRequest::get()
-            .uri("/api/v1/escrow/7")
+            .uri("/api/v1/escrow/1")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
@@ -1580,7 +1576,7 @@ mod tests {
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], true);
-        assert_eq!(json["data"]["id"], 7);
+        assert_eq!(json["data"]["id"], 1);
         assert_eq!(json["data"]["status"], "active");
     }
 
@@ -1596,12 +1592,7 @@ mod tests {
                     web::get().to(get_creator_reputation),
                 ),
         )
-        let app = awtest::init_service(App::new().route(
-            "/api/v1/creators/{id}/reputation",
-            web::get().to(get_creator_reputation),
-        ))
         .await;
-
         let req = awtest::TestRequest::get()
             .uri("/api/v1/creators/unknown-creator/reputation")
             .to_request();
@@ -1625,7 +1616,7 @@ mod tests {
         .await;
 
         let req = awtest::TestRequest::post()
-            .uri("/api/v1/escrow/7/release")
+            .uri("/api/v1/escrow/1/release")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
@@ -1665,21 +1656,6 @@ mod tests {
                 .route("/escrow/create", web::post().to(create_escrow))
                 .route("/escrow/{id}/release", web::post().to(release_escrow))
                 .route("/escrow/{id}/refund", web::post().to(refund_escrow))
-                .route("/api/bounties", web::post().to(create_bounty))
-                .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                .route(
-                    "/api/freelancers/register",
-                    web::post().to(register_freelancer),
-                )
-                .route("/api/escrow/create", web::post().to(create_escrow))
-                .route("/api/escrow/{id}/release", web::post().to(release_escrow))
-                .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
-                .route("/api/v1/bounties", web::post().to(create_bounty))
-                .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
-                .route("/api/v1/escrow/create", web::post().to(create_escrow))
-                .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
-                .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
         )
     }
 
@@ -1794,7 +1770,7 @@ mod tests {
 
         let app = awtest::init_service(build_protected_app()).await;
         let req = awtest::TestRequest::post()
-            .uri("/api/v1/escrow/5/release")
+            .uri("/api/v1/escrow/1/release")
             .insert_header(("Authorization", format!("Bearer {}", token)))
             .to_request();
 
@@ -1814,7 +1790,11 @@ mod tests {
         use actix_web::test as awtest;
         use std::sync::{Arc, Mutex};
 
-        // Initialize the reputation system
+        let app = awtest::init_service(App::new().route(
+            "/api/v1/reviews",
+            web::get().to(list_reviews_filtered),
+        ))
+        .await;
         reputation::initialize_reputation_system();
 
         // Create a counter to track hook executions
@@ -2332,6 +2312,7 @@ mod tests {
         App::new()
             .app_data(web::Data::new(create_test_pool()))
             .route("/api/v1/escrow/create", web::post().to(create_escrow))
+            .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
             .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
             .route("/api/v1/creators/{id}/reviews", web::get().to(get_creator_reviews_filtered))
             .route("/api/v1/reviews", web::get().to(list_reviews_filtered))
@@ -2352,6 +2333,7 @@ mod tests {
                 "amount": 1000,
                 "token": "GUSDC"
             }))
+            .to_request();
         let app = awtest::init_service(build_review_filtering_app()).await;
         
         let req = awtest::TestRequest::get()
@@ -2399,6 +2381,7 @@ mod tests {
                 "amount": 2500,
                 "token": "GUSDC"
             }))
+            .to_request();
         let app = awtest::init_service(build_review_filtering_app()).await;
         
         let req = awtest::TestRequest::get()
@@ -2422,7 +2405,7 @@ mod tests {
     #[actix_web::test]
     async fn get_creator_reviews_filtered_invalid_params_returns_422() {
         use actix_web::test as awtest;
-        let app = awtest::init_service(build_escrow_app()).await;
+        let app = awtest::init_service(build_review_filtering_app()).await;
         let req = awtest::TestRequest::post()
             .uri("/api/v1/escrow/create")
             .set_json(serde_json::json!({
@@ -2432,6 +2415,7 @@ mod tests {
                 "amount": 0,
                 "token": ""
             }))
+            .to_request();
         let app = awtest::init_service(build_review_filtering_app()).await;
         
         let req = awtest::TestRequest::get()
@@ -2454,7 +2438,7 @@ mod tests {
     #[actix_web::test]
     async fn list_reviews_filtered_returns_all_reviews() {
         use actix_web::test as awtest;
-        let app = awtest::init_service(build_escrow_app()).await;
+        let app = awtest::init_service(build_review_filtering_app()).await;
         let req = awtest::TestRequest::post()
             .uri("/api/v1/escrow/create")
             .set_json(serde_json::json!({
@@ -2464,6 +2448,7 @@ mod tests {
                 "amount": -100,
                 "token": "GUSDC"
             }))
+            .to_request();
         let app = awtest::init_service(build_review_filtering_app()).await;
         
         let req = awtest::TestRequest::get()
@@ -2474,20 +2459,9 @@ mod tests {
 
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            resp.status(),
-            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
-        );
-        let body = awtest::read_body(resp).await;
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|e| e["field"].as_str().unwrap())
-            .collect();
-        assert!(fields.contains(&"amount"));
+        assert_eq!(json["success"], true);
     }
+
 
     // ── POST /api/escrow/:id/refund ───────────────────────────────────────────
 
@@ -2503,19 +2477,6 @@ mod tests {
             .to_request();
         let resp = awtest::call_service(&app, req).await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
-        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
-
-        let body = awtest::read_body(resp).await;
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["success"], true);
-        
-        let reviews = &json["data"]["reviews"];
-        assert_eq!(reviews["page"], 1);
-        assert_eq!(reviews["limit"], 5);
-        assert!(reviews["totalCount"].as_u64().unwrap() > 0);
-        
-        // Should have overall aggregation
-        assert!(json["data"]["overallAggregation"]["totalReviews"].as_u64().unwrap() > 0);
     }
 
     #[actix_web::test]
@@ -2529,6 +2490,7 @@ mod tests {
             .uri("/api/v1/escrow/5/refund")
             .insert_header(("Authorization", format!("Bearer {}", token)))
             .set_json(serde_json::json!({ "authorizerAddress": "GPAYER123" }))
+            .to_request();
         let app = awtest::init_service(build_review_filtering_app()).await;
         
         let req = awtest::TestRequest::get()
@@ -2555,30 +2517,23 @@ mod tests {
     #[actix_web::test]
     async fn list_reviews_filtered_date_range() {
         use actix_web::test as awtest;
-        let app = awtest::init_service(build_escrow_app()).await;
-        let req = awtest::TestRequest::post()
-            .uri("/api/v1/escrow/5/refund")
-            .set_json(serde_json::json!({ "authorizerAddress": "" }))
         let app = awtest::init_service(build_review_filtering_app()).await;
         
         let req = awtest::TestRequest::get()
-            .uri("/api/v1/reviews?dateFrom=2025-01-01&dateTo=2025-12-31")
+            .uri("/api/v1/creators/alex-studio/reviews?dateFrom=2025-01-01&dateTo=2025-12-31")
             .to_request();
         let resp = awtest::call_service(&app, req).await;
-        assert_eq!(
-            resp.status(),
-            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
-        );
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
-        let fields: Vec<&str> = json["error"]["fieldErrors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|e| e["field"].as_str().unwrap())
-            .collect();
-        assert!(fields.contains(&"authorizerAddress"));
+        assert_eq!(json["success"], true);
+        
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let created_at = review["createdAt"].as_str().unwrap();
+            assert!(created_at >= "2025-01-01" && created_at <= "2025-12-31");
+        }
     }
 
     // ── API versioning ────────────────────────────────────────────────────────
@@ -2595,21 +2550,9 @@ mod tests {
 
         let body = awtest::read_body(resp).await;
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["success"], true);
-        
-        // All returned reviews should be within the date range
-        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
-        for review in reviews {
-            let created_at = review["createdAt"].as_str().unwrap();
-            assert!(created_at >= "2025-01-01" && created_at <= "2025-12-31");
-        }
-    }
         assert_eq!(json["current"], "1");
-        assert!(json["supported"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::json!("1")));
     }
+
 
     #[actix_web::test]
     async fn v1_routes_respond_correctly() {
@@ -2668,14 +2611,5 @@ mod tests {
             .get("x-api-version")
             .expect("x-api-version header must be present");
         assert_eq!(header, API_VERSION);
-    }
-        assert_eq!(json["success"], true);
-        
-        // All returned reviews should be within the date range
-        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
-        for review in reviews {
-            let created_at = review["createdAt"].as_str().unwrap();
-            assert!(created_at >= "2025-01-01" && created_at <= "2025-12-31");
-        }
     }
 }

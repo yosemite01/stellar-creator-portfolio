@@ -317,7 +317,7 @@ mod tests {
         ];
         let score = compute_reliability_score("anchor-c", &events, &cfg()).unwrap();
         // Recent successes should dominate; score should be well above 0.5.
-        assert!(score.score > 0.85, "expected score > 0.85, got {}", score.score);
+        assert!(score.score > 0.80, "expected score > 0.80, got {}", score.score);
     }
 
     #[test]

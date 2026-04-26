@@ -43,6 +43,7 @@ pub struct ReputationAggregation {
     pub stars_3: u32,
     pub stars_2: u32,
     pub stars_1: u32,
+    pub reliability_score: f64,
     pub is_verified: bool,
 }
 
@@ -484,6 +485,7 @@ pub async fn fetch_creator_reputation_from_db(creator_id: &str) -> ReputationAgg
             stars_2: stars_2 as u32,
             stars_1: stars_1 as u32,
             is_verified,
+            reliability_score: average_rating.unwrap_or(0.0) / 5.0, // Placeholder until DB schema update
         },
         Ok(None) => {
             tracing::info!("No reputation data found in database for creator {}, calculating from reviews", creator_id);
@@ -570,6 +572,7 @@ pub fn aggregate_reviews(reviews: &[Review]) -> ReputationAggregation {
         (raw * 100.0).round() / 100.0
     };
 
+    let reliability_score = compute_reliability_score(reviews);
     let is_verified = count >= 3 && average_rating >= 4.5;
 
     ReputationAggregation {
@@ -580,7 +583,62 @@ pub fn aggregate_reviews(reviews: &[Review]) -> ReputationAggregation {
         stars_3: stars[2],
         stars_2: stars[1],
         stars_1: stars[0],
+        reliability_score,
         is_verified,
+    }
+}
+
+/// Compute a time-decayed reliability score [0.0, 1.0].
+///
+/// Each review is weighted by e^(-λ * age_days).
+/// λ = 0.02 (half-life ≈ 35 days).
+fn compute_reliability_score(reviews: &[Review]) -> f64 {
+    if reviews.is_empty() {
+        return 0.0;
+    }
+
+    let now = chrono::Utc::now();
+    let lambda = 0.02;
+    let mut weighted_sum = 0.0;
+    let mut total_weight = 0.0;
+
+    for r in reviews {
+        if !(1..=5).contains(&r.rating) {
+            continue;
+        }
+
+        // Parse date (support both full ISO and simple YYYY-MM-DD)
+        let created_at = if r.created_at.contains('T') {
+            chrono::DateTime::parse_from_rfc3339(&r.created_at)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now())
+        } else {
+            chrono::NaiveDate::parse_from_str(&r.created_at, "%Y-%m-%d")
+                .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default())
+                .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now())
+        };
+
+        let age_days = now.signed_duration_since(created_at).num_seconds() as f64 / 86400.0;
+        let weight = (-lambda * age_days.max(0.0)).exp();
+
+        let value = match r.rating {
+            5 => 1.0,
+            4 => 0.8,
+            3 => 0.5,
+            2 => 0.2,
+            _ => 0.0,
+        };
+
+        weighted_sum += value * weight;
+        total_weight += weight;
+    }
+
+    if total_weight > 0.0 {
+        let score = weighted_sum / total_weight;
+        (score * 100.0).round() / 100.0
+    } else {
+        0.0
     }
 }
 
@@ -1473,9 +1531,68 @@ mod tests {
         assert_eq!(result.creator_id, "alex-studio");
         assert!(result.aggregation.total_reviews > 0);
         assert!(result.reviews.total_count <= result.aggregation.total_reviews);
+        assert!(result.aggregation.reliability_score > 0.0);
         
         // All returned reviews should have rating >= 4
         assert!(result.reviews.reviews.iter().all(|r| r.rating >= 4));
+    }
+
+    #[test]
+    fn test_reliability_score_time_decay() {
+        let now = chrono::Utc::now();
+        let recent_date = now.to_rfc3339();
+        let old_date = (now - chrono::Duration::days(100)).to_rfc3339();
+
+        // Scenario 1: Recent high rating, old low rating
+        let reviews_a = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: recent_date.clone(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 1,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: old_date.clone(),
+            },
+        ];
+        let score_a = compute_reliability_score(&reviews_a);
+
+        // Scenario 2: Old high rating, recent low rating
+        let reviews_b = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c2".into(),
+                rating: 1,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: recent_date,
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c2".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: old_date,
+            },
+        ];
+        let score_b = compute_reliability_score(&reviews_b);
+
+        // Score A should be much higher than Score B because the 5-star is recent in A
+        assert!(score_a > score_b, "Recent high rating should outweigh old low rating. A: {}, B: {}", score_a, score_b);
+        assert!(score_a > 0.7); // Should be close to 1.0
+        assert!(score_b < 0.3); // Should be close to 0.0
     }
 
     // ── Tests for review submission hooks ─────────────────────────────────────

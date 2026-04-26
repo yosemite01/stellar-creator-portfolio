@@ -203,6 +203,27 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
                 {hasFilters && ` (filtered from ${aggregation.totalReviews} total)`}
               </p>
             </div>
+            
+            {/* Reliability Index - NEW FEATURE #372 */}
+            <div className="flex-1 flex justify-end">
+              <div className="bg-primary/5 border border-primary/10 rounded-xl p-4 flex flex-col items-center min-w-[140px] transition-all hover:bg-primary/10 group">
+                <div className="text-2xl font-bold text-primary group-hover:scale-110 transition-transform">
+                  {Math.round(aggregation.reliabilityScore * 100)}%
+                </div>
+                <div className="text-[10px] uppercase tracking-wider font-bold text-primary/60 mt-1">
+                  Reliability Index
+                </div>
+                <div className="w-full h-1 bg-primary/20 rounded-full mt-3 overflow-hidden">
+                  <div 
+                    className="h-full bg-primary transition-all duration-1000 ease-out" 
+                    style={{ width: `${Math.round(aggregation.reliabilityScore * 100)}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-2 text-center leading-tight">
+                  Weighted by recency & <br/>review consistency
+                </p>
+              </div>
+            </div>
           </div>
 
           <Histogram 
