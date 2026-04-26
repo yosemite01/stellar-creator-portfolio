@@ -313,6 +313,8 @@ export interface Bounty {
   tags: string[];
   applicants: number;
   status: 'open' | 'in-progress' | 'completed' | 'cancelled';
+  paymentStatus: 'unfunded' | 'funded' | 'released' | 'refunded';
+  escrowId?: string;
   postedBy: string;
   postedDate: Date;
   requiredSkills: string[];
@@ -344,6 +346,8 @@ export const bounties: Bounty[] = [
     tags: ['Branding', 'Design', 'Web3', 'Logo Design'],
     applicants: 12,
     status: 'open',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-1',
     postedBy: 'company-1',
     postedDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
     requiredSkills: ['Brand Design', 'Logo Design', 'Typography', 'Figma'],
@@ -361,6 +365,8 @@ export const bounties: Bounty[] = [
     tags: ['API Docs', 'Technical Writing', 'Documentation'],
     applicants: 8,
     status: 'open',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-2',
     postedBy: 'company-2',
     postedDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
     requiredSkills: ['Technical Writing', 'API Knowledge', 'Markdown'],
@@ -378,6 +384,7 @@ export const bounties: Bounty[] = [
     tags: ['Social Media', 'Content', 'Video', 'Graphics'],
     applicants: 15,
     status: 'open',
+    paymentStatus: 'unfunded',
     postedBy: 'company-3',
     postedDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
     requiredSkills: ['Video Production', 'Graphic Design', 'Copywriting', 'Social Media'],
@@ -394,7 +401,9 @@ export const bounties: Bounty[] = [
     category: 'UX Research',
     tags: ['UX Research', 'User Testing', 'Mobile App', 'Analytics'],
     applicants: 6,
-    status: 'open',
+    status: 'completed',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-4',
     postedBy: 'company-4',
     postedDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
     requiredSkills: ['UX Research', 'User Testing', 'Analysis', 'Reporting'],
