@@ -14,6 +14,7 @@ mod event_indexer;
 mod reputation;
 mod verification_rewards;
 mod webhook;
+mod websocket;
 
 pub const API_VERSION: &str = "1";
 pub const API_PREFIX: &str = "/api/v1";
@@ -1268,10 +1269,12 @@ async fn main() -> std::io::Result<()> {
     let host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
     tracing::info!("Server starting on {}:{}", host, port);
+    let ws_limiter = websocket::WsConnectionLimiter::from_env();
 
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(ws_limiter.clone()))
             .wrap(cors_middleware())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
@@ -1279,6 +1282,8 @@ async fn main() -> std::io::Result<()> {
             // Health check & version discovery (unversioned)
             .route("/health", web::get().to(health))
             .route("/api/versions", web::get().to(api_versions))
+            .route("/ws", web::get().to(websocket::ws_handler))
+            .route("/api/v1/ws/metrics", web::get().to(websocket::websocket_metrics))
             // v1 public read-only routes
             .service(
                 web::scope("/api/v1")
