@@ -5,10 +5,11 @@ import type { ApiResponse, CreatorReputationPayload, PublicReview, ReputationAgg
 import { isApiSuccess } from '@/lib/api-models';
 import { ReviewList } from '@/components/review-list';
 import { ReviewFilters, type ReviewFilterOptions } from '@/components/review-filters';
+import { ReviewForm } from '@/components/review-form';
 import { ErrorAlert } from '@/components/error-alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { CheckCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CheckCircle, ChevronLeft, ChevronRight, Star } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -33,13 +34,12 @@ function StarRow({ value, max = 5 }: { value: number; max?: number }) {
   return (
     <div className="flex gap-0.5" aria-label={`${value.toFixed(2)} out of ${max} stars`}>
       {Array.from({ length: max }, (_, i) => (
-        <span
+        <Star
           key={i}
-          className={i < rounded ? 'text-amber-500' : 'text-muted-foreground/40'}
+          size={16}
+          className={i < rounded ? 'fill-amber-500 text-amber-500' : 'text-muted-foreground/40'}
           aria-hidden
-        >
-          ★
-        </span>
+        />
       ))}
     </div>
   );
@@ -64,7 +64,7 @@ function Histogram({
   ];
 
   return (
-    <div className="space-y-2 mt-6" aria-label="Rating distribution">
+    <div className="space-y-2 mt-6" aria-label="Rating breakdown">
       <p className="text-sm font-semibold text-foreground">{title}</p>
       {rows.map((row) => {
         const pct = Math.round((row.count / total) * 100);
@@ -89,6 +89,7 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
   const [payload, setPayload] = useState<FilteredReputationPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [showReviewForm, setShowReviewForm] = useState(false);
   const [filters, setFilters] = useState<ReviewFilterOptions>({
     page: 1,
     limit: 10,
@@ -166,26 +167,73 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
   const displayAggregation = filteredAggregation || aggregation;
   const hasFilters = filteredAggregation !== undefined;
 
-  // Return null if there are no reviews at all
-  if (aggregation.totalReviews === 0) {
-    return null;
+  // Return empty section if no reviews, but show form option
+  if (aggregation.totalReviews === 0 && !showReviewForm) {
+    return (
+      <section className="border-b border-border bg-muted/20 py-12">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <h2 className="text-2xl font-bold text-foreground mb-4">No reviews yet</h2>
+          <p className="text-muted-foreground mb-8">Be the first to share your experience working with this creator.</p>
+          <Button onClick={() => setShowReviewForm(true)}>Write a Review</Button>
+          {showReviewForm && (
+            <div className="mt-8 text-left max-w-2xl mx-auto">
+              <ReviewForm 
+                creatorId={creatorId} 
+                creatorName="this creator" 
+                bountyId={`demo-${Math.random().toString(36).substring(7)}`}
+                onSuccess={() => {
+                  setShowReviewForm(false);
+                  loadReviews(filters);
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </section>
+    );
   }
 
   return (
     <section className="border-b border-border bg-muted/20 py-12">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex flex-wrap items-center gap-3 mb-2">
-          <h2 className="text-2xl font-bold text-foreground">Client reviews</h2>
-          {aggregation.isVerified && (
-            <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 px-3 py-1 gap-1.5 rounded-full hover:bg-emerald-500/15 transition-colors">
-              <CheckCircle size={14} className="fill-emerald-600/10" />
-              Verified Creator
-            </Badge>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+          <div>
+            <div className="flex flex-wrap items-center gap-3 mb-2">
+              <h2 className="text-2xl font-bold text-foreground">Client reviews</h2>
+              {aggregation.isVerified && (
+                <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 px-3 py-1 gap-1.5 rounded-full hover:bg-emerald-500/15 transition-colors">
+                  <CheckCircle size={14} className="fill-emerald-600/10" />
+                  Verified Creator
+                </Badge>
+              )}
+            </div>
+            <p className="text-muted-foreground">
+              Ratings from verified clients who worked with this creator.
+            </p>
+          </div>
+          
+          <Button 
+            onClick={() => setShowReviewForm(!showReviewForm)}
+            variant={showReviewForm ? "outline" : "default"}
+          >
+            {showReviewForm ? "Cancel Review" : "Write a Review"}
+          </Button>
         </div>
-        <p className="text-muted-foreground mb-8">
-          Ratings from verified clients who worked with this creator.
-        </p>
+
+        {showReviewForm && (
+          <div className="mb-12 animate-in fade-in slide-in-from-top-4 duration-300">
+            <ReviewForm 
+              creatorId={creatorId} 
+              creatorName="this creator" 
+              bountyId={`demo-${Math.random().toString(36).substring(7)}`}
+              onSuccess={() => {
+                setShowReviewForm(false);
+                loadReviews(filters); // Refresh reviews
+              }}
+              onCancel={() => setShowReviewForm(false)}
+            />
+          </div>
+        )}
 
         <div className="bg-card border border-border rounded-xl p-6 sm:p-8">
           <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-8">

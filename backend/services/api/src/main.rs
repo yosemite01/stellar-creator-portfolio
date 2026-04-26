@@ -3,6 +3,7 @@ use actix_web::body::MessageBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::{http, middleware, web, App, HttpResponse, HttpServer};
 use futures::future::{ok, Ready};
+use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
@@ -784,6 +785,7 @@ async fn submit_review(
             message: "Your name is required".into(),
         });
     }
+
     if !field_errors.is_empty() {
         let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
             ApiErrorCode::ValidationError,
@@ -803,7 +805,7 @@ async fn submit_review(
         &body.title,
         &body.body,
         &body.reviewer_name,
-    ) {
+    ).await {
         Ok(review_id) => {
             let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
                 serde_json::json!({ 
@@ -1803,12 +1805,15 @@ mod tests {
 
         // Register a test hook
         reputation::register_review_submitted_hook(move |event| {
-            let mut count = counter_clone.lock().unwrap();
-            *count += 1;
-            // Don't assert specific values since tests run in parallel with different data
-            assert!(event.rating >= 1 && event.rating <= 5);
-            assert!(!event.creator_id.is_empty());
-            Ok(())
+            let inner_counter = counter_clone.clone();
+            async move {
+                let mut count = inner_counter.lock().unwrap();
+                *count += 1;
+                // Don't assert specific values since tests run in parallel with different data
+                assert!(event.rating >= 1 && event.rating <= 5);
+                assert!(!event.creator_id.is_empty());
+                Ok(())
+            }.boxed()
         });
 
         // Create a mock database pool for testing
@@ -1854,10 +1859,13 @@ mod tests {
         let counter_clone = hook_counter.clone();
 
         reputation::register_review_submitted_hook(move |_| {
-            if let Ok(mut count) = counter_clone.lock() {
-                *count += 1;
-            }
-            Ok(())
+            let inner_counter = counter_clone.clone();
+            async move {
+                if let Ok(mut count) = inner_counter.lock() {
+                    *count += 1;
+                }
+                Ok(())
+            }.boxed()
         });
 
         let app = awtest::init_service(build_review_app()).await;
@@ -1892,7 +1900,9 @@ mod tests {
 
         // Register a hook that always fails
         reputation::register_review_submitted_hook(|_| {
-            Err("Simulated hook failure".to_string())
+            async move {
+                Err("Simulated hook failure".to_string())
+            }.boxed()
         });
 
         let app = awtest::init_service(build_review_app()).await;

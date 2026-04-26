@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use sqlx::PgPool;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 
 /// Internal review row (includes `creator_id` for filtering).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -126,7 +128,7 @@ pub struct ReviewSubmittedEvent {
 }
 
 /// Hook callback function type for review submission events
-pub type ReviewSubmittedHook = Arc<dyn Fn(&ReviewSubmittedEvent) -> Result<(), String> + Send + Sync>;
+pub type ReviewSubmittedHook = Arc<dyn Fn(ReviewSubmittedEvent) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 
 /// Global registry for review submission hooks
 static REVIEW_HOOKS: Mutex<Vec<ReviewSubmittedHook>> = Mutex::new(Vec::new());
@@ -149,7 +151,7 @@ fn get_database_pool() -> Option<PgPool> {
 /// Register a hook to be called when a review is submitted
 pub fn register_review_submitted_hook<F>(hook: F) 
 where 
-    F: Fn(&ReviewSubmittedEvent) -> Result<(), String> + Send + Sync + 'static,
+    F: Fn(ReviewSubmittedEvent) -> BoxFuture<'static, Result<(), String>> + Send + Sync + 'static,
 {
     if let Ok(mut hooks) = REVIEW_HOOKS.lock() {
         hooks.push(Arc::new(hook));
@@ -158,8 +160,15 @@ where
     }
 }
 
+/// Clear all registered hooks (primarily for testing)
+pub fn clear_review_submitted_hooks() {
+    if let Ok(mut hooks) = REVIEW_HOOKS.lock() {
+        hooks.clear();
+    }
+}
+
 /// Trigger all registered hooks when a review is submitted
-pub fn trigger_review_submitted_hooks(event: &ReviewSubmittedEvent) -> Vec<String> {
+pub async fn trigger_review_submitted_hooks(event: &ReviewSubmittedEvent) -> Vec<String> {
     let hooks = match REVIEW_HOOKS.lock() {
         Ok(hooks) => hooks.clone(),
         Err(_) => {
@@ -171,7 +180,7 @@ pub fn trigger_review_submitted_hooks(event: &ReviewSubmittedEvent) -> Vec<Strin
     let mut errors = Vec::new();
     
     for hook in hooks.iter() {
-        if let Err(e) = hook(event) {
+        if let Err(e) = hook(event.clone()).await {
             errors.push(format!("Hook execution failed: {}", e));
         }
     }
@@ -180,7 +189,7 @@ pub fn trigger_review_submitted_hooks(event: &ReviewSubmittedEvent) -> Vec<Strin
 }
 
 /// Process a new review submission and trigger hooks
-pub fn on_review_submitted(
+pub async fn on_review_submitted(
     bounty_id: &str,
     creator_id: &str,
     rating: u8,
@@ -204,7 +213,7 @@ pub fn on_review_submitted(
         validation_errors.push("Title is required".to_string());
     }
     if body.trim().is_empty() {
-        validation_errors.push("Review body is required".to_string());
+        validation_errors.push("Body is required".to_string());
     }
     if reviewer_name.trim().is_empty() {
         validation_errors.push("Reviewer name is required".to_string());
@@ -214,43 +223,31 @@ pub fn on_review_submitted(
         return Err(validation_errors);
     }
     
-    // Generate review ID and timestamp
-    let review_id = format!("rev-{}-{}-{}", creator_id, bounty_id, 
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos());
-    let submitted_at = chrono::Utc::now().to_rfc3339();
-    
-    // Create the review event
+    // Create the event data
     let event = ReviewSubmittedEvent {
-        review_id: review_id.clone(),
+        review_id: format!("rev-{}-{}-{}", creator_id, bounty_id, uuid::Uuid::new_v4()),
         creator_id: creator_id.to_string(),
         rating,
         title: title.to_string(),
         body: body.to_string(),
         reviewer_name: reviewer_name.to_string(),
         bounty_id: bounty_id.to_string(),
-        submitted_at,
+        submitted_at: chrono::Utc::now().to_rfc3339(),
     };
     
-    // Trigger all registered hooks
-    let hook_errors = trigger_review_submitted_hooks(&event);
+    // Trigger all registered hooks asynchronously
+    let hook_errors = trigger_review_submitted_hooks(&event).await;
     
-    // Database integration is now handled by hooks
-    // The database_reputation_update_hook will save to database
-    // If database is not available, it falls back to in-memory store
-    
-    if !hook_errors.is_empty() {
-        tracing::warn!("Some hooks failed during review submission: {:?}", hook_errors);
-        // We still return success since the review was saved, but log the hook failures
+    if hook_errors.is_empty() {
+        Ok(event.review_id)
+    } else {
+        // Log errors but still return success if the review was processed
+        // In this implementation, we return Err if hooks fail to alert the caller,
+        // but for unit tests we need to be careful with global state.
+        Err(hook_errors)
     }
-    
-    tracing::info!("Review submitted successfully: {} for creator {}", review_id, creator_id);
-    Ok(review_id)
 }
-
-/// Add a review to the database (production implementation)
+    
 async fn save_review_to_database(event: &ReviewSubmittedEvent) -> Result<(), String> {
     let pool = match get_database_pool() {
         Some(pool) => pool,
@@ -314,10 +311,10 @@ async fn save_review_to_database(event: &ReviewSubmittedEvent) -> Result<(), Str
 }
 
 /// Database-backed reputation update hook
-fn database_reputation_update_hook(event: &ReviewSubmittedEvent) -> Result<(), String> {
-    // Use tokio to run async database operation in sync context
-    let rt = tokio::runtime::Handle::current();
-    rt.block_on(save_review_to_database(event))
+fn database_reputation_update_hook(event: ReviewSubmittedEvent) -> BoxFuture<'static, Result<(), String>> {
+    async move {
+        save_review_to_database(&event).await
+    }.boxed()
 }
 
 /// Add a review to the in-memory store (fallback for development)
@@ -332,28 +329,11 @@ fn add_review_to_store(event: &ReviewSubmittedEvent) {
 }
 
 /// Default hook for updating creator reputation when a review is submitted
-pub fn default_reputation_update_hook(event: &ReviewSubmittedEvent) -> Result<(), String> {
-    tracing::info!("Updating reputation for creator {} after review submission", event.creator_id);
-    
-    // In production, this would:
-    // 1. Update the creator's aggregated reputation in the database
-    // 2. Invalidate any cached reputation data
-    // 3. Potentially trigger notifications to the creator
-    // 4. Update search indexes if needed
-    
-    // For now, we'll simulate the reputation update
-    let current_reviews = reviews_for_creator(&event.creator_id);
-    let current_aggregation = aggregate_reviews(&current_reviews);
-    
-    tracing::info!(
-        "Creator {} reputation updated: {} reviews, {:.2} average rating, verified: {}",
-        event.creator_id,
-        current_aggregation.total_reviews,
-        current_aggregation.average_rating,
-        current_aggregation.is_verified
-    );
-    
-    Ok(())
+pub fn default_reputation_update_hook(event: ReviewSubmittedEvent) -> BoxFuture<'static, Result<(), String>> {
+    async move {
+        tracing::info!("Updating reputation for creator {} after review submission", event.creator_id);
+        Ok(())
+    }.boxed()
 }
 
 /// Initialize the reputation system with default hooks
@@ -362,18 +342,22 @@ pub fn initialize_reputation_system() {
     
     // Register additional hooks for analytics, notifications, etc.
     register_review_submitted_hook(|event| {
-        tracing::info!("Analytics hook: Review {} submitted for creator {}", 
-            event.review_id, event.creator_id);
-        Ok(())
+        async move {
+            tracing::info!("Analytics hook: Review {} submitted for creator {}", 
+                event.review_id, event.creator_id);
+            Ok(())
+        }.boxed()
     });
     
     register_review_submitted_hook(|event| {
-        // Notification hook - in production would send notifications
-        if event.rating >= 4 {
-            tracing::info!("Notification hook: Positive review received for creator {}", 
-                event.creator_id);
-        }
-        Ok(())
+        async move {
+            // Notification hook - in production would send notifications
+            if event.rating >= 4 {
+                tracing::info!("Notification hook: Positive review received for creator {}", 
+                    event.creator_id);
+            }
+            Ok(())
+        }.boxed()
     });
 }
 
@@ -385,18 +369,22 @@ pub fn initialize_reputation_system_with_db(pool: PgPool) {
     
     // Register additional hooks for analytics, notifications, etc.
     register_review_submitted_hook(|event| {
-        tracing::info!("Analytics hook: Review {} submitted for creator {}", 
-            event.review_id, event.creator_id);
-        Ok(())
+        async move {
+            tracing::info!("Analytics hook: Review {} submitted for creator {}", 
+                event.review_id, event.creator_id);
+            Ok(())
+        }.boxed()
     });
     
     register_review_submitted_hook(|event| {
-        // Notification hook - in production would send notifications
-        if event.rating >= 4 {
-            tracing::info!("Notification hook: Positive review received for creator {}", 
-                event.creator_id);
-        }
-        Ok(())
+        async move {
+            // Notification hook - in production would send notifications
+            if event.rating >= 4 {
+                tracing::info!("Notification hook: Positive review received for creator {}", 
+                    event.creator_id);
+            }
+            Ok(())
+        }.boxed()
     });
 }
 
@@ -464,9 +452,9 @@ pub async fn fetch_creator_reputation_from_db(creator_id: &str) -> ReputationAgg
         }
     };
 
-    let result = sqlx::query_as::<_, (Option<f64>, i32, i32, i32, i32, i32, i32, bool)>(
+    let result = sqlx::query_as::<_, (Option<f64>, i32, i32, i32, i32, i32, i32, bool, Option<f64>)>(
         r#"
-        SELECT average_rating, total_reviews, stars_5, stars_4, stars_3, stars_2, stars_1, is_verified
+        SELECT average_rating::float8, total_reviews, stars_5, stars_4, stars_3, stars_2, stars_1, is_verified, reliability_score::float8
         FROM creator_reputation 
         WHERE creator_id = $1
         "#
@@ -476,7 +464,7 @@ pub async fn fetch_creator_reputation_from_db(creator_id: &str) -> ReputationAgg
     .await;
 
     match result {
-        Ok(Some((average_rating, total_reviews, stars_5, stars_4, stars_3, stars_2, stars_1, is_verified))) => ReputationAggregation {
+        Ok(Some((average_rating, total_reviews, stars_5, stars_4, stars_3, stars_2, stars_1, is_verified, reliability_score))) => ReputationAggregation {
             average_rating: average_rating.unwrap_or(0.0),
             total_reviews: total_reviews as u32,
             stars_5: stars_5 as u32,
@@ -485,7 +473,7 @@ pub async fn fetch_creator_reputation_from_db(creator_id: &str) -> ReputationAgg
             stars_2: stars_2 as u32,
             stars_1: stars_1 as u32,
             is_verified,
-            reliability_score: average_rating.unwrap_or(0.0) / 5.0, // Placeholder until DB schema update
+            reliability_score: reliability_score.unwrap_or(0.0),
         },
         Ok(None) => {
             tracing::info!("No reputation data found in database for creator {}, calculating from reviews", creator_id);
@@ -1597,10 +1585,11 @@ mod tests {
 
     // ── Tests for review submission hooks ─────────────────────────────────────
 
-    #[test]
-    fn test_on_review_submitted_validation() {
+    #[tokio::test]
+    async fn test_on_review_submitted_validation() {
+        clear_review_submitted_hooks();
         // Test with invalid data
-        let result = on_review_submitted("", "creator1", 6, "", "", "");
+        let result = on_review_submitted("", "creator1", 6, "", "", "").await;
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert!(errors.len() >= 5); // Should have multiple validation errors
@@ -1613,7 +1602,7 @@ mod tests {
             "Great work",
             "Excellent delivery",
             "John Doe"
-        );
+        ).await;
         assert!(result.is_ok());
         let review_id = result.unwrap();
         assert!(review_id.starts_with("rev-creator1-bounty123"));
@@ -1637,8 +1626,9 @@ mod tests {
         assert_eq!(event.title, "Excellent");
     }
 
-    #[test]
-    fn test_hook_registration_and_execution() {
+    #[tokio::test]
+    async fn test_hook_registration_and_execution() {
+        clear_review_submitted_hooks();
         use std::sync::{Arc, Mutex};
         
         // Create a counter to track hook executions
@@ -1647,10 +1637,13 @@ mod tests {
         
         // Register a test hook
         register_review_submitted_hook(move |_event| {
-            if let Ok(mut count) = counter_clone.lock() {
-                *count += 1;
-            }
-            Ok(())
+            let inner_counter = counter_clone.clone();
+            async move {
+                if let Ok(mut count) = inner_counter.lock() {
+                    *count += 1;
+                }
+                Ok(())
+            }.boxed()
         });
         
         // Create a test event
@@ -1666,7 +1659,7 @@ mod tests {
         };
         
         // Trigger hooks
-        let _errors = trigger_review_submitted_hooks(&event);
+        let _errors = trigger_review_submitted_hooks(&event).await;
         // Don't assert errors is empty since other tests may have registered failing hooks
         
         // Check that our hook was executed (if no mutex poisoning occurred)
@@ -1676,11 +1669,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_hook_error_handling() {
+    #[tokio::test]
+    async fn test_hook_error_handling() {
+        clear_review_submitted_hooks();
         // Register a hook that always fails
         register_review_submitted_hook(|_event| {
-            Err("Test error".to_string())
+            async move {
+                Err("Test error".to_string())
+            }.boxed()
         });
         
         let event = ReviewSubmittedEvent {
@@ -1694,13 +1690,13 @@ mod tests {
             submitted_at: "2025-01-01T00:00:00Z".to_string(),
         };
         
-        let errors = trigger_review_submitted_hooks(&event);
+        let errors = trigger_review_submitted_hooks(&event).await;
         // Should have at least one error from our failing hook
         assert!(errors.iter().any(|e| e.contains("Test error")));
     }
 
-    #[test]
-    fn test_default_reputation_update_hook() {
+    #[tokio::test]
+    async fn test_default_reputation_update_hook() {
         let event = ReviewSubmittedEvent {
             review_id: "test-review".to_string(),
             creator_id: "alex-studio".to_string(), // Use existing creator from seed data
@@ -1712,43 +1708,45 @@ mod tests {
             submitted_at: "2025-01-01T00:00:00Z".to_string(),
         };
         
-        let result = default_reputation_update_hook(&event);
+        let result = default_reputation_update_hook(event).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_rating_validation_boundaries() {
+    #[tokio::test]
+    async fn test_rating_validation_boundaries() {
+        clear_review_submitted_hooks();
         // Test rating boundaries
-        assert!(on_review_submitted("bounty1", "creator1", 0, "title", "body", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "creator1", 6, "title", "body", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "creator1", 1, "title", "body", "reviewer").is_ok());
-        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer").is_ok());
+        assert!(on_review_submitted("bounty1", "creator1", 0, "title", "body", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 6, "title", "body", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 1, "title", "body", "reviewer").await.is_ok());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer").await.is_ok());
     }
 
-    #[test]
-    fn test_empty_field_validation() {
+    #[tokio::test]
+    async fn test_empty_field_validation() {
         // Test each required field
-        assert!(on_review_submitted("", "creator1", 5, "title", "body", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "", 5, "title", "body", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "creator1", 5, "", "body", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "").is_err());
+        assert!(on_review_submitted("", "creator1", 5, "title", "body", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "", 5, "title", "body", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "", "body", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "").await.is_err());
     }
 
-    #[test]
-    fn test_whitespace_field_validation() {
+    #[tokio::test]
+    async fn test_whitespace_field_validation() {
         // Test fields with only whitespace
-        assert!(on_review_submitted("   ", "creator1", 5, "title", "body", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "   ", 5, "title", "body", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "creator1", 5, "   ", "body", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "   ", "reviewer").is_err());
-        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "   ").is_err());
+        assert!(on_review_submitted("   ", "creator1", 5, "title", "body", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "   ", 5, "title", "body", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "   ", "body", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "   ", "reviewer").await.is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "   ").await.is_err());
     }
 
-    #[test]
-    fn test_review_id_generation() {
-        let result1 = on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer");
-        let result2 = on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer");
+    #[tokio::test]
+    async fn test_review_id_generation() {
+        clear_review_submitted_hooks();
+        let result1 = on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer").await;
+        let result2 = on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer").await;
         
         assert!(result1.is_ok());
         assert!(result2.is_ok());
@@ -1756,7 +1754,7 @@ mod tests {
         let id1 = result1.unwrap();
         let id2 = result2.unwrap();
         
-        // IDs should be different (due to timestamp)
+        // IDs should be different (due to UUID)
         assert_ne!(id1, id2);
         
         // Both should start with the expected prefix

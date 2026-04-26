@@ -61,11 +61,6 @@ export const creators: Creator[] = [
     twitter: 'https://x.com/alexchen',
     portfolio: 'https://alexchen.design',
     skills: ['Figma', 'Design Systems', 'Prototyping', 'User Research', 'Accessibility', 'Design Thinking'],
-    stats: {
-      projects: 45,
-      clients: 20,
-      experience: 8,
-    },
     projects: [
       {
         id: 'project-1',
