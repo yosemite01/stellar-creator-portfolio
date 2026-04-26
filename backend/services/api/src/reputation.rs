@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use sqlx::PgPool;
+use sqlx::Error as SqlxError;
 
 /// Internal review row (includes `creator_id` for filtering).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -133,6 +134,19 @@ static REVIEW_HOOKS: Mutex<Vec<ReviewSubmittedHook>> = Mutex::new(Vec::new());
 
 /// Global database pool for reputation operations
 static DB_POOL: Mutex<Option<PgPool>> = Mutex::new(None);
+
+fn format_db_error(operation: &str, sql_label: &str, entity_context: &[(&str, &str)], err: &SqlxError) -> String {
+    let context = entity_context
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "Database operation failed: {} [{}] ({}) - {}",
+        operation, sql_label, context, err
+    )
+}
 
 /// Set the database pool for reputation operations
 pub fn set_database_pool(pool: PgPool) {
@@ -301,14 +315,30 @@ async fn save_review_to_database(event: &ReviewSubmittedEvent) -> Result<(), Str
                     Ok(())
                 }
                 Err(e) => {
-                    tracing::error!("Failed to update creator reputation: {}", e);
-                    Err(format!("Failed to update creator reputation: {}", e))
+                    let err_msg = format_db_error(
+                        "update creator reputation aggregate",
+                        "SELECT update_creator_reputation($1)",
+                        &[("creator_id", &event.creator_id), ("review_id", &event.review_id)],
+                        &e,
+                    );
+                    tracing::error!("{}", err_msg);
+                    Err(err_msg)
                 }
             }
         }
         Err(e) => {
-            tracing::error!("Failed to save review to database: {}", e);
-            Err(format!("Failed to save review to database: {}", e))
+            let err_msg = format_db_error(
+                "insert review row",
+                "INSERT INTO reviews (...) VALUES (...)",
+                &[
+                    ("review_id", &event.review_id),
+                    ("creator_id", &event.creator_id),
+                    ("bounty_id", &event.bounty_id),
+                ],
+                &e,
+            );
+            tracing::error!("{}", err_msg);
+            Err(err_msg)
         }
     }
 }
@@ -446,7 +476,13 @@ pub async fn fetch_creator_reviews_from_db(creator_id: &str) -> Vec<Review> {
                 .collect()
         }
         Err(e) => {
-            tracing::error!("Failed to fetch reviews from database for creator {}: {}", creator_id, e);
+            let err_msg = format_db_error(
+                "fetch creator reviews",
+                "SELECT ... FROM reviews WHERE creator_id = $1 ORDER BY created_at DESC",
+                &[("creator_id", creator_id)],
+                &e,
+            );
+            tracing::error!("{}", err_msg);
             tracing::info!("Falling back to seed data for creator {}", creator_id);
             reviews_for_creator(creator_id)
         }
@@ -493,7 +529,13 @@ pub async fn fetch_creator_reputation_from_db(creator_id: &str) -> ReputationAgg
             aggregate_reviews(&reviews)
         }
         Err(e) => {
-            tracing::error!("Failed to fetch reputation from database for creator {}: {}", creator_id, e);
+            let err_msg = format_db_error(
+                "fetch creator reputation aggregate",
+                "SELECT ... FROM creator_reputation WHERE creator_id = $1",
+                &[("creator_id", creator_id)],
+                &e,
+            );
+            tracing::error!("{}", err_msg);
             tracing::info!("Falling back to seed data calculation for creator {}", creator_id);
             let reviews = reviews_for_creator(creator_id);
             aggregate_reviews(&reviews)
@@ -542,7 +584,13 @@ pub async fn fetch_all_reviews_from_db() -> Vec<Review> {
             }
         }
         Err(e) => {
-            tracing::error!("Failed to fetch all reviews from database: {}", e);
+            let err_msg = format_db_error(
+                "fetch all reviews",
+                "SELECT ... FROM reviews ORDER BY created_at DESC",
+                &[],
+                &e,
+            );
+            tracing::error!("{}", err_msg);
             tracing::info!("Falling back to seed data for all reviews");
             seed_reviews()
         }
@@ -983,6 +1031,23 @@ fn seed_reviews() -> Vec<Review> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn format_db_error_includes_operation_sql_and_context() {
+        let err = SqlxError::PoolClosed;
+        let formatted = format_db_error(
+            "fetch creator reviews",
+            "SELECT ... FROM reviews WHERE creator_id = $1",
+            &[("creator_id", "alex-studio"), ("request_id", "r-123")],
+            &err,
+        );
+
+        assert!(formatted.contains("fetch creator reviews"));
+        assert!(formatted.contains("SELECT ... FROM reviews WHERE creator_id = $1"));
+        assert!(formatted.contains("creator_id=alex-studio"));
+        assert!(formatted.contains("request_id=r-123"));
+        assert!(formatted.contains("pool has been closed"));
+    }
+
 
     fn sample_reviews() -> Vec<Review> {
         vec![

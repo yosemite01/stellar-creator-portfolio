@@ -1,3 +1,4 @@
+#[path = "db/mod.rs"]
 pub mod db;
 
 // Re-export all database functionality for convenient access

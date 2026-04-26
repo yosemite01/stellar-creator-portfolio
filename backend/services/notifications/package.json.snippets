@@ -1,0 +1,163 @@
+// Add these scripts to your package.json
+
+{
+  "scripts": {
+    // Testing
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:notifications": "jest notification-service.test.ts",
+    "test:performance": "jest --testNamePattern='Performance'",
+    "test:integration": "jest --testMatch='**/*.integration.test.ts'",
+
+    // Linting & Formatting
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "format": "prettier --write .",
+    "type-check": "tsc --noEmit",
+
+    // Building
+    "build": "next build",
+    "build:analyze": "ANALYZE=true next build",
+
+    // Development
+    "dev": "next dev",
+    "start": "next start",
+
+    // Database
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db:seed": "ts-node --esm prisma/seed.ts",
+
+    // Notifications
+    "notify:test": "ts-node scripts/test-notification.ts",
+    "notify:batch": "ts-node scripts/send-batch.ts",
+    "notify:health": "curl http://localhost:3000/api/notifications/push?action=health",
+    "notify:stats": "curl http://localhost:3000/api/notifications/push?action=stats",
+
+    // Documentation
+    "docs:build": "typedoc",
+    "docs:serve": "http-server docs",
+
+    // Pre-commit
+    "precommit": "lint-staged",
+
+    // Clean
+    "clean": "rm -rf .next dist coverage",
+    "clean:all": "npm run clean && rm -rf node_modules"
+  },
+
+  "devDependencies": {
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/jest-dom": "^6.0.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.5.0",
+    "jest-environment-jsdom": "^29.5.0",
+    "typescript": "^5.0.0",
+    "eslint": "^8.40.0",
+    "prettier": "^2.8.0",
+    "lint-staged": "^13.2.0",
+    "husky": "^8.0.3",
+    "ts-node": "^10.9.0"
+  },
+
+  "dependencies": {
+    "firebase-admin": "^12.0.0",
+    "onesignal-node": "^3.0.0",
+    "web-push": "^3.6.0",
+    "isomorphic-dompurify": "^1.8.0",
+    "framer-motion": "^10.16.0",
+    "lucide-react": "^0.263.0"
+  },
+
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{md,json}": [
+      "prettier --write"
+    ]
+  }
+}
+
+// Helper Scripts
+
+// scripts/test-notification.ts
+import { pushService } from '@/lib/push-service';
+
+async function testNotification() {
+  const payload = {
+    userId: 'test-user',
+    title: 'Test Notification',
+    body: 'This is a test notification',
+    data: {},
+    channels: ['firebase', 'browser'],
+  };
+
+  const preferences = {
+    userId: 'test-user',
+    channels: { firebase: true, onesignal: true, browser: true },
+    doNotDisturb: false,
+    blockedCategories: [],
+    unsubscribedCategories: [],
+    language: 'en',
+    timezone: 'UTC',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const response = await pushService.sendNotification(payload, preferences);
+  console.log('Test notification result:', response);
+}
+
+testNotification().catch(console.error);
+
+// scripts/send-batch.ts
+import { pushService } from '@/lib/push-service';
+
+async function sendBatch(count: number = 100) {
+  console.log(`Sending batch of ${count} notifications...`);
+  
+  const notifications = Array.from({ length: count }, (_, i) => ({
+    payload: {
+      userId: `user-${i}`,
+      title: `Batch Notification ${i + 1}`,
+      body: `This is notification ${i + 1}`,
+      data: { index: String(i) },
+      channels: ['firebase'],
+    },
+    preferences: {
+      userId: `user-${i}`,
+      channels: { firebase: true, onesignal: true, browser: true },
+      doNotDisturb: false,
+      blockedCategories: [],
+      unsubscribedCategories: [],
+      language: 'en',
+      timezone: 'UTC',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+  }));
+
+  const start = Date.now();
+  const results = await pushService.sendBatch(notifications);
+  const duration = Date.now() - start;
+
+  const successful = results.filter(r => r.success).length;
+  const failed = results.length - successful;
+
+  console.log(`
+Batch Results:
+- Total: ${results.length}
+- Successful: ${successful}
+- Failed: ${failed}
+- Duration: ${duration}ms
+- Rate: ${(results.length / (duration / 1000)).toFixed(0)} notifications/sec
+  `);
+}
+
+const count = parseInt(process.argv[2] || '100');
+sendBatch(count).catch(console.error);
