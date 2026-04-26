@@ -3,15 +3,15 @@
 import { notFound } from 'next/navigation';
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import type { AggregateRating } from '@/lib/review-service';
+import type { AggregateRating, Review } from '@/lib/review-service';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { ProjectCard } from '@/components/project-card';
 import { Button } from '@/components/ui/button';
 import { creators } from '@/lib/creators-data';
-import { ArrowLeft, Linkedin, Twitter, ExternalLink, Star, Settings2 } from 'lucide-react';
+import { ArrowLeft, Linkedin, Twitter, ExternalLink, Star, Settings2, Quote } from 'lucide-react';
 import { useSession } from 'next-auth/react';
-import { AggregateRatingDisplay } from '@/components/rating-display';
+import { AggregateRatingDisplay, StarRating } from '@/components/rating-display';
 import { SocialShare } from '@/components/social-share';
 import Image from 'next/image';
 import { buildOptimizationProps, buildSizes } from '@/lib/image-utils';
@@ -27,6 +27,7 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
   const { data: session } = useSession();
   const creator = creators.find((c) => c.id === params.id);
   const [aggregate, setAggregate] = useState<AggregateRating | null>(null);
+  const [recentReviews, setRecentReviews] = useState<Review[]>([]);
   const heroSizes = buildSizes({
     mobile: '100vw',
     tablet: '100vw',
@@ -40,9 +41,12 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
 
   // Fetch aggregate rating
   useEffect(() => {
-    fetch(`/api/reviews?creatorId=${creator.id}&limit=1000`)
+    fetch(`/api/reviews/${creator.id}?limit=2`)
       .then((r) => r.json())
-      .then((d) => setAggregate(d.aggregate))
+      .then((d) => {
+        setAggregate(d.aggregate);
+        setRecentReviews(d.reviews ?? []);
+      })
       .catch(() => {});
   }, [creator.id]);
 
@@ -249,10 +253,15 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
 
         {/* Reviews Section */}
         {aggregate && aggregate.total > 0 && (
-          <section className="border-b border-border py-12">
+          <section className="border-b border-border bg-gradient-to-br from-muted/40 via-background to-accent/5 py-12">
             <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-foreground">Reviews</h2>
+                <div>
+                  <h2 className="text-2xl font-bold text-foreground">Reputation</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Aggregated from approved client reviews.
+                  </p>
+                </div>
                 <Button
                   variant="outline"
                   size="sm"
@@ -263,7 +272,30 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
                   See all {aggregate.total} reviews
                 </Button>
               </div>
-              <AggregateRatingDisplay aggregate={aggregate} />
+              <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
+                <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
+                  <AggregateRatingDisplay aggregate={aggregate} />
+                </div>
+                <div className="space-y-3">
+                  {recentReviews.map((review) => (
+                    <article key={review.id} className="bg-card/80 border border-border rounded-xl p-4">
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-2">
+                          <Quote size={16} className="text-primary" />
+                          <div>
+                            <p className="font-semibold text-sm text-foreground">{review.reviewerName}</p>
+                            <p className="text-xs text-muted-foreground">{review.title}</p>
+                          </div>
+                        </div>
+                        <StarRating value={review.rating} size="sm" />
+                      </div>
+                      <p className="text-sm text-muted-foreground leading-relaxed line-clamp-3">
+                        {review.body}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              </div>
             </div>
           </section>
         )}

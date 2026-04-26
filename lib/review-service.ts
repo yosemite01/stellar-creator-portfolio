@@ -32,6 +32,24 @@ export interface AggregateRating {
   breakdown: Record<1 | 2 | 3 | 4 | 5, number>
 }
 
+export interface ReviewSummaryOptions {
+  sort?: 'recent' | 'helpful' | 'rating_high' | 'rating_low'
+  filterRating?: number
+  page?: number
+  limit?: number
+}
+
+export interface ReviewSummary {
+  reviews: Review[]
+  aggregate: AggregateRating
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+
 // In-memory store (replace with DB calls in production)
 const reviewStore = new Map<string, Review>()
 const voteStore = new Map<string, ReviewVote>() // key: `${reviewId}:${userId}`
@@ -59,12 +77,7 @@ export function calculateAggregate(reviews: Review[]): AggregateRating {
 
 export function getReviewsForCreator(
   creatorId: string,
-  options: {
-    sort?: 'recent' | 'helpful' | 'rating_high' | 'rating_low'
-    filterRating?: number
-    page?: number
-    limit?: number
-  } = {}
+  options: ReviewSummaryOptions = {}
 ): { reviews: Review[]; total: number } {
   const { sort = 'recent', filterRating, page = 1, limit = 10 } = options
 
@@ -94,6 +107,27 @@ export function getReviewsForCreator(
   const total = reviews.length
   const paginated = reviews.slice((page - 1) * limit, page * limit)
   return { reviews: paginated, total }
+}
+
+export function getReviewSummaryForCreator(
+  creatorId: string,
+  options: ReviewSummaryOptions = {}
+): ReviewSummary {
+  const page = Math.max(1, options.page ?? 1)
+  const limit = Math.min(50, Math.max(1, options.limit ?? 10))
+  const { reviews, total } = getReviewsForCreator(creatorId, { ...options, page, limit })
+  const { reviews: allReviews } = getReviewsForCreator(creatorId, { limit: 1000 })
+
+  return {
+    reviews,
+    aggregate: calculateAggregate(allReviews),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  }
 }
 
 export function createReview(

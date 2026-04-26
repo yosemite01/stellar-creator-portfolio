@@ -170,6 +170,26 @@ describe('getReviewsForCreator', () => {
   })
 })
 
+describe('getReviewSummaryForCreator', () => {
+  it('returns aggregate with paginated reviews', async () => {
+    const { createReview, moderateReview, getReviewSummaryForCreator } = await import('@/lib/review-service')
+    const creatorId = 'creator-summary-test'
+    const r1 = createReview({ creatorId, reviewerId: 'u5', reviewerName: 'E', rating: 5, title: 'Great', body: 'Excellent creative delivery.', isVerifiedPurchase: true })
+    const r2 = createReview({ creatorId, reviewerId: 'u6', reviewerName: 'F', rating: 4, title: 'Good', body: 'Strong work and communication.', isVerifiedPurchase: false })
+    createReview({ creatorId, reviewerId: 'u7', reviewerName: 'G', rating: 1, title: 'Pending', body: 'Pending reviews do not count.', isVerifiedPurchase: false })
+    moderateReview(r1.id, 'approved')
+    moderateReview(r2.id, 'approved')
+
+    const summary = getReviewSummaryForCreator(creatorId, { page: 1, limit: 1 })
+
+    expect(summary.reviews).toHaveLength(1)
+    expect(summary.aggregate.total).toBe(2)
+    expect(summary.aggregate.average).toBe(4.5)
+    expect(summary.pagination.total).toBe(2)
+    expect(summary.pagination.totalPages).toBe(2)
+  })
+})
+
 describe('review validator schemas', () => {
   it('rejects rating outside 1-5', async () => {
     const { reviewSchema } = await import('@/lib/validators')

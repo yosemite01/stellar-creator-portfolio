@@ -40,14 +40,13 @@ export default function CreatorReviewsPage({ params }: ReviewsPageProps) {
     setLoading(true);
     try {
       const params = new URLSearchParams({
-        creatorId: creator.id,
         sort,
         page: String(page),
         limit: '10',
       });
       if (filterRating) params.set('filterRating', String(filterRating));
 
-      const res = await fetch(`/api/reviews?${params}`);
+      const res = await fetch(`/api/reviews/${creator.id}?${params}`);
       if (!res.ok) throw new Error('Failed to load reviews');
       const data = await res.json();
       setReviews(data.reviews);

@@ -47,7 +47,12 @@ pub struct ApiResponse<T: ToSchema> {
 
 impl<T: ToSchema> ApiResponse<T> {
     fn ok(data: T, message: Option<String>) -> Self {
-        Self { success: true, data: Some(data), error: None, message }
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+            message,
+        }
     }
 
     #[allow(dead_code)]
@@ -55,7 +60,12 @@ impl<T: ToSchema> ApiResponse<T> {
     where
         T: Default,
     {
-        Self { success: false, data: None, error: Some(error), message: None }
+        Self {
+            success: false,
+            data: None,
+            error: Some(error),
+            message: None,
+        }
     }
 }
 
@@ -106,6 +116,46 @@ struct EscrowRecord {
     released_at: Option<i64>,
 }
 
+#[derive(Clone, Serialize, Debug, FromRow, ToSchema)]
+struct ReviewRecord {
+    id: String,
+    creator_id: String,
+    reviewer_id: String,
+    reviewer_name: String,
+    rating: i32,
+    title: String,
+    body: String,
+    is_verified_purchase: bool,
+    helpful_count: i64,
+    not_helpful_count: i64,
+    status: String,
+    created_at: Option<i64>,
+    updated_at: Option<i64>,
+}
+
+#[derive(Clone, Serialize, Debug, ToSchema)]
+struct ReviewAggregate {
+    average: f64,
+    total: i64,
+    breakdown: std::collections::BTreeMap<i32, i64>,
+}
+
+#[derive(Clone, Serialize, Debug, ToSchema)]
+struct PaginationMeta {
+    page: i64,
+    limit: i64,
+    total: i64,
+    total_pages: i64,
+}
+
+#[derive(Clone, Serialize, Debug, ToSchema)]
+struct ReviewsResponse {
+    creator_id: String,
+    reviews: Vec<ReviewRecord>,
+    aggregate: ReviewAggregate,
+    pagination: PaginationMeta,
+}
+
 fn json_error(status: StatusCode, message: impl Into<String>) -> HttpResponse {
     let response: ApiResponse<serde_json::Value> = ApiResponse::err(message.into());
     HttpResponse::build(status).json(response)
@@ -115,18 +165,56 @@ fn value_response<T>(data: &T) -> Result<serde_json::Value, HttpResponse>
 where
     T: Serialize,
 {
-    serde_json::to_value(data)
-        .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize response: {error}")))
+    serde_json::to_value(data).map_err(|error| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to serialize response: {error}"),
+        )
+    })
 }
 
 fn parse_i64(value: i128, field: &str) -> Result<i64, HttpResponse> {
-    i64::try_from(value)
-        .map_err(|_| json_error(StatusCode::BAD_REQUEST, format!("{field} is outside the supported range")))
+    i64::try_from(value).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} is outside the supported range"),
+        )
+    })
 }
 
 fn parse_u64_to_i64(value: u64, field: &str) -> Result<i64, HttpResponse> {
-    i64::try_from(value)
-        .map_err(|_| json_error(StatusCode::BAD_REQUEST, format!("{field} is outside the supported range")))
+    i64::try_from(value).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} is outside the supported range"),
+        )
+    })
+}
+
+fn build_review_aggregate(rating_counts: &[(i32, i64)]) -> ReviewAggregate {
+    let mut breakdown = std::collections::BTreeMap::from([(1, 0), (2, 0), (3, 0), (4, 0), (5, 0)]);
+    let mut weighted_sum = 0i64;
+    let mut total = 0i64;
+
+    for (rating, count) in rating_counts {
+        if (1..=5).contains(rating) && *count > 0 {
+            breakdown.insert(*rating, *count);
+            weighted_sum += i64::from(*rating) * *count;
+            total += *count;
+        }
+    }
+
+    let average = if total == 0 {
+        0.0
+    } else {
+        ((weighted_sum as f64 / total as f64) * 10.0).round() / 10.0
+    };
+
+    ReviewAggregate {
+        average,
+        total,
+        breakdown,
+    }
 }
 
 /// Health check
@@ -190,7 +278,10 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
         Ok(record) => record,
         Err(error) => {
             tracing::error!("Failed to create bounty: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -199,7 +290,10 @@ async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) 
         Err(response) => return response,
     };
 
-    HttpResponse::Created().json(ApiResponse::ok(data, Some("Bounty created successfully".to_string())))
+    HttpResponse::Created().json(ApiResponse::ok(
+        data,
+        Some("Bounty created successfully".to_string()),
+    ))
 }
 
 /// List bounties (paginated)
@@ -219,8 +313,16 @@ async fn list_bounties(
     pool: web::Data<PgPool>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
-    let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
-    let limit = query.get("limit").and_then(|value| value.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
+    let page = query
+        .get("page")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(1)
+        .max(1);
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(10)
+        .clamp(1, 100);
     let offset = (page - 1) * limit;
     let status = query.get("status").cloned();
 
@@ -234,7 +336,10 @@ async fn list_bounties(
         Ok(count) => count,
         Err(error) => {
             tracing::error!("Failed to count bounties: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -264,7 +369,10 @@ async fn list_bounties(
         Ok(rows) => rows,
         Err(error) => {
             tracing::error!("Failed to list bounties: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -331,10 +439,18 @@ async fn get_bounty(
     .await
     {
         Ok(Some(record)) => record,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, format!("Bounty {bounty_id} not found")),
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("Bounty {bounty_id} not found"),
+            )
+        }
         Err(error) => {
             tracing::error!("Failed to fetch bounty {bounty_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -344,7 +460,9 @@ async fn get_bounty(
     };
 
     if let Ok(mut conn) = redis.get().await {
-        let _ = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await;
+        let _ = conn
+            .set_ex::<_, _, ()>(&cache_key, data.to_string(), 60)
+            .await;
     }
 
     HttpResponse::Ok().json(ApiResponse::ok(data, None))
@@ -381,22 +499,27 @@ async fn apply_for_bounty(
         Err(response) => return response,
     };
 
-    let exists = match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::BIGINT FROM bounties WHERE id = $1",
-    )
-    .bind(bounty_id)
-    .fetch_one(pool.get_ref())
-    .await
-    {
-        Ok(count) => count > 0,
-        Err(error) => {
-            tracing::error!("Failed to validate bounty {bounty_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
-        }
-    };
+    let exists =
+        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*)::BIGINT FROM bounties WHERE id = $1")
+            .bind(bounty_id)
+            .fetch_one(pool.get_ref())
+            .await
+        {
+            Ok(count) => count > 0,
+            Err(error) => {
+                tracing::error!("Failed to validate bounty {bounty_id}: {error}");
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Database error: {error}"),
+                );
+            }
+        };
 
     if !exists {
-        return json_error(StatusCode::NOT_FOUND, format!("Bounty {bounty_id} not found"));
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("Bounty {bounty_id} not found"),
+        );
     }
 
     let application = match sqlx::query_as::<_, ApplicationRecord>(
@@ -480,7 +603,10 @@ async fn register_freelancer(
         Ok(record) => record,
         Err(error) => {
             tracing::error!("Failed to register freelancer {}: {error}", body.name);
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -512,8 +638,16 @@ async fn list_freelancers(
     pool: web::Data<PgPool>,
 ) -> HttpResponse {
     let discipline = query.get("discipline").cloned();
-    let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
-    let limit = query.get("limit").and_then(|value| value.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
+    let page = query
+        .get("page")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(1)
+        .max(1);
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(10)
+        .clamp(1, 100);
     let offset = (page - 1) * limit;
 
     let total = match sqlx::query_scalar::<_, i64>(
@@ -526,7 +660,10 @@ async fn list_freelancers(
         Ok(count) => count,
         Err(error) => {
             tracing::error!("Failed to count freelancers: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -555,7 +692,10 @@ async fn list_freelancers(
         Ok(rows) => rows,
         Err(error) => {
             tracing::error!("Failed to list freelancers: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -618,10 +758,18 @@ async fn get_freelancer(
     .await
     {
         Ok(Some(record)) => record,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, format!("Freelancer {address} not found")),
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("Freelancer {address} not found"),
+            )
+        }
         Err(error) => {
             tracing::error!("Failed to fetch freelancer {address}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -631,8 +779,185 @@ async fn get_freelancer(
     };
 
     if let Ok(mut conn) = redis.get().await {
-        let _ = conn.set_ex::<_, _, ()>(&cache_key, data.to_string(), 60).await;
+        let _ = conn
+            .set_ex::<_, _, ()>(&cache_key, data.to_string(), 60)
+            .await;
     }
+
+    HttpResponse::Ok().json(ApiResponse::ok(data, None))
+}
+
+/// List approved reviews for a creator with aggregate rating details
+#[utoipa::path(
+    get, path = "/api/reviews/{creator_id}",
+    params(
+        ("creator_id" = String, Path, description = "Creator ID"),
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("limit" = Option<u32>, Query, description = "Items per page"),
+        ("sort" = Option<String>, Query, description = "recent | helpful | rating_high | rating_low"),
+        ("filter_rating" = Option<i32>, Query, description = "Only return reviews with this rating"),
+    ),
+    responses(
+        (status = 200, description = "Creator reviews and aggregate rating"),
+        (status = 400, description = "Invalid query"),
+        (status = 500, description = "Database error"),
+    )
+)]
+async fn get_creator_reviews(
+    path: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<PgPool>,
+) -> HttpResponse {
+    let creator_id = path.into_inner();
+    let page = query
+        .get("page")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(1)
+        .max(1);
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(10)
+        .clamp(1, 50);
+    let offset = (page - 1) * limit;
+    let filter_rating = match query
+        .get("filter_rating")
+        .or_else(|| query.get("filterRating"))
+    {
+        Some(value) => match value.parse::<i32>() {
+            Ok(rating) if (1..=5).contains(&rating) => Some(rating),
+            _ => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "filter_rating must be between 1 and 5",
+                )
+            }
+        },
+        None => None,
+    };
+
+    let order_by = match query.get("sort").map(String::as_str).unwrap_or("recent") {
+        "recent" => "created_at DESC, id DESC",
+        "helpful" => "helpful_count DESC, created_at DESC, id DESC",
+        "rating_high" => "rating DESC, created_at DESC, id DESC",
+        "rating_low" => "rating ASC, created_at DESC, id DESC",
+        _ => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "sort must be recent, helpful, rating_high, or rating_low",
+            )
+        }
+    };
+
+    let total = match sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM reviews
+        WHERE creator_id = $1
+          AND status = 'approved'
+          AND ($2::INTEGER IS NULL OR rating = $2)
+        "#,
+    )
+    .bind(&creator_id)
+    .bind(filter_rating)
+    .fetch_one(pool.get_ref())
+    .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!("Failed to count reviews for creator {creator_id}: {error}");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
+        }
+    };
+
+    let reviews_sql = format!(
+        r#"
+        SELECT
+            id,
+            creator_id,
+            reviewer_id,
+            reviewer_name,
+            rating,
+            title,
+            body,
+            COALESCE(is_verified_purchase, false) AS is_verified_purchase,
+            COALESCE(helpful_count, 0)::BIGINT AS helpful_count,
+            COALESCE(not_helpful_count, 0)::BIGINT AS not_helpful_count,
+            status,
+            EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at,
+            EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at
+        FROM reviews
+        WHERE creator_id = $1
+          AND status = 'approved'
+          AND ($2::INTEGER IS NULL OR rating = $2)
+        ORDER BY {order_by}
+        LIMIT $3 OFFSET $4
+        "#
+    );
+
+    let reviews = match sqlx::query_as::<_, ReviewRecord>(&reviews_sql)
+        .bind(&creator_id)
+        .bind(filter_rating)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool.get_ref())
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!("Failed to list reviews for creator {creator_id}: {error}");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
+        }
+    };
+
+    let rating_counts = match sqlx::query_as::<_, (i32, i64)>(
+        r#"
+        SELECT rating, COUNT(*)::BIGINT
+        FROM reviews
+        WHERE creator_id = $1 AND status = 'approved'
+        GROUP BY rating
+        "#,
+    )
+    .bind(&creator_id)
+    .fetch_all(pool.get_ref())
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!("Failed to aggregate reviews for creator {creator_id}: {error}");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
+        }
+    };
+
+    let response = ReviewsResponse {
+        creator_id,
+        reviews,
+        aggregate: build_review_aggregate(&rating_counts),
+        pagination: PaginationMeta {
+            page,
+            limit,
+            total,
+            total_pages: if total == 0 {
+                0
+            } else {
+                (total + limit - 1) / limit
+            },
+        },
+    };
+
+    let data = match value_response(&response) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
 
     HttpResponse::Ok().json(ApiResponse::ok(data, None))
 }
@@ -673,10 +998,18 @@ async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRespon
     .await
     {
         Ok(Some(record)) => record,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, format!("Escrow {escrow_id} not found")),
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("Escrow {escrow_id} not found"),
+            )
+        }
         Err(error) => {
             tracing::error!("Failed to fetch escrow {escrow_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -726,10 +1059,18 @@ async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRe
     .await
     {
         Ok(Some(record)) => record,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, format!("Escrow {escrow_id} not found")),
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("Escrow {escrow_id} not found"),
+            )
+        }
         Err(error) => {
             tracing::error!("Failed to release escrow {escrow_id}: {error}");
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {error}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {error}"),
+            );
         }
     };
 
@@ -738,7 +1079,10 @@ async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRe
         Err(response) => return response,
     };
 
-    HttpResponse::Ok().json(ApiResponse::ok(data, Some("Funds released successfully".to_string())))
+    HttpResponse::Ok().json(ApiResponse::ok(
+        data,
+        Some("Funds released successfully".to_string()),
+    ))
 }
 
 #[derive(OpenApi)]
@@ -759,6 +1103,7 @@ async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRe
         register_freelancer,
         list_freelancers,
         get_freelancer,
+        get_creator_reviews,
         get_escrow,
         release_escrow,
     ),
@@ -769,11 +1114,16 @@ async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> HttpRe
         BountyRecord,
         ApplicationRecord,
         FreelancerRecord,
-        EscrowRecord
+        EscrowRecord,
+        ReviewRecord,
+        ReviewAggregate,
+        PaginationMeta,
+        ReviewsResponse
     )),
     tags(
         (name = "bounties", description = "Bounty management"),
         (name = "freelancers", description = "Freelancer registry"),
+        (name = "reviews", description = "Creator reputation and reviews"),
         (name = "escrow", description = "Payment escrow"),
     )
 )]
@@ -795,15 +1145,20 @@ async fn main() -> std::io::Result<()> {
         .expect("API_PORT must be a valid port number");
     let host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set before starting stellar-api");
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set before starting stellar-api");
     let db_pool = PgPool::connect(&database_url)
         .await
-        .unwrap_or_else(|error| panic!("Failed to connect to PostgreSQL using DATABASE_URL: {error}"));
+        .unwrap_or_else(|error| {
+            panic!("Failed to connect to PostgreSQL using DATABASE_URL: {error}")
+        });
 
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let cfg = Config::from_url(redis_url);
-    let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).expect("Failed to create Redis pool");
+    let redis_pool = cfg
+        .create_pool(Some(Runtime::Tokio1))
+        .expect("Failed to create Redis pool");
 
     tracing::info!("Starting Stellar API on {}:{}", host, port);
     tracing::info!(
@@ -833,6 +1188,10 @@ async fn main() -> std::io::Result<()> {
             )
             .route("/api/freelancers", web::get().to(list_freelancers))
             .route("/api/freelancers/{address}", web::get().to(get_freelancer))
+            .route(
+                "/api/reviews/{creator_id}",
+                web::get().to(get_creator_reviews),
+            )
             .route("/api/escrow/{id}", web::get().to(get_escrow))
             .route("/api/escrow/{id}/release", web::post().to(release_escrow))
     })
@@ -867,7 +1226,29 @@ mod tests {
         assert!(paths.contains_key("/health"));
         assert!(paths.contains_key("/api/bounties"));
         assert!(paths.contains_key("/api/freelancers"));
+        assert!(paths.contains_key("/api/reviews/{creator_id}"));
         assert!(paths.contains_key("/api/escrow/{id}"));
+    }
+
+    #[test]
+    fn review_aggregate_counts_average_and_breakdown() {
+        let aggregate = build_review_aggregate(&[(5, 3), (4, 1), (2, 1)]);
+
+        assert_eq!(aggregate.total, 5);
+        assert_eq!(aggregate.average, 4.2);
+        assert_eq!(aggregate.breakdown.get(&5), Some(&3));
+        assert_eq!(aggregate.breakdown.get(&4), Some(&1));
+        assert_eq!(aggregate.breakdown.get(&3), Some(&0));
+    }
+
+    #[test]
+    fn review_aggregate_ignores_invalid_ratings() {
+        let aggregate = build_review_aggregate(&[(5, 1), (6, 10), (0, 10)]);
+
+        assert_eq!(aggregate.total, 1);
+        assert_eq!(aggregate.average, 5.0);
+        assert_eq!(aggregate.breakdown.get(&5), Some(&1));
+        assert_eq!(aggregate.breakdown.get(&1), Some(&0));
     }
 
     #[test]

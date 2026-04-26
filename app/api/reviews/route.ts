@@ -3,8 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import {
   createReview,
-  getReviewsForCreator,
-  calculateAggregate,
+  getReviewSummaryForCreator,
   getPendingReviews,
   moderateReview,
   voteOnReview,
@@ -73,19 +72,9 @@ export async function GET(request: NextRequest) {
   const sort = (searchParams.get('sort') as 'recent' | 'helpful' | 'rating_high' | 'rating_low') ?? 'recent'
   const filterRating = searchParams.get('filterRating') ? Number(searchParams.get('filterRating')) : undefined
   const page = Number(searchParams.get('page') ?? 1)
-  const limit = Math.min(50, Number(searchParams.get('limit') ?? 10))
+  const limit = Number(searchParams.get('limit') ?? 10)
 
-  const { reviews, total } = getReviewsForCreator(creatorId, { sort, filterRating, page, limit })
-
-  // Calculate aggregate from all approved reviews (not just current page)
-  const { reviews: allReviews } = getReviewsForCreator(creatorId, { limit: 1000 })
-  const aggregate = calculateAggregate(allReviews)
-
-  return NextResponse.json({
-    reviews,
-    aggregate,
-    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-  })
+  return NextResponse.json(getReviewSummaryForCreator(creatorId, { sort, filterRating, page, limit }))
 }
 
 // POST /api/reviews  - submit a review
