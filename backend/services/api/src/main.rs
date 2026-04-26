@@ -7,10 +7,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::time::Duration;
 
+mod aggregation;
 mod analytics;
 mod auth;
 mod database;
 mod event_indexer;
+mod ml;
+mod ml_handlers;
 mod reputation;
 mod verification_rewards;
 mod webhook;
@@ -1297,6 +1300,16 @@ async fn main() -> std::io::Result<()> {
     reputation::initialize_reputation_system_with_db(pool.clone());
     tracing::info!("Reputation system initialized with hooks and database");
 
+    // Initialize the ML model (trained on an empty seed; retraining populates it)
+    let ml_state = web::Data::new(ml_handlers::MlAppState {
+        model: std::sync::Arc::new(ml::SimpleMLModel::new(&[])),
+    });
+    tracing::info!("ML model initialised");
+
+    let port = std::env::var("API_PORT")
+        .unwrap_or_else(|_| "3001".to_string())
+        .parse::<u16>()
+        .expect("API_PORT must be a valid port number");
     let port = parse_u16_env_with_range("API_PORT", 3001, 1, 65535);
 
     let host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -1307,6 +1320,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
+            .app_data(ml_state.clone())
             .app_data(web::Data::new(ws_limiter.clone()))
             .wrap(cors_middleware())
             .wrap(middleware::Logger::default())
@@ -1338,6 +1352,15 @@ async fn main() -> std::io::Result<()> {
                     .route(
                         "/webhooks/payment",
                         web::post().to(webhook::payment_webhook),
+                    )
+                    // ML payment endpoints (issue #426)
+                    .route(
+                        "/payments/{id}/status",
+                        web::get().to(ml_handlers::payment_status_update),
+                    )
+                    .route(
+                        "/payments/{id}/stream",
+                        web::get().to(ml_handlers::payment_stream),
                     )
                     // Protected write routes — require valid JWT
                     .service(
