@@ -276,7 +276,30 @@ export interface Bounty {
   escrowId?: string;
 }
 
-// ── Creator (mirrors Rust Creator struct) ─────────────────────────────────────
+// ── Anchor reliability (GET /api/v1/anchors/scores) ──────────────────────────
+
+/** Computed reliability score for a single anchor. */
+export interface AnchorReliabilityScore {
+  /** Anchor identifier (e.g. "circle-usdc", "bitso-mxn"). */
+  anchorId: string;
+  /** Reliability score in [0.0, 1.0]. 1.0 = perfect, 0.0 = all failures. */
+  score: number;
+  /** Total number of events that contributed to this score. */
+  eventCount: number;
+  /** Sum of decay weights across all events (effective sample size). */
+  effectiveWeight: number;
+  /**
+   * Statistical confidence in the score, derived from the Wilson score
+   * interval for a weighted proportion (95% CI).
+   *
+   * Range [0.0, 1.0]:
+   * - 1.0 – high certainty (many recent events, score near 0 or 1).
+   * - 0.0 – no information (zero effective weight).
+   *
+   * Computed as `1 − 1.96 * sqrt(score * (1 − score) / effectiveWeight)`.
+   */
+  confidence: number;
+}
 
 export interface Creator {
   id: string;

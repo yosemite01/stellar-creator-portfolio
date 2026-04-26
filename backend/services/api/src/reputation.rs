@@ -267,6 +267,12 @@ pub async fn on_review_submitted(
         Err(hook_errors)
     }
 }
+
+/// Persist a review and refresh the creator's reputation aggregate atomically.
+///
+/// Both writes run inside a single `sqlx` transaction. If the reputation
+/// update fails the review insert is rolled back, so the two tables can
+/// never diverge due to a partial failure.
     
 async fn save_review_to_database(event: &ReviewSubmittedEvent) -> Result<(), String> {
     let pool = match get_database_pool() {
@@ -278,16 +284,26 @@ async fn save_review_to_database(event: &ReviewSubmittedEvent) -> Result<(), Str
         }
     };
 
+    // Parse UUID from review_id or generate a fresh one.
     let review_uuid = match uuid::Uuid::parse_str(&event.review_id) {
         Ok(uuid) => uuid.to_string(),
         Err(_) => uuid::Uuid::new_v4().to_string(),
     };
 
+    // Open a transaction — both the INSERT and the reputation refresh must
+    // succeed together, or neither is committed.
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+    // Step 1: insert the review row.
+    sqlx::query(
     let result = sqlx::query(
         r#"
         INSERT INTO reviews (id, creator_id, bounty_id, rating, title, body, reviewer_name, created_at)
         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, NOW())
-        "#
+        "#,
     )
     .bind(&review_uuid)
     .bind(&event.creator_id)
@@ -296,9 +312,51 @@ async fn save_review_to_database(event: &ReviewSubmittedEvent) -> Result<(), Str
     .bind(&event.title)
     .bind(&event.body)
     .bind(&event.reviewer_name)
-    .execute(&pool)
-    .await;
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to insert review {}: {}", event.review_id, e);
+        format!("Failed to save review to database: {}", e)
+    })?;
 
+    tracing::info!(
+        "Review {} inserted for creator {} (within transaction)",
+        event.review_id,
+        event.creator_id
+    );
+
+    // Step 2: refresh the creator's aggregated reputation.
+    // Runs in the same transaction so a failure here rolls back the insert.
+    //
+    // Note: the `reviews_update_reputation` trigger on the reviews table already
+    // calls update_creator_reputation automatically on INSERT. This explicit call
+    // is kept as a belt-and-suspenders measure in case the trigger is disabled or
+    // removed; it is idempotent so running it twice is safe.
+    sqlx::query("SELECT update_creator_reputation($1)")
+        .bind(&event.creator_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to update reputation for creator {}: {}",
+                event.creator_id,
+                e
+            );
+            format!("Failed to update creator reputation: {}", e)
+        })?;
+
+    // Both steps succeeded — commit.
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit review transaction: {}", e))?;
+
+    tracing::info!(
+        "Review {} and reputation for creator {} committed successfully",
+        event.review_id,
+        event.creator_id
+    );
+
+    Ok(())
     match result {
         Ok(_) => {
             tracing::info!("Review {} saved for creator {}", event.review_id, event.creator_id);

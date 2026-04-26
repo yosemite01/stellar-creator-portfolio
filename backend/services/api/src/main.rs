@@ -1125,6 +1125,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::time::Duration;
 
+mod alerts;
 mod aggregation;
 mod analytics;
 mod auth;
@@ -2454,8 +2455,10 @@ async fn main() -> std::io::Result<()> {
     let ws_limiter = websocket::WsConnectionLimiter::from_env();
 
     HttpServer::new(move || {
+        let alert_store = web::Data::new(alerts::AlertStore::new());
         App::new()
             .app_data(web::Data::new(pool.clone()))
+            .app_data(alert_store)
             .app_data(web::Data::new(stellar_rpc_url.clone()))
             .app_data(ml_state.clone())
             .app_data(web::Data::new(ws_limiter.clone()))
@@ -2501,7 +2504,12 @@ async fn main() -> std::io::Result<()> {
                             .route("/bounties", web::post().to(create_bounty))
                             .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
                             .route("/freelancers/register", web::post().to(register_freelancer))
-                            .route("/escrow/{id}/release", web::post().to(release_escrow)),
+                            .route("/escrow/{id}/release", web::post().to(release_escrow))
+                            // Alert routes — all require JWT; update/delete enforce ownership
+                            .route("/alerts", web::post().to(alerts::create_alert))
+                            .route("/alerts", web::get().to(alerts::list_alerts))
+                            .route("/alerts/{id}", web::patch().to(alerts::update_alert))
+                            .route("/alerts/{id}", web::delete().to(alerts::delete_alert)),
                     ),
             )
             .service(
