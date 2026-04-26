@@ -1,117 +1,270 @@
 'use client';
 
 import { useState } from 'react';
+import { Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { StarRating } from '@/components/rating-display';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { validateReview, type ReviewSubmission, type FieldError } from '@/lib/api-models';
+import { submitReview, ApiClientError } from '@/lib/api-client';
 
-interface ReviewFormProps {
-  creatorId: string;
-  creatorName: string;
-  onSubmit: (data: { rating: number; title: string; body: string }) => Promise<void>;
-  onCancel?: () => void;
-  className?: string;
+// ── Star picker ───────────────────────────────────────────────────────────────
+
+interface StarPickerProps {
+  value: number;
+  onChange: (rating: number) => void;
+  error?: boolean;
 }
 
-export function ReviewForm({ creatorId: _creatorId, creatorName, onSubmit, onCancel, className }: ReviewFormProps) {
+function StarPicker({ value, onChange, error }: StarPickerProps) {
+  const [hovered, setHovered] = useState(0);
+  const active = hovered || value;
+
+  return (
+    <div
+      className="flex gap-1"
+      role="radiogroup"
+      aria-label="Star rating"
+      onMouseLeave={() => setHovered(0)}
+    >
+      {[1, 2, 3, 4, 5].map((star) => (
+        <button
+          key={star}
+          type="button"
+          role="radio"
+          aria-checked={value === star}
+          aria-label={`${star} star${star > 1 ? 's' : ''}`}
+          onClick={() => onChange(star)}
+          onMouseEnter={() => setHovered(star)}
+          className={cn(
+            'p-0.5 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            error && value === 0 && 'text-destructive',
+          )}
+        >
+          <Star
+            size={28}
+            className={cn(
+              'transition-colors',
+              star <= active ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground/40',
+            )}
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Field error helper ────────────────────────────────────────────────────────
+
+function fieldError(errors: FieldError[], field: string): string | undefined {
+  return errors.find((e) => e.field === field)?.message;
+}
+
+// ── ReviewForm ────────────────────────────────────────────────────────────────
+
+export interface ReviewFormProps {
+  bountyId: string;
+  creatorId: string;
+  creatorName: string;
+  /** Called after a successful submission. */
+  onSuccess?: () => void;
+  /** Called when form is cancelled. */
+  onCancel?: () => void;
+  /** Show as modal or inline form */
+  variant?: 'modal' | 'inline';
+}
+
+type FormState = 'idle' | 'submitting' | 'success' | 'error';
+
+export function ReviewForm({ 
+  bountyId, 
+  creatorId, 
+  creatorName, 
+  onSuccess, 
+  onCancel,
+  variant = 'inline' 
+}: ReviewFormProps) {
   const [rating, setRating] = useState(0);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [reviewerName, setReviewerName] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<FieldError[]>([]);
+  const [formState, setFormState] = useState<FormState>('idle');
+  const [apiError, setApiError] = useState<string | null>(null);
 
-  const isValid = rating > 0 && title.trim().length > 0 && body.trim().length >= 10;
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!isValid) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await onSubmit({ rating, title: title.trim(), body: body.trim() });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit review. Please try again.');
-    } finally {
-      setSubmitting(false);
+    setApiError(null);
+
+    const data: Partial<ReviewSubmission> = { bountyId, creatorId, rating, title, body, reviewerName };
+    const errors = validateReview(data);
+    if (errors) {
+      setFieldErrors(errors);
+      return;
     }
-  };
+    setFieldErrors([]);
+    setFormState('submitting');
+
+    try {
+      await submitReview(data as ReviewSubmission);
+      setFormState('success');
+      onSuccess?.();
+    } catch (err) {
+      setFormState('error');
+      setApiError(
+        err instanceof ApiClientError
+          ? err.message
+          : 'Something went wrong. Please try again.',
+      );
+    }
+  }
+
+  if (formState === 'success') {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="rounded-xl border border-border bg-card p-8 text-center space-y-3"
+      >
+        <div className="text-4xl">🎉</div>
+        <h3 className="text-lg font-semibold text-foreground">Review submitted!</h3>
+        <p className="text-sm text-muted-foreground">
+          Thanks for sharing your feedback on working with {creatorName}.
+        </p>
+      </div>
+    );
+  }
+
+  const ratingError = fieldError(fieldErrors, 'rating');
+  const titleError = fieldError(fieldErrors, 'title');
+  const bodyError = fieldError(fieldErrors, 'body');
+  const nameError = fieldError(fieldErrors, 'reviewerName');
 
   return (
     <form
       onSubmit={handleSubmit}
-      className={cn('bg-card border border-border rounded-lg p-6 space-y-5', className)}
-      aria-label={`Write a review for ${creatorName}`}
+      noValidate
+      aria-label="Submit a review"
+      className="rounded-xl border border-border bg-card p-6 sm:p-8 space-y-6"
     >
-      <h3 className="text-lg font-semibold text-foreground">Write a Review</h3>
-
-      {/* Star rating picker */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-2">
-          Your Rating <span className="text-destructive">*</span>
-        </label>
-        <StarRating value={rating} interactive onChange={setRating} size="lg" />
-        {rating > 0 && (
-          <p className="text-xs text-muted-foreground mt-1">
-            {['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'][rating]}
+        <h2 className="text-xl font-bold text-foreground">Leave a review</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Share your experience working with {creatorName}.
+        </p>
+      </div>
+
+      {/* Star rating */}
+      <div className="space-y-1.5">
+        <Label>
+          Rating <span aria-hidden>*</span>
+        </Label>
+        <StarPicker value={rating} onChange={setRating} error={!!ratingError} />
+        {ratingError && (
+          <p role="alert" className="text-xs text-destructive">
+            {ratingError}
           </p>
         )}
       </div>
 
       {/* Title */}
-      <div>
-        <label htmlFor="review-title" className="block text-sm font-medium text-foreground mb-1.5">
-          Review Title <span className="text-destructive">*</span>
-        </label>
-        <input
+      <div className="space-y-1.5">
+        <Label htmlFor="review-title">
+          Title <span aria-hidden>*</span>
+        </Label>
+        <Input
           id="review-title"
-          type="text"
+          placeholder="Summarise your experience"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          maxLength={100}
-          placeholder="Summarize your experience"
-          className="w-full px-3 py-2 text-sm bg-background border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-muted-foreground"
-          required
+          aria-invalid={!!titleError}
+          aria-describedby={titleError ? 'review-title-error' : undefined}
+          maxLength={120}
         />
+        {titleError && (
+          <p id="review-title-error" role="alert" className="text-xs text-destructive">
+            {titleError}
+          </p>
+        )}
       </div>
 
       {/* Body */}
-      <div>
-        <label htmlFor="review-body" className="block text-sm font-medium text-foreground mb-1.5">
-          Your Review <span className="text-destructive">*</span>
-        </label>
-        <textarea
+      <div className="space-y-1.5">
+        <Label htmlFor="review-body">
+          Feedback <span aria-hidden>*</span>
+        </Label>
+        <Textarea
           id="review-body"
+          placeholder="Describe the quality of work, communication, and overall experience…"
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          maxLength={2000}
+          aria-invalid={!!bodyError}
+          aria-describedby={bodyError ? 'review-body-error' : undefined}
           rows={4}
-          placeholder="Share details about your experience working with this creator..."
-          className="w-full px-3 py-2 text-sm bg-background border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-muted-foreground resize-none"
-          required
+          maxLength={1000}
         />
-        <p className="text-xs text-muted-foreground mt-1 text-right">{body.length}/2000</p>
+        <div className="flex justify-between items-start">
+          {bodyError ? (
+            <p id="review-body-error" role="alert" className="text-xs text-destructive">
+              {bodyError}
+            </p>
+          ) : (
+            <span />
+          )}
+          <span className="text-xs text-muted-foreground tabular-nums">{body.length}/1000</span>
+        </div>
       </div>
 
-      {error && (
+      {/* Reviewer name */}
+      <div className="space-y-1.5">
+        <Label htmlFor="reviewer-name">
+          Your name <span aria-hidden>*</span>
+        </Label>
+        <Input
+          id="reviewer-name"
+          placeholder="e.g. Jane D."
+          value={reviewerName}
+          onChange={(e) => setReviewerName(e.target.value)}
+          aria-invalid={!!nameError}
+          aria-describedby={nameError ? 'reviewer-name-error' : undefined}
+          maxLength={80}
+        />
+        {nameError && (
+          <p id="reviewer-name-error" role="alert" className="text-xs text-destructive">
+            {nameError}
+          </p>
+        )}
+      </div>
+
+      {/* API-level error */}
+      {apiError && (
         <p role="alert" className="text-sm text-destructive">
-          {error}
+          {apiError}
         </p>
       )}
 
-      <div className="flex gap-3 justify-end">
-        {onCancel && (
-          <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
-            Cancel
-          </Button>
-        )}
-        <Button type="submit" disabled={!isValid || submitting}>
-          {submitting ? 'Submitting...' : 'Submit Review'}
-        </Button>
-      </div>
+      <Button
+        type="submit"
+        className="w-full"
+        disabled={formState === 'submitting'}
+        aria-busy={formState === 'submitting'}
+      >
+        {formState === 'submitting' ? 'Submitting…' : 'Submit review'}
+      </Button>
 
-      <p className="text-xs text-muted-foreground">
-        Reviews are moderated before being published. Your review will appear once approved.
-      </p>
+      {variant === 'modal' && onCancel && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full mt-2"
+          onClick={onCancel}
+          disabled={formState === 'submitting'}
+        >
+          Cancel
+        </Button>
+      )}
     </form>
   );
 }

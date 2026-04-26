@@ -62,6 +62,13 @@ model User {
   clientProfile  ClientProfile?
   bounties       Bounty[]
   applications   BountyApplication[]
+  notifications  Notification[]
+  notificationPreference NotificationPreference?
+  inAppNotifications     InAppNotification[]
+  emailDeliveryLogs      EmailDeliveryLog[]
+  emailUnsubscribeToken  String? @unique
+  matchFeedback       MatchFeedback[]
+  matchNotifications  MatchNotification[]
 
   @@index([email])
 }
@@ -207,4 +214,120 @@ enum ReviewStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+model Notification {
+  id          String             @id @default(cuid())
+  messageId   String?            @unique
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  body        String
+  type        String
+  status      NotificationStatus @default(PENDING)
+  priority    String             @default("normal")
+  channels    String[]
+  metadata    Json?
+  readAt      DateTime?
+  openedAt    DateTime?
+  sentAt      DateTime?
+  failedAt    DateTime?
+  error       String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  OPENED
+  READ
+  ARCHIVED
+  DELETED
+}
+// ── Notifications & email delivery ───────────────────────────────────────────
+
+model NotificationPreference {
+  userId                  String   @id
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailBountyAlerts       Boolean  @default(true)
+  emailApplicationUpdates Boolean  @default(true)
+  emailMessages           Boolean  @default(true)
+  emailMarketing          Boolean  @default(false)
+  inAppEnabled            Boolean  @default(true)
+  updatedAt               DateTime @updatedAt
+}
+
+model InAppNotification {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  body          String   @db.Text
+  read          Boolean  @default(false)
+  applicationId String?
+  bountyId      String?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model EmailDeliveryLog {
+  id                String              @id @default(cuid())
+  userId            String?
+  user              User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  toEmail           String
+  templateKey       String
+  subject           String
+  category          String
+  status            EmailDeliveryStatus @default(QUEUED)
+  provider          String?
+  providerMessageId String?
+  errorMessage      String?             @db.Text
+  payload           Json
+  createdAt         DateTime            @default(now())
+  sentAt            DateTime?
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+enum EmailDeliveryStatus {
+  QUEUED
+  SENT
+  FAILED
+  SKIPPED
+}
+
+model MatchFeedback {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  strategy  String
+  mode      String
+  contextId String?
+  matchId   String
+  score     Float?
+  helpful   Boolean
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([strategy, helpful])
+}
+
+model MatchNotification {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String
+  body            String   @db.Text
+  read            Boolean  @default(false)
+  relatedBountyId String?
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
 }

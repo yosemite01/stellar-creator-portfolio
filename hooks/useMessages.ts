@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { RealtimeWebSocket, WSStatus } from '@/lib/websocket'
+import { RealtimeWebSocket, WSStatus } from '@/lib/websocket/index'
 import { toast } from 'sonner'
 
 export type Attachment = {

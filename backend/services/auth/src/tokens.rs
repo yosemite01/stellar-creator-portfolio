@@ -45,7 +45,10 @@ pub fn sign_access_token(
 }
 
 #[allow(dead_code)]
-pub fn verify_access_token(token: &str, jwt_secret: &str) -> Result<AccessClaims, jsonwebtoken::errors::Error> {
+pub fn verify_access_token(
+    token: &str,
+    jwt_secret: &str,
+) -> Result<AccessClaims, jsonwebtoken::errors::Error> {
     let mut validation = Validation::default();
     validation.validate_exp = true;
     let token = decode::<AccessClaims>(

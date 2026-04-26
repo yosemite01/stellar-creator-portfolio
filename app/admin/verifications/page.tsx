@@ -1,13 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { creators } from '@/lib/creators-data';
-import type { Creator, VerificationStatus, SpecialBadge } from '@/lib/creators-data';
-import { Header } from '@/components/header';
+import { creators } from '@/lib/services/creators-data';
+import type { Creator, VerificationStatus, SpecialBadge } from '@/lib/services/creators-data';
+import { Header } from '@/components/layout/header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { VerificationBadge, BadgeRow } from '@/components/verification-badge';
+import { VerificationBadge, BadgeRow } from '@/components/widgets/verification-badge';
 import { BadgeCheck, Clock, UserX, CheckCircle, XCircle, Star, Zap, Award, TrendingUp } from 'lucide-react';
 
 type LocalCreator = Creator & {

@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Search } from 'lucide-react';
-import { mockAuditLogs, type AuditLog } from '@/lib/admin-service';
+import { mockAuditLogs, type AuditLog } from '@/lib/services/admin-service';
 
 const ACTION_LABELS: Record<string, string> = {
   'user.suspend': 'Suspended user',

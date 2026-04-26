@@ -3,18 +3,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { Header } from '@/components/header';
-import { Footer } from '@/components/footer';
+import { Header } from '@/components/layout/header';
+import { Footer } from '@/components/layout/footer';
 import { Button } from '@/components/ui/button';
-import { PortfolioEditor, PreviewToggle } from '@/components/portfolio-editor';
-import { creators } from '@/lib/creators-data';
+import { PortfolioEditor, PreviewToggle } from '@/components/widgets/portfolio-editor';
+import { creators } from '@/lib/services/creators-data';
 import {
   loadCustomization,
   saveCustomization,
   applyThemeVars,
   resetThemeVars,
   type PortfolioCustomization,
-} from '@/lib/portfolio-customization';
+} from '@/lib/utils/portfolio-customization';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 

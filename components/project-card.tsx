@@ -25,7 +25,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
       <div className="p-5">
         {/* Category Badge */}
         <div className="inline-block mb-2">
-          <span className="text-xs font-semibold px-2.5 py-1 bg-muted text-muted-foreground rounded-full">
+          <span className="text-xs font-semibold px-2.5 py-1 bg-secondary/30 text-secondary rounded-full">
             {project.category}
           </span>
         </div>

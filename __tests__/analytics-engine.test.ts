@@ -15,7 +15,7 @@ import {
   type ApplicationRecord,
   type DateRange,
   type TrendPoint,
-} from '@/lib/analytics-engine'
+} from '@/lib/analytics/analytics-engine'
 
 /* ─── Fixtures ─────────────────────────────────────────────────────────────── */
 

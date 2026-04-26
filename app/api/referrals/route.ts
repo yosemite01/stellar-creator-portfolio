@@ -10,7 +10,7 @@ import {
   getReferralStats,
   getReferralHistory,
   ReferralEventType,
-} from '@/lib/referral-service';
+} from '@/lib/services/referral-service';
 import { z } from 'zod';
 import { validateRequest, formatZodErrors } from '@/lib/validators';
 

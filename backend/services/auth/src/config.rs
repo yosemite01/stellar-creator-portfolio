@@ -55,13 +55,15 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let jwt_secret =
-            std::env::var("JWT_SECRET").context("JWT_SECRET is required for signing access tokens")?;
+        let jwt_secret = std::env::var("JWT_SECRET")
+            .context("JWT_SECRET is required for signing access tokens")?;
         if jwt_secret.len() < 32 {
             anyhow::bail!("JWT_SECRET must be at least 32 characters");
         }
 
-        let mint_secret = std::env::var("AUTH_MINT_SECRET").ok().filter(|s| !s.is_empty());
+        let mint_secret = std::env::var("AUTH_MINT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty());
         let dev_mint_allow = std::env::var("AUTH_DEV_MINT")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);

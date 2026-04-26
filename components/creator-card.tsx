@@ -4,9 +4,6 @@ import { useRouter } from 'next/navigation';
 import { Creator } from '@/lib/creators-data';
 import { ArrowRight, Linkedin, Twitter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import Image from 'next/image';
-import { buildOptimizationProps, buildSizes } from '@/lib/image-utils';
-import { VerificationBadge, BadgeRow } from '@/components/verification-badge';
 
 interface CreatorCardProps {
   creator: Creator;
@@ -14,12 +11,6 @@ interface CreatorCardProps {
 
 export function CreatorCard({ creator }: CreatorCardProps) {
   const router = useRouter();
-  const coverSizes = buildSizes({
-    mobile: '100vw',
-    tablet: '50vw',
-    desktop: '33vw',
-    largeDesktop: '33vw',
-  });
 
   const handleCardClick = (e: React.MouseEvent<HTMLDivElement>) => {
     // Don't navigate if clicking on anchors or buttons
@@ -37,14 +28,10 @@ export function CreatorCard({ creator }: CreatorCardProps) {
       {/* Cover Image */}
       <div className="aspect-video bg-gradient-to-br from-primary/20 to-accent/20 overflow-hidden relative">
         {creator.coverImage && (
-          <Image
+          <img
             src={creator.coverImage}
-            alt={`${creator.name} cover image`}
-            fill
-            className="object-cover group-hover:scale-105 transition-transform duration-300"
-            {...buildOptimizationProps({ sizes: coverSizes })}
-            sizes={coverSizes}
-            placeholder="empty"
+            alt={creator.name}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
           />
         )}
       </div>
@@ -59,18 +46,8 @@ export function CreatorCard({ creator }: CreatorCardProps) {
         </div>
 
         {/* Name & Title */}
-        <h3 className="text-lg font-bold text-foreground mb-1 line-clamp-2 flex items-center gap-1.5">
+        <h3 className="text-lg font-bold text-foreground mb-1 line-clamp-2">
           {creator.name}
-          {creator.verification && (
-            <VerificationBadge
-              status={creator.verification.status}
-              verifiedAt={creator.verification.verifiedAt}
-              size="sm"
-            />
-          )}
-          {creator.verification?.badges && (
-            <BadgeRow badges={creator.verification.badges} size="sm" />
-          )}
         </h3>
         <p className="text-sm text-muted-foreground mb-2">
           {creator.title}

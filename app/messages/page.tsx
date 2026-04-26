@@ -1,4 +1,4 @@
-import ChatInterface from '@/components/chat-interface'
+import ChatInterface from '@/components/features/chat-interface'
 
 export const metadata = {
   title: 'Messages | Stellar Creators',

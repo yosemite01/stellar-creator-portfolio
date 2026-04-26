@@ -6,12 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   Users, Briefcase, DollarSign, Flag, TrendingUp,
-  UserPlus, CheckCircle, ArrowRight, ScrollText,
+  UserPlus, CheckCircle, ArrowRight, ScrollText, Gavel,
 } from 'lucide-react';
 import {
   mockStats, mockAuditLogs, mockReports,
   type AuditLog,
-} from '@/lib/admin-service';
+} from '@/lib/services/admin-service';
 
 const ACTION_LABELS: Record<string, string> = {
   'user.suspend': 'Suspended user',
@@ -54,6 +54,7 @@ export default function AdminOverviewPage() {
     { href: '/admin/bounties', label: 'Moderate Bounties', icon: Briefcase },
     { href: '/admin/verifications', label: 'Verifications', icon: CheckCircle },
     { href: '/admin/reports', label: 'Open Reports', icon: Flag },
+    { href: '/admin/disputes', label: 'Disputes', icon: Gavel },
     { href: '/admin/audit', label: 'Audit Log', icon: ScrollText },
   ];
 

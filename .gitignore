@@ -16,3 +16,10 @@ node_modules/
 .next/
 backend/target/
 .DS_Store
+.DS_Store
+target/
+backend/target/
+**/test_snapshots/
+*.log
+.idea/
+.vscode/

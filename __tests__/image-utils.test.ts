@@ -5,7 +5,7 @@ import {
   defaultSizes,
   isLazyLoaded,
   preferredFormats,
-} from '../lib/image-utils';
+} from '@/lib/utils/image-utils';
 
 describe('image-utils', () => {
   it('buildSizes returns responsive string with fallbacks', () => {

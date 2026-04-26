@@ -1,12 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Header } from '@/components/header';
-import { Footer } from '@/components/footer';
-import { ReferralWidget } from '@/components/referral-widget';
+import { Header } from '@/components/layout/header';
+import { Footer } from '@/components/layout/footer';
+import { ReferralWidget } from '@/components/widgets/referral-widget';
 import { Users, DollarSign, Clock, TrendingUp, Gift } from 'lucide-react';
-import { REWARDS } from '@/lib/referral-service';
-import type { ReferralStats, ReferralRecord } from '@/lib/referral-service';
+import { REWARDS } from '@/lib/services/referral-service';
+import type { ReferralStats, ReferralRecord } from '@/lib/services/referral-service';
 
 const STATUS_STYLES: Record<string, string> = {
   pending:   'bg-yellow-500/10 text-yellow-600',

@@ -5,7 +5,7 @@ import {
   THEMES,
   loadCustomization,
   saveCustomization,
-} from '@/lib/portfolio-customization'
+} from '@/lib/utils/portfolio-customization'
 
 // Mock localStorage
 const localStorageMock = (() => {

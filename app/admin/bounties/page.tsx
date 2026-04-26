@@ -8,7 +8,7 @@ import { Search, Flag, CheckCircle, Trash2, AlertTriangle } from 'lucide-react';
 import {
   mockBounties, mockAuditLogs, addAuditLog,
   type AdminBounty, type BountyStatus, type AuditLog,
-} from '@/lib/admin-service';
+} from '@/lib/services/admin-service';
 
 const STATUS_COLORS: Record<BountyStatus, string> = {
   open: 'bg-green-500/10 text-green-600 border-green-500/20',

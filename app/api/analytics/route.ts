@@ -14,7 +14,7 @@ import {
   type DatePreset,
   type DateRange,
   type Granularity,
-} from '@/lib/analytics-engine'
+} from '@/lib/analytics/analytics-engine'
 
 const VALID_PRESETS = new Set(['7d', '30d', '90d', '1y', 'all'])
 

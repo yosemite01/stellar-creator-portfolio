@@ -11,7 +11,7 @@ import {
 import {
   mockUsers, mockAuditLogs, addAuditLog,
   type AdminUser, type UserRole, type UserStatus, type AuditLog,
-} from '@/lib/admin-service';
+} from '@/lib/services/admin-service';
 
 const ROLES: UserRole[] = ['ADMIN', 'CLIENT', 'CREATOR', 'USER'];
 const STATUS_COLORS: Record<UserStatus, string> = {
