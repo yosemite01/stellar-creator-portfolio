@@ -11,62 +11,6 @@
   --card-foreground: oklch(0.15 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.15 0 0);
-  /**
- * ISSUE #18: Implement Responsive Typography & Spacing System
- * * DESCRIPTION: Refine typography and spacing to scale properly across all devices.
- * REQUIREMENTS:
- * - Create typography scale (desktop, tablet, mobile)
- * - Implement fluid typography using clamp()
- * - Create spacing utilities for consistent padding/margins
- * - Add line-height consistency and letter-spacing scale
- * * DESIGN SPEC: Fluid scale targets 320px (mobile) to 1440px (desktop).
- */
-
-:root {
-  /* Typography Scale - Base: 16px (1rem) */
-  --text-xs: clamp(0.75rem, 0.71rem + 0.18vw, 0.875rem);
-  --text-sm: clamp(0.875rem, 0.83rem + 0.22vw, 1rem);
-  --text-base: clamp(1rem, 0.96rem + 0.22vw, 1.125rem);
-  --text-lg: clamp(1.125rem, 1.02rem + 0.54vw, 1.5rem);
-  --text-xl: clamp(1.25rem, 1.03rem + 1.09vw, 2rem);
-  --text-2xl: clamp(1.5rem, 1.07rem + 2.17vw, 3rem);
-  --text-3xl: clamp(2rem, 1.28rem + 3.62vw, 4.5rem);
-
-  /* Spacing Utilities - Consistent Padding/Margins */
-  --space-1: clamp(0.25rem, 0.23rem + 0.09vw, 0.3125rem);
-  --space-2: clamp(0.5rem, 0.46rem + 0.18vw, 0.625rem);
-  --space-4: clamp(1rem, 0.86rem + 0.72vw, 1.5rem);
-  --space-6: clamp(1.5rem, 1.28rem + 1.09vw, 2.25rem);
-  --space-8: clamp(2rem, 1.57rem + 2.17vw, 3.5rem);
-  --space-12: clamp(3rem, 2.13rem + 4.35vw, 6rem);
-
-  /* Consistency: Line-Height & Letter-Spacing */
-  --leading-tight: 1.2;
-  --leading-normal: 1.5;
-  --leading-relaxed: 1.75;
-  
-  --tracking-tight: -0.02em;
-  --tracking-normal: 0em;
-  --tracking-wide: 0.05em;
-}
-
-/* Base Tag Implementation for Design Consistency */
-h1 {
-  font-size: var(--text-3xl);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-tight);
-}
-
-h2 {
-  font-size: var(--text-2xl);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-tight);
-}
-
-p {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
-}
   
   /* Primary: Deep Indigo-Blue for Trust & Professionalism */
   --primary: oklch(0.35 0.15 250);
@@ -105,22 +49,6 @@ p {
   --sidebar-accent-foreground: oklch(0.98 0 0);
   --sidebar-border: oklch(0.92 0 0);
   --sidebar-ring: oklch(0.35 0.15 250);
-
-  /* Difficulty badge semantic colors - light mode */
-  --badge-beginner-bg: oklch(0.92 0.08 145);
-  --badge-beginner-text: oklch(0.28 0.1 145);
-  --badge-intermediate-bg: oklch(0.93 0.1 85);
-  --badge-intermediate-text: oklch(0.32 0.1 75);
-  --badge-advanced-bg: oklch(0.92 0.1 55);
-  --badge-advanced-text: oklch(0.32 0.12 45);
-  --badge-expert-bg: oklch(0.92 0.1 25);
-  --badge-expert-text: oklch(0.32 0.15 25);
-
-  /* Status indicator colors - light mode */
-  --status-open: oklch(0.28 0.1 145);
-  --status-in-progress: oklch(0.32 0.1 75);
-  --status-completed: oklch(0.35 0.15 250);
-  --status-cancelled: oklch(0.45 0 0);
 }
 
 .dark {
@@ -169,22 +97,6 @@ p {
   --sidebar-accent-foreground: oklch(0.12 0 0);
   --sidebar-border: oklch(0.25 0.02 240);
   --sidebar-ring: oklch(0.65 0.18 255);
-
-  /* Difficulty badge semantic colors - dark mode (high contrast on dark bg) */
-  --badge-beginner-bg: oklch(0.25 0.07 145);
-  --badge-beginner-text: oklch(0.82 0.14 145);
-  --badge-intermediate-bg: oklch(0.26 0.08 85);
-  --badge-intermediate-text: oklch(0.88 0.14 85);
-  --badge-advanced-bg: oklch(0.26 0.08 55);
-  --badge-advanced-text: oklch(0.88 0.14 50);
-  --badge-expert-bg: oklch(0.25 0.08 25);
-  --badge-expert-text: oklch(0.88 0.14 25);
-
-  /* Status indicator colors - dark mode */
-  --status-open: oklch(0.82 0.14 145);
-  --status-in-progress: oklch(0.88 0.14 85);
-  --status-completed: oklch(0.75 0.18 255);
-  --status-cancelled: oklch(0.65 0 0);
 }
 
 @theme inline {
@@ -235,38 +147,4 @@ p {
   body {
     @apply bg-background text-foreground;
   }
-}
-
-@layer components {
-  /* Difficulty badges - use CSS vars for guaranteed dark mode contrast */
-  .badge-beginner {
-    background-color: var(--badge-beginner-bg);
-    color: var(--badge-beginner-text);
-  }
-  .badge-intermediate {
-    background-color: var(--badge-intermediate-bg);
-    color: var(--badge-intermediate-text);
-  }
-  .badge-advanced {
-    background-color: var(--badge-advanced-bg);
-    color: var(--badge-advanced-text);
-  }
-  .badge-expert {
-    background-color: var(--badge-expert-bg);
-    color: var(--badge-expert-text);
-  }
-
-  /* Chat inputs - ensure readable in both modes */
-  .chat-input {
-    @apply bg-background text-foreground border-border placeholder:text-muted-foreground;
-  }
-}
-
-/* i18n: RTL layout (dir set on <html> by I18nProvider) */
-html[dir='rtl'] {
-  direction: rtl;
-}
-
-html[dir='ltr'] {
-  direction: ltr;
 }

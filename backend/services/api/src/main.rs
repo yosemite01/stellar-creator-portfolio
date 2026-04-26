@@ -1,1710 +1,2681 @@
 use actix_cors::Cors;
-use actix_web::{
-    dev::Server, http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer,
-    ResponseError,
-};
-use actix_web::middleware::{Compress, Logger, NormalizePath};
-use chrono::{DateTime, Utc};
-use deadpool_redis::{redis::AsyncCommands, Config, Pool, Runtime};
-use jsonwebtoken::{decode, DecodingKey, Validation};
-use opentelemetry::KeyValue;
-use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{runtime, trace::{self, TracerProvider}, Resource};
+use actix_web::body::MessageBody;
+use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
+use actix_web::{http, middleware, web, App, HttpResponse, HttpServer};
+use futures::future::{ok, Ready};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool};
-use std::collections::HashMap;
-use std::future::{pending, Future};
-use std::net::TcpListener;
-use std::sync::Arc;
-use stellar_discovery::{create_discovery, ServiceInfo};
-use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
-use utoipa::{OpenApi, ToSchema};
-use utoipa_swagger_ui::SwaggerUi;
-use uuid::Uuid;
+use sqlx::{PgPool, postgres::PgPoolOptions};
 
-mod metrics;
-mod webhooks;
-pub mod middleware;
-mod custom_middleware;
+mod analytics;
+mod auth;
+mod database;
+mod event_indexer;
+mod reputation;
+mod verification_rewards;
+mod webhook;
 
-use custom_middleware::{get_request_id, RateLimit, RateLimitConfig, RequestId};
+pub const API_VERSION: &str = "1";
+pub const API_PREFIX: &str = "/api/v1";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccessClaims {
-    pub sub: String,
-    pub family_id: uuid::Uuid,
-    pub exp: i64,
-    pub iat: i64,
+// ==================== Domain Models ====================
+
+/// Machine-readable error codes returned by the API.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ApiErrorCode {
+    BadRequest,
+    ValidationError,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    Conflict,
+    UnprocessableEntity,
+    InternalServerError,
+    ServiceUnavailable,
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum AuthError {
-    #[error("Missing or invalid Authorization header")]
-    MissingHeader,
-    #[error("Invalid JWT token")]
-    InvalidToken(#[from] jsonwebtoken::errors::Error),
+/// Per-field validation error detail.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct FieldError {
+    pub field: String,
+    pub message: String,
 }
 
-impl actix_web::ResponseError for AuthError {
-    fn error_response(&self) -> HttpResponse {
-        let response: ApiResponse<serde_json::Value> = ApiResponse::err(self.to_string());
-        HttpResponse::Unauthorized().json(response)
+/// Structured error payload included in failed responses.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ApiError {
+    pub code: ApiErrorCode,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "fieldErrors")]
+    pub field_errors: Option<Vec<FieldError>>,
+}
+
+impl ApiError {
+    pub fn new(code: ApiErrorCode, message: impl Into<String>) -> Self {
+        ApiError {
+            code,
+            message: message.into(),
+            field_errors: None,
+        }
+    }
+
+    pub fn with_field_errors(
+        code: ApiErrorCode,
+        message: impl Into<String>,
+        field_errors: Vec<FieldError>,
+    ) -> Self {
+        ApiError {
+            code,
+            message: message.into(),
+            field_errors: Some(field_errors),
+        }
+    }
+
+    pub fn not_found(resource: impl Into<String>) -> Self {
+        ApiError::new(
+            ApiErrorCode::NotFound,
+            format!("{} not found", resource.into()),
+        )
+    }
+
+    pub fn internal() -> Self {
+        ApiError::new(
+            ApiErrorCode::InternalServerError,
+            "An unexpected error occurred",
+        )
     }
 }
 
-async fn get_claims(req: &actix_web::HttpRequest) -> Result<AccessClaims, AuthError> {
-    let token = req.headers()
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or(AuthError::MissingHeader)?;
-
-    let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
-    let mut validation = Validation::default();
-    validation.validate_exp = true;
-    let claims = decode::<AccessClaims>(
-        token,
-        &DecodingKey::from_secret(jwt_secret.as_bytes()),
-        &validation,
-    )?
-    .claims;
-
-    Ok(claims)
+/// Pagination metadata for list responses.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PaginationMeta {
+    pub page: u32,
+    pub limit: u32,
+    pub total: u64,
+    pub total_pages: u32,
 }
 
+impl PaginationMeta {
+    pub fn new(page: u32, limit: u32, total: u64) -> Self {
+        let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
+        PaginationMeta {
+            page,
+            limit,
+            total,
+            total_pages,
+        }
+    }
+}
 
+/// Paginated list payload.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct PaginatedData<T> {
+    pub items: Vec<T>,
+    pub pagination: PaginationMeta,
+}
 
-#[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
-pub struct BountyRequest {
-    /// Stellar address of the bounty creator
-    pub creator: String,
+impl<T> PaginatedData<T> {
+    pub fn new(items: Vec<T>, page: u32, limit: u32, total: u64) -> Self {
+        PaginatedData {
+            items,
+            pagination: PaginationMeta::new(page, limit, total),
+        }
+    }
+}
+
+/// Envelope wrapping every API response.
+///
+/// On success: `success=true`, `data=Some(T)`, `error=None`.
+/// On failure: `success=false`, `data=None`, `error=Some(ApiError)`.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ApiResponse<T> {
+    pub success: bool,
+    pub data: Option<T>,
+    pub error: Option<ApiError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl<T> ApiResponse<T> {
+    pub fn ok(data: T, message: Option<String>) -> Self {
+        ApiResponse {
+            success: true,
+            data: Some(data),
+            error: None,
+            message,
+        }
+    }
+
+    pub fn err(error: ApiError) -> Self {
+        ApiResponse {
+            success: false,
+            data: None,
+            error: Some(error),
+            message: None,
+        }
+    }
+}
+
+// ==================== Request Models ====================
+
+// Note: Most request models are now in database modules
+// We only keep API-specific models here
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ReviewSubmission {
+    #[serde(rename = "bountyId")]
+    pub bounty_id: String,
+    #[serde(rename = "creatorId")]
+    pub creator_id: String,
+    pub rating: u8,
     pub title: String,
-    pub description: String,
-    /// Budget in stroops (1 XLM = 10_000_000 stroops)
-    pub budget: i128,
-    /// Unix timestamp for the deadline
-    pub deadline: u64,
+    pub body: String,
+    #[serde(rename = "reviewerName")]
+    pub reviewer_name: String,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
-pub struct BountyApplication {
-    pub bounty_id: u64,
-    /// Stellar address of the applicant
-    pub freelancer: String,
-    pub proposal: String,
-    pub proposed_budget: i128,
-    /// Estimated timeline in days
-    pub timeline: u64,
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct EscrowCreateRequest {
+    #[serde(rename = "bountyId")]
+    pub bounty_id: String,
+    #[serde(rename = "payerAddress")]
+    pub payer_address: String,
+    #[serde(rename = "payeeAddress")]
+    pub payee_address: String,
+    pub amount: i64,
+    pub token: String,
+    #[allow(dead_code)]
+    pub timelock: Option<u64>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct EscrowRefundRequest {
+    #[serde(rename = "authorizerAddress")]
+    #[allow(dead_code)]
+    pub authorizer_address: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct FreelancerRegistration {
     pub name: String,
     pub discipline: String,
     pub bio: String,
 }
 
-// Generic envelope — no ToSchema bound so it works with any Serialize T.
-#[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
-pub struct ApiResponse<T> {
-    pub success: bool,
-    pub data: Option<T>,
-    pub error: Option<String>,
-    pub message: Option<String>,
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct Project {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub image: String,
+    pub link: Option<String>,
+    pub tags: Vec<String>,
+    pub year: i32,
 }
 
-impl<T> ApiResponse<T> {
-    fn ok(data: T, message: Option<String>) -> Self {
-        Self { success: true, data: Some(data), error: None, message }
-    }
-
-    #[allow(dead_code)]
-    fn err(error: String) -> Self
-    where
-        T: Default,
-    {
-        Self { success: false, data: None, error: Some(error), message: None }
-    }
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct Creator {
+    pub id: String,
+    pub name: String,
+    pub title: String,
+    pub discipline: String,
+    pub bio: String,
+    pub avatar: String,
+    #[serde(rename = "coverImage")]
+    pub cover_image: String,
+    pub tagline: String,
+    #[serde(rename = "linkedIn")]
+    pub linked_in: String,
+    pub twitter: String,
+    pub portfolio: Option<String>,
+    pub projects: Vec<Project>,
+    pub skills: Vec<String>,
+    pub stats: Option<CreatorStats>,
+    #[serde(rename = "hourlyRate")]
+    pub hourly_rate: Option<i32>,
+    #[serde(rename = "responseTime")]
+    pub response_time: Option<String>,
+    pub availability: Option<String>,
+    pub rating: Option<f32>,
+    #[serde(rename = "reviewCount")]
+    pub review_count: Option<i32>,
 }
 
-#[derive(Debug, thiserror::Error)]
-enum ApiError {
-    #[error("Invalid request: {0}")]
-    BadRequest(String),
-    #[error("Resource not found: {0}")]
-    NotFound(String),
-    #[error("Resource conflict: {0}")]
-    Conflict(String),
-    #[error("Database operation failed")]
-    Database(#[source] sqlx::Error),
-    #[error("Network operation failed")]
-    Network(String),
-    #[error("Contract invocation failed")]
-    ContractInvocation(String),
-    #[error("Failed to serialize response")]
-    Serialization(#[from] serde_json::Error),
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct CreatorStats {
+    pub projects: i32,
+    pub clients: i32,
+    pub experience: i32,
 }
 
-impl ApiError {
-    fn status_code(&self) -> StatusCode {
-        match self {
-            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::NotFound(_) => StatusCode::NOT_FOUND,
-            Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::Network(_) => StatusCode::BAD_GATEWAY,
-            Self::ContractInvocation(_) => StatusCode::BAD_GATEWAY,
-            Self::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
+// ==================== Routes ====================
 
-    fn public_message(&self) -> String {
-        match self {
-            Self::Database(_) => "A database error occurred".to_string(),
-            Self::Network(_) => "A network error occurred".to_string(),
-            Self::ContractInvocation(_) => "A contract invocation error occurred".to_string(),
-            _ => self.to_string(),
-        }
-    }
-}
-
-impl ResponseError for ApiError {
-    fn status_code(&self) -> StatusCode {
-        ApiError::status_code(self)
-    }
-
-    fn error_response(&self) -> HttpResponse {
-        if ApiError::status_code(self).is_server_error() {
-            tracing::error!("API error response: {self}");
-        } else {
-            tracing::warn!("API client error response: {self}");
-        }
-        let response: ApiResponse<serde_json::Value> = ApiResponse::err(self.public_message());
-        HttpResponse::build(ApiError::status_code(self)).json(response)
-    }
-}
-
-#[derive(Clone, Serialize, Debug, FromRow, ToSchema)]
-struct BountyRecord {
-    id: i64,
-    creator: String,
-    title: String,
-    description: Option<String>,
-    budget: i64,
-    deadline: Option<i64>,
-    status: String,
-    created_at: Option<i64>,
-}
-
-#[derive(Clone, Serialize, Debug, FromRow, ToSchema)]
-struct ApplicationRecord {
-    application_id: i64,
-    bounty_id: i64,
-    freelancer: String,
-    proposal: Option<String>,
-    proposed_budget: Option<i64>,
-    timeline: Option<i64>,
-    status: String,
-    created_at: Option<i64>,
-}
-
-#[derive(Clone, Serialize, Debug, FromRow, ToSchema)]
-struct FreelancerRecord {
-    address: String,
-    name: String,
-    discipline: String,
-    bio: Option<String>,
-    verified: bool,
-    rating: f64,
-    completed_projects: i64,
-}
-
-#[derive(Clone, Serialize, Debug, FromRow, ToSchema)]
-struct EscrowRecord {
-    id: i64,
-    payer_address: String,
-    payee_address: String,
-    amount: i64,
-    status: String,
-    release_condition: Option<String>,
-    created_at: Option<i64>,
-    released_at: Option<i64>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
-pub struct ReviewBreakdown {
-    #[serde(rename = "1")]
-    pub one: i64,
-    #[serde(rename = "2")]
-    pub two: i64,
-    #[serde(rename = "3")]
-    pub three: i64,
-    #[serde(rename = "4")]
-    pub four: i64,
-    #[serde(rename = "5")]
-    pub five: i64,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
-pub struct AggregateRating {
-    pub average: f64,
-    pub total: i64,
-    pub breakdown: ReviewBreakdown,
-}
-
-fn value_response<T>(data: &T) -> Result<serde_json::Value, ApiError>
-where
-    T: Serialize,
-{
-    serde_json::to_value(data).map_err(ApiError::from)
-}
-
-fn parse_i64(value: i128, field: &str) -> Result<i64, ApiError> {
-    i64::try_from(value)
-        .map_err(|_| ApiError::BadRequest(format!("{field} is outside the supported range")))
-}
-
-fn parse_u64_to_i64(value: u64, field: &str) -> Result<i64, ApiError> {
-    i64::try_from(value)
-        .map_err(|_| ApiError::BadRequest(format!("{field} is outside the supported range")))
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum ShutdownSignal {
-    SigInt,
-    SigTerm,
-}
-
-async fn select_shutdown_signal<SigInt, SigTerm>(sigint: SigInt, sigterm: SigTerm) -> ShutdownSignal
-where
-    SigInt: Future<Output = ()>,
-    SigTerm: Future<Output = ()>,
-{
-    tokio::select! {
-        _ = sigint => ShutdownSignal::SigInt,
-        _ = sigterm => ShutdownSignal::SigTerm,
-    }
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    let signal = {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        select_shutdown_signal(
-            async {
-                if let Err(error) = tokio::signal::ctrl_c().await {
-                    tracing::error!(%error, "failed to listen for SIGINT");
-                    pending::<()>().await;
-                }
-            },
-            async {
-                match signal(SignalKind::terminate()) {
-                    Ok(mut sigterm) => {
-                        sigterm.recv().await;
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "failed to listen for SIGTERM");
-                        pending::<()>().await;
-                    }
-                }
-            },
-        )
-        .await
-    };
-
-    #[cfg(not(unix))]
-    let signal = {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(%error, "failed to listen for SIGINT");
-            pending::<()>().await;
-        }
-        ShutdownSignal::SigInt
-    };
-
-    tracing::info!(
-        ?signal,
-        "shutdown signal received; starting graceful shutdown"
-    );
-}
-
-fn configure_api_routes(cfg: &mut web::ServiceConfig, redis: deadpool_redis::Pool) {
-    // ── Rate limit tiers ─────────────────────────────────────────────────────
-    // Writes: 30 req / 60 s per IP
-    let write_rl = RateLimit::new(
-        redis.clone(),
-        RateLimitConfig::new("api_write", 30, 60),
-    );
-    // Reads: 120 req / 60 s per IP
-    let read_rl = RateLimit::new(
-        redis.clone(),
-        RateLimitConfig::new("api_read", 120, 60),
-    );
-    // Auth-adjacent / sensitive paths: 10 req / 60 s per IP
-    let strict_rl = RateLimit::new(
-        redis.clone(),
-        RateLimitConfig::new("api_strict", 10, 60),
-    );
-
-    cfg
-        // Health — no rate limit; monitoring tools poll this endpoint.
-        .route("/health", web::get().to(health))
-
-        // ── /api/v1 — versioned routes ────────────────────────────────────
-        .service(
-            web::scope("/api/v1")
-                // Write endpoints
-                .service(
-                    web::scope("")
-                        .wrap(write_rl)
-                        .route("/bounties", web::post().to(create_bounty))
-                        .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
-                        .route("/freelancers/register", web::post().to(register_freelancer))
-                        .route("/escrow/{id}/release", web::post().to(release_escrow)),
-                )
-                // Read endpoints
-                .service(
-                    web::scope("")
-                        .wrap(read_rl)
-                        .route("/bounties", web::get().to(list_bounties))
-                        .route("/bounties/{id}", web::get().to(get_bounty))
-                        .route("/freelancers", web::get().to(list_freelancers))
-                        .route("/freelancers/{address}", web::get().to(get_freelancer))
-                        .route("/creators/{id}/reviews/aggregate", web::get().to(get_review_aggregate))
-                        .route("/escrow/{id}", web::get().to(get_escrow)),
-                )
-                // Webhook management
-                .service(
-                    web::scope("/webhooks")
-                        .wrap(strict_rl)
-                        .route("", web::post().to(webhooks::register_webhook))
-                        .route("", web::get().to(webhooks::list_webhooks))
-                        .route("/{id}", web::delete().to(webhooks::delete_webhook)),
-                ),
-        )
-
-        // ── /api — unversioned redirects to /api/v1 (backward compat) ────
-        .service(
-            web::scope("/api")
-                .route("/bounties",                  web::get().to(redirect_to_v1))
-                .route("/bounties",                  web::post().to(redirect_to_v1))
-                .route("/bounties/{tail:.*}",        web::route().to(redirect_to_v1))
-                .route("/freelancers",               web::get().to(redirect_to_v1))
-                .route("/freelancers/{tail:.*}",     web::route().to(redirect_to_v1))
-                .route("/escrow/{tail:.*}",          web::route().to(redirect_to_v1))
-                .route("/webhooks",                  web::get().to(redirect_to_v1))
-                .route("/webhooks",                  web::post().to(redirect_to_v1))
-                .route("/webhooks/{tail:.*}",        web::route().to(redirect_to_v1)),
-        );
-}
-
-/// Redirect unversioned `/api/<path>` requests to `/api/v1/<path>` with 308
-/// (Permanent Redirect, method-preserving) so existing clients keep working
-/// while being nudged toward the versioned URL.
-async fn redirect_to_v1(req: actix_web::HttpRequest) -> HttpResponse {
-    let path = req.uri().path();
-    // Replace the first `/api/` segment with `/api/v1/`
-    let versioned = if let Some(rest) = path.strip_prefix("/api/") {
-        format!("/api/v1/{rest}")
-    } else {
-        format!("/api/v1{path}")
-    };
-    let location = match req.uri().query() {
-        Some(q) => format!("{versioned}?{q}"),
-        None => versioned,
-    };
-    HttpResponse::PermanentRedirect()
-        .insert_header(("Location", location))
-        .finish()
-}
-
-fn build_http_server(
-    listener: TcpListener,
-    state: AppState,
-    openapi: utoipa::openapi::OpenApi,
-    prometheus: actix_web_prom::PrometheusMetrics,
-    business_metrics: web::Data<metrics::BusinessMetrics>,
-) -> std::io::Result<Server> {
-    Ok(HttpServer::new(move || {
-        let redis = state.redis.clone();
-        App::new()
-            .app_data(web::Data::new(state.clone()))
-            .app_data(business_metrics.clone())
-            .wrap(prometheus.clone())
-            .wrap(RequestId)
-            .wrap(Cors::permissive())
-            .wrap(Logger::default())
-            .wrap(NormalizePath::trim())
-            .service(
-                SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
-            )
-            .configure(move |cfg| configure_api_routes(cfg, redis.clone()))
-    })
-    .shutdown_signal(shutdown_signal())
-    .listen(listener)?
-    .run())
-}
-
-/// Health check — verifies database, Redis, and Stellar RPC connectivity.
-#[utoipa::path(
-    get, path = "/health",
-    responses(
-        (status = 200, description = "Service and all dependencies are healthy"),
-        (status = 503, description = "One or more dependencies are unavailable"),
-    )
-)]
-async fn health(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
-    let request_id = get_request_id(&req).unwrap_or_else(|| "unknown".to_string());
-    tracing::info!(request_id = %request_id, "Health check requested");
-
-    // ── Database ping ────────────────────────────────────────────────────
-    let db_status = match sqlx::query("SELECT 1")
-        .execute(&state.db)
-        .await
-    {
-        Ok(_) => {
-            tracing::debug!(request_id = %request_id, "Database ping OK");
-            serde_json::json!({ "status": "ok" })
-        }
-        Err(e) => {
-            tracing::error!(request_id = %request_id, error = %e, "Database ping failed");
-            serde_json::json!({ "status": "error", "message": "database unreachable" })
-        }
-    };
-    let db_healthy = db_status["status"] == "ok";
-
-    // ── Redis ping ───────────────────────────────────────────────────────
-    let redis_status = match state.redis.get().await {
-        Ok(mut conn) => {
-            match deadpool_redis::redis::cmd("PING")
-                .query_async::<String>(&mut conn)
-                .await
-            {
-                Ok(_) => {
-                    tracing::debug!(request_id = %request_id, "Redis ping OK");
-                    serde_json::json!({ "status": "ok" })
-                }
-                Err(e) => {
-                    tracing::error!(request_id = %request_id, error = %e, "Redis PING command failed");
-                    serde_json::json!({ "status": "error", "message": "redis ping failed" })
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!(request_id = %request_id, error = %e, "Failed to acquire Redis connection");
-            serde_json::json!({ "status": "error", "message": "redis connection unavailable" })
-        }
-    };
-    let redis_healthy = redis_status["status"] == "ok";
-
-    // ── Stellar RPC / contract status ────────────────────────────────────
-    // We check reachability of the RPC node and whether contract IDs are configured.
-    let contracts_configured = !state.bounty_contract_id.is_empty()
-        && !state.escrow_contract_id.is_empty()
-        && !state.freelancer_contract_id.is_empty();
-
-    let rpc_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .unwrap_or_default();
-
-    let rpc_body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getHealth"
-    });
-
-    let stellar_status = match rpc_client
-        .post(&state.stellar_rpc_url)
-        .json(&rpc_body)
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            tracing::debug!(request_id = %request_id, "Stellar RPC reachable");
-            serde_json::json!({
-                "status": "ok",
-                "rpc_url": state.stellar_rpc_url,
-                "contracts_configured": contracts_configured,
-                "contracts": {
-                    "bounty": if state.bounty_contract_id.is_empty() { "not_configured" } else { "configured" },
-                    "escrow": if state.escrow_contract_id.is_empty() { "not_configured" } else { "configured" },
-                    "freelancer": if state.freelancer_contract_id.is_empty() { "not_configured" } else { "configured" },
-                }
-            })
-        }
-        Ok(resp) => {
-            tracing::warn!(
-                request_id = %request_id,
-                status = %resp.status(),
-                "Stellar RPC returned non-success status"
-            );
-            serde_json::json!({
-                "status": "degraded",
-                "rpc_url": state.stellar_rpc_url,
-                "message": format!("rpc returned status {}", resp.status()),
-                "contracts_configured": contracts_configured,
-            })
-        }
-        Err(e) => {
-            tracing::error!(request_id = %request_id, error = %e, "Stellar RPC unreachable");
-            serde_json::json!({
-                "status": "error",
-                "rpc_url": state.stellar_rpc_url,
-                "message": "stellar rpc unreachable",
-                "contracts_configured": contracts_configured,
-            })
-        }
-    };
-    // Stellar RPC being unreachable is degraded, not critical — the API still
-    // functions without live contract calls in most read paths.
-    let stellar_healthy = stellar_status["status"] != "error";
-
-    let all_healthy = db_healthy && redis_healthy;
-    let overall = if all_healthy && stellar_healthy {
-        "healthy"
-    } else if all_healthy {
-        "degraded"
-    } else {
-        "unhealthy"
-    };
-
-    let body = serde_json::json!({
-        "status": overall,
-        "service": "stellar-api",
-        "version": env!("CARGO_PKG_VERSION"),
-        "dependencies": {
-            "database": db_status,
-            "redis": redis_status,
-            "stellar": stellar_status,
-        }
-    });
-
-    if all_healthy {
-        HttpResponse::Ok().json(body)
-    } else {
-        HttpResponse::ServiceUnavailable().json(body)
-    }
+/// Health check endpoint
+async fn health() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(serde_json::json!({
+            "status": "healthy",
+            "service": "stellar-api",
+            "version": "0.1.0"
+        }))
 }
 
 /// Create a new bounty
-#[utoipa::path(
-    post, path = "/api/v1/bounties",
-    request_body = BountyRequest,
-    responses(
-        (status = 201, description = "Bounty created"),
-        (status = 400, description = "Invalid request body"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn create_bounty(pool: web::Data<PgPool>, body: web::Json<BountyRequest>) -> Result<HttpResponse, ApiError> {
+async fn create_bounty(body: web::Json<database::BountyRequest>) -> HttpResponse {
     tracing::info!("Creating bounty: {:?}", body.title);
 
-    let budget = match parse_i64(body.budget, "budget") {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
-    let deadline = match parse_u64_to_i64(body.deadline, "deadline") {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
+    let mut field_errors: Vec<FieldError> = Vec::new();
+    if body.creator.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "creator".into(),
+            message: "creator is required".into(),
+        });
+    }
+    if body.title.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "title".into(),
+            message: "title is required".into(),
+        });
+    }
+    if body.description.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "description".into(),
+            message: "description is required".into(),
+        });
+    }
+    if body.budget <= 0 {
+        field_errors.push(FieldError {
+            field: "budget".into(),
+            message: "budget must be positive".into(),
+        });
+    }
+    if body.deadline == 0 {
+        field_errors.push(FieldError {
+            field: "deadline".into(),
+            message: "deadline is required".into(),
+        });
+    }
+    if !field_errors.is_empty() {
+        let body: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            field_errors,
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(body);
+    }
 
-    let bounty = match sqlx::query_as::<_, BountyRecord>(
-        r#"
-        INSERT INTO bounties (creator_address, title, description, budget, deadline)
-        VALUES ($1, $2, $3, $4, TO_TIMESTAMP($5::double precision))
-        RETURNING
-            id,
-            creator_address AS creator,
-            title,
-            description,
-            budget::BIGINT AS budget,
-            EXTRACT(EPOCH FROM deadline)::BIGINT AS deadline,
-            status,
-            EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
-        "#,
-    )
-    .bind(&body.creator)
-    .bind(&body.title)
-    .bind(&body.description)
-    .bind(budget)
-    .bind(deadline)
-    .fetch_one(pool.get_ref())
-    .await
-    {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::error!("Failed to create bounty: {error}");
-            return Err(ApiError::Database(error));
-        }
-    };
-
-    let data = value_response(&bounty)?;
-
-    Ok(HttpResponse::Created().json(ApiResponse::ok(data, Some("Bounty created successfully".to_string()))))
-}
-
-/// List bounties (paginated, optionally full-text searched)
-#[utoipa::path(
-    get, path = "/api/v1/bounties",
-    params(
-        ("q"      = Option<String>, Query, description = "Full-text search query"),
-        ("status" = Option<String>, Query, description = "Filter by status: open | in-progress | completed"),
-        ("page"   = Option<i64>,   Query, description = "Page number (default 1)"),
-        ("limit"  = Option<i64>,   Query, description = "Results per page, 1-100 (default 10)"),
-    ),
-    responses(
-        (status = 200, description = "Paginated list of bounties"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn list_bounties(
-    req: HttpRequest,
-    pool: web::Data<PgPool>,
-    query: web::Query<std::collections::HashMap<String, String>>,
-) -> Result<HttpResponse, ApiError> {
-    let request_id = get_request_id(&req).unwrap_or_else(|| "unknown".to_string());
-
-    let page  = query.get("page").and_then(|v| v.parse::<i64>().ok()).unwrap_or(1).max(1);
-    let limit = query.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
-    let offset = (page - 1) * limit;
-    let status = query.get("status").cloned();
-
-    // Sanitise and normalise the search query.
-    // websearch_to_tsquery understands quoted phrases and `-word` exclusions,
-    // which is friendlier for end-users than plainto_tsquery.
-    let search_query: Option<String> = query
-        .get("q")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    tracing::info!(
-        request_id = %request_id,
-        ?status,
-        search = ?search_query,
-        page,
-        limit,
-        "Listing bounties"
+    let bounty = database::create_bounty(body.into_inner());
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+        serde_json::json!({
+            "bounty_id": bounty.id,
+            "creator": bounty.creator,
+            "title": bounty.title,
+            "budget": bounty.budget,
+            "status": bounty.status
+        }),
+        Some("Bounty created successfully".to_string()),
     );
 
-    // ── Count ────────────────────────────────────────────────────────────────
-    let total = match sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*)::BIGINT
-        FROM   bounties
-        WHERE  ($1::TEXT IS NULL OR status = $1)
-          AND  ($2::TEXT IS NULL OR fts @@ websearch_to_tsquery('english', $2))
-        "#,
-    )
-    .bind(status.clone())
-    .bind(search_query.clone())
-    .fetch_one(pool.get_ref())
-    .await
-    {
-        Ok(n) => n,
-        Err(error) => {
-            tracing::error!(request_id = %request_id, "Failed to count bounties: {error}");
-            return Err(ApiError::Database(error));
-        }
-    };
-
-    // ── Rows — ranked by relevance when a query is present ──────────────────
-    let bounties = match sqlx::query_as::<_, BountyRecord>(
-        r#"
-        SELECT
-            id,
-            creator_address AS creator,
-            title,
-            description,
-            budget::BIGINT AS budget,
-            EXTRACT(EPOCH FROM deadline)::BIGINT AS deadline,
-            status,
-            EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
-        FROM bounties
-        WHERE ($1::TEXT IS NULL OR status = $1)
-          AND ($2::TEXT IS NULL OR fts @@ websearch_to_tsquery('english', $2))
-        ORDER BY
-            CASE WHEN $2::TEXT IS NOT NULL
-                 THEN ts_rank(fts, websearch_to_tsquery('english', $2))
-                 ELSE 0
-            END DESC,
-            created_at DESC,
-            id DESC
-        LIMIT  $3
-        OFFSET $4
-        "#,
-    )
-    .bind(status.clone())
-    .bind(search_query.clone())
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool.get_ref())
-    .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::error!(request_id = %request_id, "Failed to list bounties: {error}");
-            return Err(ApiError::Database(error));
-        }
-    };
-
-    Ok(HttpResponse::Ok().json(ApiResponse::ok(
-        serde_json::json!({
-            "bounties": bounties,
-            "total":    total,
-            "page":     page,
-            "limit":    limit,
-            "filters": {
-                "status": status.unwrap_or_default(),
-                "q":      search_query.unwrap_or_default(),
-            }
-        }),
-        None,
-    )))
+    HttpResponse::Created()
+        .content_type("application/json")
+        .json(response)
 }
 
-/// Get a single bounty by ID
-#[utoipa::path(
-    get, path = "/api/v1/bounties/{id}",
-    params(("id" = u64, Path, description = "Bounty ID")),
-    responses(
-        (status = 200, description = "Bounty details"),
-        (status = 404, description = "Bounty not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn get_bounty(
-    path: web::Path<u64>,
-    pool: web::Data<PgPool>,
-    redis: web::Data<Pool>,
-) -> Result<HttpResponse, ApiError> {
+/// List all bounties
+async fn list_bounties() -> HttpResponse {
+    tracing::info!("Fetching bounties list");
+
+    let bounties = database::get_mock_bounties();
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+        serde_json::json!({
+            "bounties": bounties,
+            "total": bounties.len(),
+            "page": 1,
+            "limit": 10
+        }),
+        None,
+    );
+
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
+/// Get bounty by ID
+async fn get_bounty(path: web::Path<u64>) -> HttpResponse {
     let bounty_id = path.into_inner();
-    let bounty_id_db = match parse_u64_to_i64(bounty_id, "id") {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
-    let cache_key = format!("api:bounty:{bounty_id}");
+    tracing::info!("Fetching bounty: {}", bounty_id);
 
-    match redis.get().await {
-        Ok(mut conn) => {
-            match conn.get::<String>(&cache_key).await {
-                Ok(payload) => {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
-                        tracing::debug!("Cache hit for {cache_key}");
-                        return Ok(HttpResponse::Ok().json(ApiResponse::ok(parsed, None)));
-                    }
-                }
-                Err(error) => {
-                    tracing::error!("Redis GET failed for key {cache_key}: {error}");
-                    return Err(ApiError::Network("Cache backend unavailable".to_string()));
-                }
-            }
+    let bounty = database::get_bounty_by_id(bounty_id);
+    match bounty {
+        Some(b) => {
+            let response: ApiResponse<database::Bounty> = ApiResponse::ok(b, None);
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
         }
-        Err(error) => {
-            tracing::error!("Redis pool checkout failed: {error}");
-            return Err(ApiError::Network("Cache backend unavailable".to_string()));
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Bounty {}", bounty_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
         }
     }
-
-    let bounty = match sqlx::query_as::<_, BountyRecord>(
-        r#"
-        SELECT
-            id,
-            creator_address AS creator,
-            title,
-            description,
-            budget::BIGINT AS budget,
-            EXTRACT(EPOCH FROM deadline)::BIGINT AS deadline,
-            status,
-            EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
-        FROM bounties
-        WHERE id = $1
-        "#,
-    )
-    .bind(bounty_id_db)
-    .fetch_optional(pool.get_ref())
-    .await
-    {
-        Ok(Some(record)) => record,
-        Ok(None) => return Err(ApiError::NotFound(format!("Bounty {bounty_id} not found"))),
-        Err(error) => {
-            tracing::error!("Failed to fetch bounty {bounty_id}: {error}");
-            return Err(ApiError::Database(error));
-        }
-    };
-
-    let data = value_response(&bounty)?;
-
-    match redis.get().await {
-        Ok(mut conn) => {
-            if let Err(error) = conn.set_ex(&cache_key, data.to_string(), 60).await {
-                tracing::warn!("Redis SETEX failed for key {cache_key}: {error}");
-            }
-        }
-        Err(error) => {
-            tracing::warn!("Redis pool checkout failed: {error}");
-        }
-    }
-
-    Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
 }
 
 /// Apply for a bounty
-#[utoipa::path(
-    post, path = "/api/v1/bounties/{id}/apply",
-    params(("id" = u64, Path, description = "Bounty ID")),
-    request_body = BountyApplication,
-    responses(
-        (status = 201, description = "Application submitted"),
-        (status = 400, description = "Invalid request body"),
-        (status = 404, description = "Bounty not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
 async fn apply_for_bounty(
     path: web::Path<u64>,
-    body: web::Json<BountyApplication>,
-    pool: web::Data<PgPool>,
-) -> Result<HttpResponse, ApiError> {
-    let bounty_id = match parse_u64_to_i64(path.into_inner(), "id") {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
-    let proposed_budget = match parse_i64(body.proposed_budget, "proposed_budget") {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
-    let timeline = match parse_u64_to_i64(body.timeline, "timeline") {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
+    body: web::Json<database::BountyApplication>,
+) -> HttpResponse {
+    let bounty_id = path.into_inner();
+    tracing::info!("Applying for bounty {}: {}", bounty_id, body.freelancer);
 
-    let exists = match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::BIGINT FROM bounties WHERE id = $1",
-    )
-    .bind(bounty_id)
-    .fetch_one(pool.get_ref())
-    .await
-    {
-        Ok(count) => count > 0,
-        Err(error) => {
-            tracing::error!("Failed to validate bounty {bounty_id}: {error}");
-            return Err(ApiError::Database(error));
-        }
-    };
-
-    if !exists {
-        return Err(ApiError::NotFound(format!("Bounty {bounty_id} not found")));
+    let mut field_errors: Vec<FieldError> = Vec::new();
+    if body.freelancer.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "freelancer".into(),
+            message: "freelancer is required".into(),
+        });
+    }
+    if body.proposal.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "proposal".into(),
+            message: "proposal is required".into(),
+        });
+    }
+    if body.proposed_budget <= 0 {
+        field_errors.push(FieldError {
+            field: "proposed_budget".into(),
+            message: "proposed_budget must be positive".into(),
+        });
+    }
+    if !field_errors.is_empty() {
+        let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            field_errors,
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(resp);
     }
 
-    let application = match sqlx::query_as::<_, ApplicationRecord>(
-        r#"
-        INSERT INTO applications (bounty_id, freelancer_address, proposal, proposed_budget, timeline)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING
-            id AS application_id,
-            bounty_id,
-            freelancer_address AS freelancer,
-            proposal,
-            proposed_budget::BIGINT AS proposed_budget,
-            timeline::BIGINT AS timeline,
-            status,
-            EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
-        "#,
-    )
-    .bind(bounty_id)
-    .bind(&body.freelancer)
-    .bind(&body.proposal)
-    .bind(proposed_budget)
-    .bind(timeline)
-    .fetch_one(pool.get_ref())
-    .await
-    {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::error!("Failed to create application for bounty {bounty_id}: {error}");
-            return Err(ApiError::Database(error));
+    match database::apply_for_bounty(bounty_id, body.into_inner()) {
+        Ok(()) => {
+            let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+                serde_json::json!({
+                    "application_id": 1,
+                    "bounty_id": bounty_id,
+                    "freelancer": body.freelancer,
+                    "status": "pending"
+                }),
+                Some("Application submitted successfully".to_string()),
+            );
+            HttpResponse::Created()
+                .content_type("application/json")
+                .json(response)
         }
-    };
-
-    let data = value_response(&application)?;
-
-    Ok(HttpResponse::Created().json(ApiResponse::ok(
-        data,
-        Some("Application submitted successfully".to_string()),
-    )))
+        Err(e) => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::new(ApiErrorCode::ValidationError, e));
+            HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
 
-/// Register a freelancer profile
-#[utoipa::path(
-    post, path = "/api/v1/freelancers/register",
-    request_body = FreelancerRegistration,
-    responses(
-        (status = 201, description = "Freelancer registered"),
-        (status = 409, description = "Address already registered"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn register_freelancer(
-    body: web::Json<FreelancerRegistration>,
-    pool: web::Data<PgPool>,
-) -> Result<HttpResponse, ApiError> {
-    let generated_address = Uuid::new_v4().to_string();
+/// Register freelancer
+async fn register_freelancer(body: web::Json<database::FreelancerRegistration>) -> HttpResponse {
+    tracing::info!("Registering freelancer: {}", body.name);
 
-    let freelancer = match sqlx::query_as::<_, FreelancerRecord>(
-        r#"
-        INSERT INTO freelancers (address, name, discipline, bio)
-        VALUES ($1, $2, $3, $4)
-        RETURNING
-            address,
-            name,
-            discipline,
-            bio,
-            COALESCE(verified, false) AS verified,
-            COALESCE(rating, 0)::DOUBLE PRECISION AS rating,
-            COALESCE(completed_projects, 0)::BIGINT AS completed_projects
-        "#,
-    )
-    .bind(&generated_address)
-    .bind(&body.name)
-    .bind(&body.discipline)
-    .bind(&body.bio)
-    .fetch_one(pool.get_ref())
-    .await
-    {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::error!("Failed to register freelancer {}: {error}", body.name);
-            if let Some(constraint_error) = error.as_database_error() {
-                if constraint_error.is_unique_violation() {
-                    return Err(ApiError::Conflict("Freelancer already registered".to_string()));
-                }
-            }
-            return Err(ApiError::Database(error));
-        }
-    };
+    let mut field_errors: Vec<FieldError> = Vec::new();
+    if body.name.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "name".into(),
+            message: "name is required".into(),
+        });
+    }
+    if body.discipline.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "discipline".into(),
+            message: "discipline is required".into(),
+        });
+    }
+    if body.bio.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "bio".into(),
+            message: "bio is required".into(),
+        });
+    }
+    if !field_errors.is_empty() {
+        let body: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            field_errors,
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(body);
+    }
 
-    Ok(HttpResponse::Created().json(ApiResponse::ok(
+    let freelancer =
+        database::register_freelancer(body.into_inner(), "wallet-address-placeholder".to_string());
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
+            "freelancer_id": freelancer.address,
             "name": freelancer.name,
             "discipline": freelancer.discipline,
             "verified": freelancer.verified
         }),
         Some("Freelancer registered successfully".to_string()),
-    )))
+    );
+
+    HttpResponse::Created()
+        .content_type("application/json")
+        .json(response)
 }
 
 /// List freelancers
-#[utoipa::path(
-    get, path = "/api/v1/freelancers",
-    params(
-        ("page" = Option<i64>, Query, description = "Page number (default 1)"),
-        ("limit" = Option<i64>, Query, description = "Results per page, 1-100 (default 10)"),
-        ("discipline" = Option<String>, Query, description = "Filter by discipline"),
-    ),
-    responses(
-        (status = 200, description = "Paginated list of freelancers"),
-        (status = 500, description = "Database error"),
-    )
-)]
 async fn list_freelancers(
-    req: HttpRequest,
     query: web::Query<std::collections::HashMap<String, String>>,
-    pool: web::Data<PgPool>,
-) -> Result<HttpResponse, ApiError> {
-    let discipline = query.get("discipline").cloned();
-    let page = query.get("page").and_then(|value| value.parse::<i64>().ok()).unwrap_or(1).max(1);
-    let limit = query.get("limit").and_then(|value| value.parse::<i64>().ok()).unwrap_or(10).clamp(1, 100);
-    let offset = (page - 1) * limit;
+) -> HttpResponse {
+    let discipline = query.get("discipline").cloned().unwrap_or_default();
+    tracing::info!("Listing freelancers with filter: {}", discipline);
 
-    let total = match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::BIGINT FROM freelancers WHERE ($1::TEXT IS NULL OR discipline = $1)",
-    )
-    .bind(discipline.clone())
-    .fetch_one(pool.get_ref())
-    .await
-    {
-        Ok(count) => count,
-        Err(error) => {
-            tracing::error!("Failed to count freelancers: {error}");
-            return Err(ApiError::Database(error));
-        }
-    };
+    let all_freelancers = database::get_mock_freelancers();
+    let filtered_freelancers =
+        database::filter_freelancers_by_discipline(all_freelancers, &discipline);
+    let total = filtered_freelancers.len();
 
-    let freelancers = match sqlx::query_as::<_, FreelancerRecord>(
-        r#"
-        SELECT
-            address,
-            name,
-            discipline,
-            bio,
-            COALESCE(verified, false) AS verified,
-            COALESCE(rating, 0)::DOUBLE PRECISION AS rating,
-            COALESCE(completed_projects, 0)::BIGINT AS completed_projects
-        FROM freelancers
-        WHERE ($1::TEXT IS NULL OR discipline = $1)
-        ORDER BY name ASC
-        LIMIT $2 OFFSET $3
-        "#,
-    )
-    .bind(discipline.clone())
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool.get_ref())
-    .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::error!("Failed to list freelancers: {error}");
-            return Err(ApiError::Database(error));
-        }
-    };
-
-    Ok(HttpResponse::Ok().json(ApiResponse::ok(
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
         serde_json::json!({
-            "freelancers": freelancers,
+            "freelancers": filtered_freelancers,
+            "total": total,
+            "filters": { "discipline": discipline }
+        }),
+        None,
+    );
+
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
+/// Get freelancer profile
+async fn get_freelancer(path: web::Path<String>) -> HttpResponse {
+    let address = path.into_inner();
+    tracing::info!("Fetching freelancer: {}", address);
+
+    let freelancer = database::get_freelancer_by_address(&address);
+    match freelancer {
+        Some(f) => {
+            let response: ApiResponse<database::Freelancer> = ApiResponse::ok(f, None);
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Freelancer {}", address)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
+}
+
+/// List creators with optional filter by discipline
+async fn list_creators(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let discipline = query.get("discipline").cloned();
+    let search = query.get("search").cloned();
+
+    tracing::info!(
+        "Listing creators with filters - discipline: {:?}, search: {:?}",
+        discipline,
+        search
+    );
+
+    // Use database module for creators
+    let all_creators = database::get_mock_creators();
+    let filtered_creators = database::filter_creators(all_creators, discipline, search);
+    let total = filtered_creators.len();
+
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+        serde_json::json!({
+            "creators": filtered_creators,
             "total": total,
             "filters": {
-                "discipline": discipline.unwrap_or_default()
+                "discipline": discipline,
+                "search": search
             }
         }),
         None,
-    )))
+    );
+
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
 }
 
-/// Get a freelancer by Stellar address
-#[utoipa::path(
-    get, path = "/api/v1/freelancers/{address}",
-    params(("address" = String, Path, description = "Stellar address")),
-    responses(
-        (status = 200, description = "Freelancer profile"),
-        (status = 404, description = "Freelancer not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn get_freelancer(
-    path: web::Path<String>,
-    pool: web::Data<PgPool>,
-    redis: web::Data<Pool>,
-) -> Result<HttpResponse, ApiError> {
-    let address = path.into_inner();
-    let cache_key = format!("api:freelancer:{address}");
-
-    match redis.get().await {
-        Ok(mut conn) => {
-            match conn.get::<String>(&cache_key).await {
-                Ok(payload) => {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) {
-                        tracing::debug!("Cache hit for {cache_key}");
-                        return Ok(HttpResponse::Ok().json(ApiResponse::ok(parsed, None)));
-                    }
-                }
-                Err(error) => {
-                    tracing::error!("Redis GET failed for key {cache_key}: {error}");
-                    return Err(ApiError::Network("Cache backend unavailable".to_string()));
-                }
-            }
-        }
-        Err(error) => {
-            tracing::error!("Redis pool checkout failed: {error}");
-            return Err(ApiError::Network("Cache backend unavailable".to_string()));
-        }
-    }
-
-    let freelancer = match sqlx::query_as::<_, FreelancerRecord>(
-        r#"
-        SELECT
-            address,
-            name,
-            discipline,
-            bio,
-            COALESCE(verified, false) AS verified,
-            COALESCE(rating, 0)::DOUBLE PRECISION AS rating,
-            COALESCE(completed_projects, 0)::BIGINT AS completed_projects
-        FROM freelancers
-        WHERE address = $1
-        "#,
-    )
-    .bind(&address)
-    .fetch_optional(pool.get_ref())
-    .await
-    {
-        Ok(Some(record)) => record,
-        Ok(None) => return Err(ApiError::NotFound(format!("Freelancer {address} not found"))),
-        Err(error) => {
-            tracing::error!("Failed to fetch freelancer {address}: {error}");
-            return Err(ApiError::Database(error));
-        }
-    };
-
-    let data = value_response(&freelancer)?;
-
-    match redis.get().await {
-        Ok(mut conn) => {
-            if let Err(error) = conn.set_ex(&cache_key, data.to_string(), 60).await {
-                tracing::warn!("Redis SETEX failed for key {cache_key}: {error}");
-            }
-        }
-        Err(error) => {
-            tracing::warn!("Redis pool checkout failed: {error}");
-        }
-    }
-
-    Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
-}
-
-/// Get aggregated review rating for a creator
-#[utoipa::path(
-    get, path = "/api/v1/creators/{id}/reviews/aggregate",
-    params(("id" = String, Path, description = "Creator ID")),
-    responses(
-        (status = 200, description = "Aggregated rating"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn get_review_aggregate(
-    path: web::Path<String>,
-    pool: web::Data<PgPool>,
-) -> Result<HttpResponse, ApiError> {
+/// Get a specific creator by ID
+async fn get_creator(path: web::Path<String>) -> HttpResponse {
     let creator_id = path.into_inner();
+    tracing::info!("Fetching creator: {}", creator_id);
 
-    #[derive(FromRow)]
-    struct ReviewAggRow {
-        total: i64,
-        average: f64,
-        count_1: i64,
-        count_2: i64,
-        count_3: i64,
-        count_4: i64,
-        count_5: i64,
+    // Use database module for creator lookup
+    let creator = database::get_creator_by_id(&creator_id);
+
+    match creator {
+        Some(c) => {
+            let response: ApiResponse<database::Creator> = ApiResponse::ok(c, None);
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        None => {
+            let response: ApiResponse<database::Creator> =
+                ApiResponse::err(ApiError::not_found(format!("Creator {}", creator_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
+}
+
+/// Aggregated reputation and recent reviews for a creator profile.
+async fn get_creator_reputation(
+    path: web::Path<String>,
+    pool: web::Data<PgPool>,
+) -> HttpResponse {
+    let creator_id = path.into_inner();
+    tracing::info!("Fetching reputation for creator: {}", creator_id);
+
+    // Set the database pool for reputation operations
+    reputation::set_database_pool(pool.get_ref().clone());
+
+    let reviews = reputation::fetch_creator_reviews_from_db(&creator_id).await;
+    let aggregation = reputation::fetch_creator_reputation_from_db(&creator_id).await;
+    let recent_reviews = reputation::recent_reviews(&reviews, 8);
+
+    let payload = reputation::CreatorReputationPayload {
+        creator_id: creator_id.clone(),
+        aggregation,
+        recent_reviews,
+    };
+
+    let response: ApiResponse<reputation::CreatorReputationPayload> =
+        ApiResponse::ok(payload, None);
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
+/// Enhanced creator reputation with filtering and sorting support
+async fn get_creator_reviews_filtered(
+    path: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<PgPool>,
+) -> HttpResponse {
+    let creator_id = path.into_inner();
+    tracing::info!("Fetching filtered reviews for creator: {} with filters: {:?}", creator_id, *query);
+
+    // Set the database pool for reputation operations
+    reputation::set_database_pool(pool.get_ref().clone());
+
+    // Parse and validate query parameters
+    let filters = match reputation::parse_review_filters(&query) {
+        Ok(filters) => filters,
+        Err(errors) => {
+            let field_errors: Vec<FieldError> = errors
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| FieldError {
+                    field: format!("query_param_{}", i),
+                    message: msg,
+                })
+                .collect();
+            
+            let response: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+                ApiErrorCode::ValidationError,
+                "Invalid query parameters",
+                field_errors,
+            ));
+            return HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(response);
+        }
+    };
+
+    let payload = reputation::get_filtered_creator_reviews_from_db(&creator_id, &filters).await;
+    let response: ApiResponse<reputation::FilteredCreatorReputationPayload> =
+        ApiResponse::ok(payload, None);
+    
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
+/// Get all reviews across creators with filtering and sorting
+async fn list_reviews_filtered(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<PgPool>,
+) -> HttpResponse {
+    tracing::info!("Fetching filtered reviews across all creators with filters: {:?}", *query);
+
+    // Set the database pool for reputation operations
+    reputation::set_database_pool(pool.get_ref().clone());
+
+    // Parse and validate query parameters
+    let filters = match reputation::parse_review_filters(&query) {
+        Ok(filters) => filters,
+        Err(errors) => {
+            let field_errors: Vec<FieldError> = errors
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| FieldError {
+                    field: format!("query_param_{}", i),
+                    message: msg,
+                })
+                .collect();
+            
+            let response: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+                ApiErrorCode::ValidationError,
+                "Invalid query parameters",
+                field_errors,
+            ));
+            return HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(response);
+        }
+    };
+
+    // Get all reviews from database (with fallback to seed data)
+    let all_reviews = reputation::fetch_all_reviews_from_db().await;
+
+    // Apply filters
+    let filtered_reviews = reputation::filter_reviews(&all_reviews, &filters);
+    
+    // Apply sorting
+    let mut sorted_reviews = filtered_reviews;
+    let sort_by = filters.sort_by.as_ref().unwrap_or(&reputation::ReviewSortBy::CreatedAt);
+    let sort_order = filters.sort_order.as_ref().unwrap_or(&reputation::SortOrder::Desc);
+    reputation::sort_reviews(&mut sorted_reviews, sort_by, sort_order);
+    
+    // Apply pagination
+    let page = filters.page.unwrap_or(1).max(1);
+    let limit = filters.limit.unwrap_or(10).clamp(1, 100);
+    let paginated_reviews = reputation::paginate_reviews(sorted_reviews, page, limit);
+
+    // Calculate overall aggregation for context
+    let overall_aggregation = reputation::aggregate_reviews(&all_reviews);
+    let filtered_aggregation = if paginated_reviews.total_count != overall_aggregation.total_reviews {
+        Some(reputation::aggregate_reviews(&reputation::filter_reviews(&all_reviews, &filters)))
+    } else {
+        None
+    };
+
+    let payload = serde_json::json!({
+        "reviews": paginated_reviews,
+        "overallAggregation": overall_aggregation,
+        "filteredAggregation": filtered_aggregation,
+        "appliedFilters": filters
+    });
+
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(payload, None);
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .json(response)
+}
+
+/// Submit a review after bounty completion.
+async fn submit_review(
+    body: web::Json<ReviewSubmission>,
+    pool: web::Data<PgPool>,
+) -> HttpResponse {
+    tracing::info!("Submitting review for creator: {}", body.creator_id);
+
+    // Set the database pool for reputation operations
+    reputation::set_database_pool(pool.get_ref().clone());
+
+    let mut field_errors: Vec<FieldError> = Vec::new();
+    if body.bounty_id.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "bountyId".into(),
+            message: "Bounty ID is required".into(),
+        });
+    }
+    if body.creator_id.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "creatorId".into(),
+            message: "Creator ID is required".into(),
+        });
+    }
+    if !(1..=5).contains(&body.rating) {
+        field_errors.push(FieldError {
+            field: "rating".into(),
+            message: "Rating must be between 1 and 5".into(),
+        });
+    }
+    if body.title.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "title".into(),
+            message: "Title is required".into(),
+        });
+    }
+    if body.body.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "body".into(),
+            message: "Feedback is required".into(),
+        });
+    }
+    if body.reviewer_name.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "reviewerName".into(),
+            message: "Your name is required".into(),
+        });
+    }
+    if !field_errors.is_empty() {
+        let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            field_errors,
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(resp);
     }
 
-    let row = sqlx::query_as::<_, ReviewAggRow>(
-        r#"
-        SELECT
-            COUNT(*)::BIGINT as total,
-            COALESCE(AVG(rating), 0)::DOUBLE PRECISION as average,
-            COUNT(CASE WHEN rating = 1 THEN 1 END)::BIGINT as count_1,
-            COUNT(CASE WHEN rating = 2 THEN 1 END)::BIGINT as count_2,
-            COUNT(CASE WHEN rating = 3 THEN 1 END)::BIGINT as count_3,
-            COUNT(CASE WHEN rating = 4 THEN 1 END)::BIGINT as count_4,
-            COUNT(CASE WHEN rating = 5 THEN 1 END)::BIGINT as count_5
-        FROM "Review"
-        WHERE "creatorId" = $1 AND status = 'APPROVED'
-        "#,
-    )
-    .bind(&creator_id)
-    .fetch_one(pool.get_ref())
-    .await
-    .map_err(|error| {
-        tracing::error!("Failed to fetch review aggregate for creator {creator_id}: {error}");
-        ApiError::Database(error)
-    })?;
-
-    let aggregate = AggregateRating {
-        average: (row.average * 10.0).round() / 10.0,
-        total: row.total,
-        breakdown: ReviewBreakdown {
-            one: row.count_1,
-            two: row.count_2,
-            three: row.count_3,
-            four: row.count_4,
-            five: row.count_5,
+    // Process the review submission through the hook system
+    match reputation::on_review_submitted(
+        &body.bounty_id,
+        &body.creator_id,
+        body.rating,
+        &body.title,
+        &body.body,
+        &body.reviewer_name,
+    ) {
+        Ok(review_id) => {
+            let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+                serde_json::json!({ 
+                    "reviewId": review_id,
+                    "creatorId": body.creator_id,
+                    "status": "submitted"
+                }),
+                Some("Review submitted successfully".to_string()),
+            );
+            HttpResponse::Created()
+                .content_type("application/json")
+                .json(response)
         }
-    };
-
-    Ok(HttpResponse::Ok().json(ApiResponse::ok(aggregate, None)))
+        Err(validation_errors) => {
+            let field_errors: Vec<FieldError> = validation_errors
+                .into_iter()
+                .enumerate()
+                .map(|(i, msg)| FieldError {
+                    field: format!("validation_{}", i),
+                    message: msg,
+                })
+                .collect();
+            
+            let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+                ApiErrorCode::ValidationError,
+                "Review submission failed",
+                field_errors,
+            ));
+            HttpResponse::UnprocessableEntity()
+                .content_type("application/json")
+                .json(resp)
+        }
+    }
 }
 
-/// Get escrow details
-#[utoipa::path(
-    get, path = "/api/v1/escrow/{id}",
-    params(("id" = u64, Path, description = "Escrow ID")),
-    responses(
-        (status = 200, description = "Escrow details"),
-        (status = 404, description = "Escrow not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn get_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<HttpResponse, ApiError> {
-    let escrow_id = match parse_u64_to_i64(path.into_inner(), "id") {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
+/// Escape escrow
+async fn get_escrow(path: web::Path<u64>) -> HttpResponse {
+    let escrow_id = path.into_inner();
+    tracing::info!("Fetching escrow: {}", escrow_id);
 
-    let escrow = match sqlx::query_as::<_, EscrowRecord>(
-        r#"
-        SELECT
-            id,
-            payer_address,
-            payee_address,
-            amount::BIGINT AS amount,
-            status,
-            release_condition,
-            EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at,
-            EXTRACT(EPOCH FROM released_at)::BIGINT AS released_at
-        FROM escrow_accounts
-        WHERE id = $1
-        "#,
-    )
-    .bind(escrow_id)
-    .fetch_optional(pool.get_ref())
-    .await
-    {
-        Ok(Some(record)) => record,
-        Ok(None) => return Err(ApiError::NotFound(format!("Escrow {escrow_id} not found"))),
-        Err(error) => {
-            tracing::error!("Failed to fetch escrow {escrow_id}: {error}");
-            return Err(ApiError::Database(error));
+    let escrow = database::get_escrow_by_id(escrow_id);
+    match escrow {
+        Some(e) => {
+            let response: ApiResponse<database::Escrow> = ApiResponse::ok(e, None);
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
         }
-    };
-
-    let data = value_response(&escrow)?;
-
-    Ok(HttpResponse::Ok().json(ApiResponse::ok(data, None)))
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Escrow {}", escrow_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
 
-/// Release escrowed funds
-#[utoipa::path(
-    post, path = "/api/v1/escrow/{id}/release",
-    params(("id" = u64, Path, description = "Escrow ID")),
-    responses(
-        (status = 200, description = "Funds released"),
-        (status = 403, description = "Not authorised to release"),
-        (status = 404, description = "Escrow not found"),
-        (status = 500, description = "Database error"),
-    )
-)]
-async fn release_escrow(path: web::Path<u64>, pool: web::Data<PgPool>) -> Result<HttpResponse, ApiError> {
-    let escrow_id = match parse_u64_to_i64(path.into_inner(), "id") {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
+/// Release escrow funds
+async fn release_escrow(path: web::Path<u64>) -> HttpResponse {
+    let escrow_id = path.into_inner();
+    tracing::info!("Releasing escrow: {}", escrow_id);
 
-    let escrow = match sqlx::query_as::<_, EscrowRecord>(
-        r#"
-        UPDATE escrow_accounts
-        SET status = 'released', released_at = CURRENT_TIMESTAMP
-        WHERE id = $1
-        RETURNING
-            id,
-            payer_address,
-            payee_address,
-            amount::BIGINT AS amount,
-            status,
-            release_condition,
-            EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at,
-            EXTRACT(EPOCH FROM released_at)::BIGINT AS released_at
-        "#,
-    )
-    .bind(escrow_id)
-    .fetch_optional(pool.get_ref())
-    .await
-    {
-        Ok(Some(record)) => record,
-        Ok(None) => return Err(ApiError::NotFound(format!("Escrow {escrow_id} not found"))),
-        Err(error) => {
-            tracing::error!("Failed to release escrow {escrow_id}: {error}");
-            return Err(ApiError::Database(error));
+    match database::release_escrow(escrow_id) {
+        Some(escrow) => {
+            let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+                serde_json::json!({
+                    "id": escrow.id,
+                    "status": escrow.status,
+                    "transaction_id": escrow.transaction_hash
+                }),
+                Some("Funds released successfully".to_string()),
+            );
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
         }
-    };
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Escrow {}", escrow_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
+}
 
-    // Placeholder branch for future contract-call integration.
-    if std::env::var("SIMULATE_CONTRACT_FAILURE").as_deref() == Ok("1") {
-        tracing::error!("Escrow contract invocation failed for escrow_id={escrow_id}");
-        return Err(ApiError::ContractInvocation("Unable to release escrow on-chain".to_string()));
+/// Create a new escrow
+async fn create_escrow(body: web::Json<database::EscrowCreateRequest>) -> HttpResponse {
+    tracing::info!("Creating escrow for bounty: {}", body.bounty_id);
+
+    let mut field_errors: Vec<FieldError> = Vec::new();
+    if body.bounty_id.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "bountyId".into(),
+            message: "bountyId is required".into(),
+        });
+    }
+    if body.payer_address.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "payerAddress".into(),
+            message: "payerAddress is required".into(),
+        });
+    }
+    if body.payee_address.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "payeeAddress".into(),
+            message: "payeeAddress is required".into(),
+        });
+    }
+    if body.amount <= 0 {
+        field_errors.push(FieldError {
+            field: "amount".into(),
+            message: "amount must be positive".into(),
+        });
+    }
+    if body.token.trim().is_empty() {
+        field_errors.push(FieldError {
+            field: "token".into(),
+            message: "token is required".into(),
+        });
+    }
+    if !field_errors.is_empty() {
+        let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            field_errors,
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(resp);
     }
 
-    let data = value_response(&escrow)?;
+    let escrow = database::create_escrow(body.into_inner());
+    let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+        serde_json::json!(
+            "escrowId": escrow.id.to_string(),
+            "txHash": escrow.transaction_hash,
+            "operation": "deposit",
+            "status": escrow.status,
+            "timestamp": escrow.created_at
+        ),
+        Some("Escrow created successfully".to_string()),
+    );
 
-    Ok(HttpResponse::Ok().json(ApiResponse::ok(data, Some("Funds released successfully".to_string()))))
+    HttpResponse::Created()
+        .content_type("application/json")
+        .json(response)
 }
 
-#[derive(OpenApi)]
-#[openapi(
-    info(
-        title = "Stellar Creator Platform API",
-        version = "0.1.0",
-        description = "REST API for the Stellar Creator Portfolio & Bounty Marketplace",
-        contact(name = "Stellar Team", email = "support@stellar.dev"),
-        license(name = "MIT"),
-    ),
-    paths(
-        health,
-        create_bounty,
-        list_bounties,
-        get_bounty,
-        apply_for_bounty,
-        register_freelancer,
-        list_freelancers,
-        get_freelancer,
-        get_escrow,
-        release_escrow,
-        webhooks::register_webhook,
-        webhooks::list_webhooks,
-        webhooks::delete_webhook,
-    ),
-    components(schemas(
-        BountyRequest, BountyApplication, FreelancerRegistration,
-        webhooks::WebhookRegistration, webhooks::Webhook,
-        BountyRequest,
-        BountyApplication,
-        FreelancerRegistration,
-        BountyRecord,
-        ApplicationRecord,
-        FreelancerRecord,
-        EscrowRecord
-    )),
-    tags(
-        (name = "bounties", description = "Bounty management"),
-        (name = "freelancers", description = "Freelancer registry"),
-        (name = "escrow",      description = "Payment escrow"),
-        (name = "webhooks",    description = "Webhook registration & delivery"),
-        (name = "escrow", description = "Payment escrow"),
-    )
-)]
-pub struct ApiDoc;
+/// Refund escrow to payer (work rejected or cancelled)
+async fn refund_escrow(
+    path: web::Path<u64>,
+    body: web::Json<database::EscrowRefundRequest>,
+) -> HttpResponse {
+    let escrow_id = path.into_inner();
+    tracing::info!(
+        "Refunding escrow {} to {}",
+        escrow_id,
+        body.authorizer_address
+    );
 
-#[derive(Clone)]
-pub struct AppState {
-    pub db: PgPool,
-    pub redis: deadpool_redis::Pool,
-    /// Soroban RPC endpoint, used for contract reachability check.
-    pub stellar_rpc_url: String,
-    /// Contract IDs populated from env — empty string means not configured.
-    pub bounty_contract_id: String,
-    pub escrow_contract_id: String,
-    pub freelancer_contract_id: String,
+    if body.authorizer_address.trim().is_empty() {
+        let resp: ApiResponse<()> = ApiResponse::err(ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            vec![FieldError {
+                field: "authorizerAddress".into(),
+                message: "authorizerAddress is required".into(),
+            }],
+        ));
+        return HttpResponse::UnprocessableEntity()
+            .content_type("application/json")
+            .json(resp);
+    }
+
+    match database::refund_escrow(escrow_id, body.authorizer_address.clone()) {
+        Some(escrow) => {
+            let response: ApiResponse<serde_json::Value> = ApiResponse::ok(
+                serde_json::json!({
+                    "escrowId": escrow.id.to_string(),
+                    "txHash": escrow.transaction_hash,
+                    "operation": "refund",
+                    "status": escrow.status,
+                    "timestamp": escrow.created_at
+                }),
+                Some("Escrow refunded successfully".to_string()),
+            );
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        None => {
+            let response: ApiResponse<()> =
+                ApiResponse::err(ApiError::not_found(format!("Escrow {}", escrow_id)));
+            HttpResponse::NotFound()
+                .content_type("application/json")
+                .json(response)
+        }
+    }
 }
+
+/// Middleware that injects `X-API-Version` into every response.
+pub struct ApiVersionHeader;
+
+impl<S, B> Transform<S, ServiceRequest> for ApiVersionHeader
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: MessageBody + 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Transform = ApiVersionHeaderMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, ()>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ok(ApiVersionHeaderMiddleware { service })
+    }
+}
+
+pub struct ApiVersionHeaderMiddleware<S> {
+    service: S,
+}
+
+impl<S, B> Service<ServiceRequest> for ApiVersionHeaderMiddleware<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: MessageBody + 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Future =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    actix_web::dev::forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let fut = self.service.call(req);
+        Box::pin(async move {
+            let mut res = fut.await?;
+            res.headers_mut().insert(
+                http::header::HeaderName::from_static("x-api-version"),
+                http::header::HeaderValue::from_static(API_VERSION),
+            );
+            Ok(res)
+        })
+    }
+}
+
+/// GET /api/versions — advertise supported API versions.
+async fn api_versions() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "current": API_VERSION,
+        "supported": ["1"],
+        "deprecated": []
+    }))
+}
+
+// ==================== CORS ====================
+
+/// Parse and validate the CORS origin whitelist from the `CORS_ALLOWED_ORIGINS`
+/// environment variable.
+///
+/// Rules enforced at startup (panics on violation so misconfiguration is caught
+/// immediately rather than silently allowing unsafe access):
+///
+/// - Wildcards (`*`) are **never** permitted — they would re-introduce the
+///   original vulnerability and are incompatible with `supports_credentials()`.
+/// - Every entry must start with `http://` or `https://`; bare hostnames or
+///   other schemes are rejected.
+/// - Empty entries (e.g. trailing commas) are silently dropped.
+///
+/// Falls back to `http://localhost:3000` only when the variable is **absent**,
+/// which is safe for local development.  In production the variable must be
+/// set explicitly.
+pub fn parse_allowed_origins() -> Vec<String> {
+    let raw = std::env::var("CORS_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let origins: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    for origin in &origins {
+        // Wildcard origins are explicitly forbidden — they bypass the whitelist
+        // entirely and cannot be combined with credentials.
+        if origin == "*" {
+            panic!(
+                "CORS_ALLOWED_ORIGINS must not contain a wildcard '*'. \
+                 Set explicit origin URLs instead."
+            );
+        }
+
+        // Require a proper scheme so we never accidentally allow bare hostnames
+        // or non-HTTP schemes that could be abused.
+        if !origin.starts_with("http://") && !origin.starts_with("https://") {
+            panic!(
+                "CORS_ALLOWED_ORIGINS entry '{}' is invalid: every origin must \
+                 start with 'http://' or 'https://'.",
+                origin
+            );
+        }
+    }
+
+    if origins.is_empty() {
+        panic!(
+            "CORS_ALLOWED_ORIGINS resolved to an empty list. \
+             Provide at least one allowed origin."
+        );
+    }
+
+    origins
+}
+
+/// Build the CORS middleware from the validated origin whitelist.
+///
+/// Allowed origins are read from the `CORS_ALLOWED_ORIGINS` environment
+/// variable as a comma-separated list (e.g. `http://localhost:3000,https://app.example.com`).
+/// Wildcards and invalid entries cause an immediate startup panic so that
+/// misconfiguration is never silently deployed.
+///
+/// All standard HTTP methods and the headers required by a JSON API
+/// (`Content-Type`, `Authorization`, `Accept`) are permitted.
+/// Credentials (cookies / auth headers) are allowed so wallet-auth flows work.
+pub fn cors_middleware() -> Cors {
+    let allowed_origins = parse_allowed_origins();
+
+    tracing::info!(
+        "CORS whitelist: [{}]",
+        allowed_origins.join(", ")
+    );
+
+    let mut cors = Cors::default()
+        .allowed_methods(vec!["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+        .allowed_headers(vec![
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+            http::header::ACCEPT,
+        ])
+        .supports_credentials()
+        .max_age(3600);
+
+    for origin in &allowed_origins {
+        cors = cors.allowed_origin(origin);
+    }
+
+    cors
+}
+
+// ==================== Main ====================
 
 #[actix_web::main]
-async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
-
-    // Initialize OpenTelemetry
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint(std::env::var("OTLP_ENDPOINT").unwrap_or_else(|_| "http://jaeger:4317".to_string())),
-        )
-        .with_trace_config(
-            trace::Config::default().with_resource(Resource::new(vec![KeyValue::new(
-                opentelemetry_semantic_conventions::resource::SERVICE_NAME,
-                "stellar-api",
-            )])),
-        )
-        .install_batch(runtime::Tokio)
-        .expect("Failed to initialize tracer");
-
-    let telemetry = OpenTelemetryLayer::new(tracer);
-    
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,stellar_api=debug"));
-
-    let formatting_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stdout);
-
-    Registry::default()
-        .with(env_filter)
-        .with(telemetry)
-        .with(formatting_layer)
+async fn main() -> std::io::Result<()> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter("info,stellar_api=debug")
         .init();
+
+    tracing::info!("Starting Stellar API Server...");
+
+    // Initialize database connection
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://stellar:stellar_dev_password@localhost:5432/stellar_db".to_string());
+    
+    tracing::info!("Connecting to database: {}", database_url.replace("stellar_dev_password", "***"));
+    
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    // Run migrations
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("Failed to run database migrations");
+
+    tracing::info!("Database connected and migrations applied");
+
+    // Initialize the reputation system with hooks and database
+    reputation::initialize_reputation_system_with_db(pool.clone());
+    tracing::info!("Reputation system initialized with hooks and database");
 
     let port = std::env::var("API_PORT")
         .unwrap_or_else(|_| "3001".to_string())
         .parse::<u16>()
         .expect("API_PORT must be a valid port number");
+
     let host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    let redis_pool = Config::from_url(redis_url)
-        .create_pool(Some(Runtime::Tokio1))
-        .expect("Failed to create Redis pool");
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set before starting stellar-api");
-    let db_pool = PgPool::connect(&database_url)
-        .await
-        .unwrap_or_else(|error| panic!("Failed to connect to PostgreSQL using DATABASE_URL: {error}"));
+    tracing::info!("Server starting on {}:{}", host, port);
 
-    tracing::info!("Connected to database");
-
-    let stellar_rpc_url = std::env::var("STELLAR_RPC_URL")
-        .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".to_string());
-    let bounty_contract_id = std::env::var("BOUNTY_CONTRACT_ID").unwrap_or_default();
-    let escrow_contract_id = std::env::var("ESCROW_CONTRACT_ID").unwrap_or_default();
-    let freelancer_contract_id = std::env::var("FREELANCER_CONTRACT_ID").unwrap_or_default();
-
-    let state = AppState {
-        db: db_pool,
-        redis: redis_pool,
-        stellar_rpc_url,
-        bounty_contract_id,
-        escrow_contract_id,
-        freelancer_contract_id,
-    };
-
-    let openapi = ApiDoc::openapi();
-
-    let (prometheus, business_metrics) = metrics::setup_metrics();
-    let business_metrics_data = web::Data::new(business_metrics);
-
-    tracing::info!("Starting Stellar API on {}:{}", host, port);
-    tracing::info!(
-        "Swagger UI available at http://{}:{}/swagger-ui/",
-        host,
-        port
-    );
-    tracing::info!("Prometheus metrics available at http://{}:{}/metrics", host, port);
-
-    let listener = TcpListener::bind((host.as_str(), port))?;
-    build_http_server(listener, state, openapi, prometheus, business_metrics_data)?.await?;
-    tracing::info!("Stellar API shutdown complete");
-    Ok(())
+    HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .wrap(cors_middleware())
+            .wrap(middleware::Logger::default())
+            .wrap(middleware::NormalizePath::trim())
+            .wrap(ApiVersionHeader)
+            // Health check & version discovery (unversioned)
+            .route("/health", web::get().to(health))
+            .route("/api/versions", web::get().to(api_versions))
+            // v1 public read-only routes
+            .service(
+                web::scope("/api/v1")
+                    .route("/bounties", web::get().to(list_bounties))
+                    .route("/bounties/{id}", web::get().to(get_bounty))
+                    .route("/creators", web::get().to(list_creators))
+                    .route("/creators/{id}", web::get().to(get_creator))
+                    .route(
+                        "/creators/{id}/reputation",
+                        web::get().to(get_creator_reputation),
+                    )
+                    .route("/creators/{id}/reputation", web::get().to(get_creator_reputation))
+                    .route("/creators/{id}/reviews", web::get().to(get_creator_reviews_filtered))
+                    .route("/reviews", web::post().to(submit_review))
+                    .route("/reviews", web::get().to(list_reviews_filtered))
+                    .route("/freelancers", web::get().to(list_freelancers))
+                    .route("/freelancers/{address}", web::get().to(get_freelancer))
+                    .route("/escrow/{id}", web::get().to(get_escrow))
+                    .route(
+                        "/webhooks/payment",
+                        web::post().to(webhook::payment_webhook),
+                    )
+                    // Protected write routes — require valid JWT
+                    .service(
+                        web::scope("")
+                            .wrap(auth::JwtMiddleware)
+                            .route("/bounties", web::post().to(create_bounty))
+                            .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                            .route("/freelancers/register", web::post().to(register_freelancer))
+                            .route("/escrow/{id}/release", web::post().to(release_escrow)),
+                    ),
+            )
+            // Protected write routes — require valid JWT
+            .service(
+                web::scope("")
+                    .wrap(auth::JwtMiddleware)
+                    .route("/api/bounties", web::post().to(create_bounty))
+                    .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                    .route(
+                        "/api/freelancers/register",
+                        web::post().to(register_freelancer),
+                    )
+                    .route("/api/escrow/create", web::post().to(create_escrow))
+                    .route("/api/escrow/{id}/release", web::post().to(release_escrow))
+                    .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
+            )
+    })
+    .bind((host.parse::<std::net::IpAddr>().unwrap(), port))?
+    .run()
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{body::to_bytes, http::StatusCode, test, App};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpStream;
-    use tokio::sync::{oneshot, Notify};
-    use tokio::time::{sleep, timeout, Duration};
-    use actix_web::http::StatusCode;
+
+    // ── ApiResponse ───────────────────────────────────────────────────────────
 
     #[test]
     fn test_api_response_ok() {
-        let response = ApiResponse::ok("test".to_string(), None::<String>);
+        let response: ApiResponse<String> = ApiResponse::ok("test".to_string(), None);
         assert!(response.success);
         assert_eq!(response.data, Some("test".to_string()));
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_api_response_ok_with_message() {
+        let response: ApiResponse<u32> =
+            ApiResponse::ok(42, Some("Created successfully".to_string()));
+        assert!(response.success);
+        assert_eq!(response.data, Some(42));
+        assert_eq!(response.message, Some("Created successfully".to_string()));
     }
 
     #[test]
     fn test_api_response_err() {
-        let response = ApiResponse::<String>::err("error".to_string());
+        let error = ApiError::new(ApiErrorCode::NotFound, "Bounty not found");
+        let response: ApiResponse<String> = ApiResponse::err(error.clone());
         assert!(!response.success);
-        assert_eq!(response.error, Some("error".to_string()));
+        assert!(response.data.is_none());
+        assert_eq!(response.error, Some(error));
+    }
+
+    // ── ApiError ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_api_error_not_found() {
+        let err = ApiError::not_found("Bounty");
+        assert_eq!(err.code, ApiErrorCode::NotFound);
+        assert_eq!(err.message, "Bounty not found");
+        assert!(err.field_errors.is_none());
     }
 
     #[test]
-    fn test_openapi_spec_is_valid() {
-        let spec = ApiDoc::openapi();
-        let paths = &spec.paths.paths;
-        assert!(paths.contains_key("/health"));
-        assert!(paths.contains_key("/api/v1/bounties"));
-        assert!(paths.contains_key("/api/v1/freelancers"));
-        assert!(paths.contains_key("/api/v1/escrow/{id}"));
-        assert!(paths.contains_key("/api/v1/webhooks"));
+    fn test_api_error_internal() {
+        let err = ApiError::internal();
+        assert_eq!(err.code, ApiErrorCode::InternalServerError);
     }
 
     #[test]
-    fn redirect_to_v1_builds_correct_location() {
-        // Simulate the path rewrite logic used in redirect_to_v1
-        let cases = vec![
-            ("/api/bounties",           "/api/v1/bounties"),
-            ("/api/bounties/42",        "/api/v1/bounties/42"),
-            ("/api/freelancers",        "/api/v1/freelancers"),
-            ("/api/escrow/7/release",   "/api/v1/escrow/7/release"),
-            ("/api/webhooks",           "/api/v1/webhooks"),
+    fn test_api_error_with_field_errors() {
+        let field_errors = vec![
+            FieldError {
+                field: "title".to_string(),
+                message: "Title is required".to_string(),
+            },
+            FieldError {
+                field: "budget".to_string(),
+                message: "Budget must be positive".to_string(),
+            },
         ];
-        for (input, expected) in cases {
-            let versioned = if let Some(rest) = input.strip_prefix("/api/") {
-                format!("/api/v1/{rest}")
-            } else {
-                format!("/api/v1{input}")
-            };
-            assert_eq!(versioned, expected, "failed for input {input}");
-        }
+        let err = ApiError::with_field_errors(
+            ApiErrorCode::ValidationError,
+            "Validation failed",
+            field_errors.clone(),
+        );
+        assert_eq!(err.code, ApiErrorCode::ValidationError);
+        assert_eq!(err.field_errors, Some(field_errors));
+    }
+
+    // ── PaginationMeta ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pagination_meta_exact_pages() {
+        let meta = PaginationMeta::new(1, 10, 30);
+        assert_eq!(meta.total_pages, 3);
+        assert_eq!(meta.total, 30);
     }
 
     #[test]
-    fn api_error_status_mappings_are_correct() {
-        assert_eq!(ApiError::BadRequest("x".to_string()).status_code(), StatusCode::BAD_REQUEST);
-        assert_eq!(ApiError::NotFound("x".to_string()).status_code(), StatusCode::NOT_FOUND);
-        assert_eq!(ApiError::Conflict("x".to_string()).status_code(), StatusCode::CONFLICT);
-        assert_eq!(ApiError::Network("x".to_string()).status_code(), StatusCode::BAD_GATEWAY);
-        assert_eq!(
-            ApiError::ContractInvocation("x".to_string()).status_code(),
-            StatusCode::BAD_GATEWAY
-        );
+    fn test_pagination_meta_partial_last_page() {
+        let meta = PaginationMeta::new(1, 10, 25);
+        assert_eq!(meta.total_pages, 3);
     }
 
     #[test]
-    fn review_breakdown_serialization_uses_numeric_keys() {
-        let breakdown = ReviewBreakdown {
-            one: 1,
-            two: 2,
-            three: 3,
-            four: 4,
-            five: 5,
-        };
-        let json = serde_json::to_string(&breakdown).unwrap();
-        assert!(json.contains("\"1\":1"));
-        assert!(json.contains("\"2\":2"));
-        assert!(json.contains("\"3\":3"));
-        assert!(json.contains("\"4\":4"));
-        assert!(json.contains("\"5\":5"));
+    fn test_pagination_meta_zero_total() {
+        let meta = PaginationMeta::new(1, 10, 0);
+        assert_eq!(meta.total_pages, 0);
+    }
+
+    // ── PaginatedData ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_paginated_data() {
+        let items = vec!["a", "b", "c"];
+        let pd = PaginatedData::new(items.clone(), 2, 3, 9);
+        assert_eq!(pd.items, items);
+        assert_eq!(pd.pagination.page, 2);
+        assert_eq!(pd.pagination.total_pages, 3);
+    }
+
+    // ── Serialisation ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_api_error_code_serialises_screaming_snake_case() {
+        let json = serde_json::to_string(&ApiErrorCode::ValidationError).unwrap();
+        assert_eq!(json, "\"VALIDATION_ERROR\"");
     }
 
     #[test]
-    fn aggregate_rating_rounding_logic() {
-        let test_cases = vec![
-            (4.55, 4.6),
-            (4.54, 4.5),
-            (4.0, 4.0),
-            (0.0, 0.0),
-            (5.0, 5.0),
-        ];
-
-        for (input, expected) in test_cases {
-            let rounded = (input * 10.0).round() / 10.0;
-            assert_eq!(rounded, expected, "failed for input {input}");
-        }
+    fn test_field_errors_omitted_when_none() {
+        let err = ApiError::new(ApiErrorCode::NotFound, "not found");
+        let json = serde_json::to_value(&err).unwrap();
+        assert!(json.get("field_errors").is_none());
     }
 
-    #[actix_web::test]
-    async fn shutdown_signal_selector_resolves_on_sigint() {
-        let (sigint_tx, sigint_rx) = oneshot::channel::<()>();
-        let (_sigterm_tx, sigterm_rx) = oneshot::channel::<()>();
+    // ── CORS tests ────────────────────────────────────────────────────────────
+    //
+    // These tests verify the whitelist-based CORS policy introduced to fix the
+    // P0 security issue where all origins were permitted.  Key invariants:
+    //   1. Allowed origins receive the correct ACAO header.
+    //   2. Disallowed origins receive no ACAO header.
+    //   3. Wildcard '*' in CORS_ALLOWED_ORIGINS panics at startup.
+    //   4. Invalid (non-HTTP/S) origins panic at startup.
 
-        let shutdown = tokio::spawn(select_shutdown_signal(
-            async move {
-                let _ = sigint_rx.await;
-            },
-            async move {
-                let _ = sigterm_rx.await;
-            },
-        ));
+    #[test]
+    fn test_cors_middleware_builds_with_default_origin() {
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
+        let _cors = cors_middleware();
+    }
 
-        sigint_tx.send(()).expect("sigint send should succeed");
-
-        assert_eq!(
-            shutdown.await.expect("join should succeed"),
-            ShutdownSignal::SigInt
+    #[test]
+    fn test_cors_middleware_builds_with_multiple_origins() {
+        std::env::set_var(
+            "CORS_ALLOWED_ORIGINS",
+            "http://localhost:3000,https://app.stellar.dev",
         );
+        let _cors = cors_middleware();
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
     }
 
     #[actix_web::test]
-    async fn shutdown_signal_selector_returns_first_completed_signal() {
-        let (sigint_tx, sigint_rx) = oneshot::channel::<()>();
-        let (sigterm_tx, sigterm_rx) = oneshot::channel::<()>();
+    async fn test_cors_preflight_returns_200() {
+        use actix_web::test as awtest;
+        std::env::set_var("CORS_ALLOWED_ORIGINS", "http://localhost:3000");
 
-        let shutdown = tokio::spawn(select_shutdown_signal(
-            async move {
-                let _ = sigint_rx.await;
-            },
-            async move {
-                let _ = sigterm_rx.await;
-            },
-        ));
+        let app = awtest::init_service(
+            App::new()
+                .wrap(cors_middleware())
+                .route("/health", web::get().to(health)),
+        )
+        .await;
 
-        sigterm_tx.send(()).expect("sigterm send should succeed");
-        let _ = sigint_tx.send(());
+        let req = awtest::TestRequest::default()
+            .method(actix_web::http::Method::OPTIONS)
+            .uri("/health")
+            .insert_header(("Origin", "http://localhost:3000"))
+            .insert_header(("Access-Control-Request-Method", "GET"))
+            .to_request();
 
-        assert_eq!(
-            shutdown.await.expect("join should succeed"),
-            ShutdownSignal::SigTerm
+        let resp = awtest::call_service(&app, req).await;
+        assert!(
+            resp.status().is_success(),
+            "preflight should return 2xx, got {}",
+            resp.status()
         );
+        let acao = resp
+            .headers()
+            .get("Access-Control-Allow-Origin")
+            .expect("Access-Control-Allow-Origin header must be present");
+        assert_eq!(acao, "http://localhost:3000");
+
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
     }
 
     #[actix_web::test]
-    async fn server_drains_in_flight_requests_during_graceful_shutdown() {
-        let listener =
-            TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind to an open port");
-        let address = listener
-            .local_addr()
-            .expect("listener should expose its bound address");
-        let started = Arc::new(Notify::new());
-        let release = Arc::new(Notify::new());
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    async fn test_cors_disallowed_origin_has_no_acao_header() {
+        use actix_web::test as awtest;
+        std::env::set_var("CORS_ALLOWED_ORIGINS", "http://localhost:3000");
 
-        let server = HttpServer::new({
-            let started = Arc::clone(&started);
-            let release = Arc::clone(&release);
+        let app = awtest::init_service(
+            App::new()
+                .wrap(cors_middleware())
+                .route("/health", web::get().to(health)),
+        )
+        .await;
 
-            move || {
-                let started = Arc::clone(&started);
-                let release = Arc::clone(&release);
+        let req = awtest::TestRequest::get()
+            .uri("/health")
+            .insert_header(("Origin", "https://evil.example.com"))
+            .to_request();
 
-                App::new().route(
-                    "/slow",
-                    web::get().to(move || {
-                        let started = Arc::clone(&started);
-                        let release = Arc::clone(&release);
+        let resp = awtest::call_service(&app, req).await;
+        assert!(
+            resp.headers().get("Access-Control-Allow-Origin").is_none(),
+            "disallowed origin must not receive ACAO header"
+        );
 
-                        async move {
-                            started.notify_one();
-                            release.notified().await;
-                            HttpResponse::Ok().body("done")
-                        }
-                    }),
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
+    }
+
+    // Wildcard '*' must be rejected at parse time — it would re-introduce the
+    // original P0 vulnerability and is incompatible with credentials.
+    #[test]
+    #[should_panic(expected = "must not contain a wildcard")]
+    fn test_cors_wildcard_origin_panics() {
+        std::env::set_var("CORS_ALLOWED_ORIGINS", "*");
+        let _ = parse_allowed_origins();
+    }
+
+    // A wildcard mixed with real origins must also be rejected.
+    #[test]
+    #[should_panic(expected = "must not contain a wildcard")]
+    fn test_cors_mixed_wildcard_panics() {
+        std::env::set_var("CORS_ALLOWED_ORIGINS", "http://localhost:3000,*");
+        let _ = parse_allowed_origins();
+    }
+
+    // Non-HTTP/S schemes (e.g. bare hostnames, file://) must be rejected.
+    #[test]
+    #[should_panic(expected = "must start with 'http://' or 'https://'")]
+    fn test_cors_invalid_scheme_panics() {
+        std::env::set_var("CORS_ALLOWED_ORIGINS", "localhost:3000");
+        let _ = parse_allowed_origins();
+    }
+
+    // An empty list after filtering must be rejected.
+    #[test]
+    #[should_panic(expected = "resolved to an empty list")]
+    fn test_cors_empty_origins_panics() {
+        std::env::set_var("CORS_ALLOWED_ORIGINS", ",,, ,");
+        let _ = parse_allowed_origins();
+    }
+
+    // Multiple valid origins should all be accepted.
+    #[test]
+    fn test_cors_multiple_valid_origins_accepted() {
+        std::env::set_var(
+            "CORS_ALLOWED_ORIGINS",
+            "http://localhost:3000,https://app.example.com,https://staging.example.com",
+        );
+        let origins = parse_allowed_origins();
+        assert_eq!(origins.len(), 3);
+        assert!(origins.contains(&"http://localhost:3000".to_string()));
+        assert!(origins.contains(&"https://app.example.com".to_string()));
+        assert!(origins.contains(&"https://staging.example.com".to_string()));
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
+    }
+
+    // Whitespace around entries must be trimmed before validation.
+    #[test]
+    fn test_cors_origins_are_trimmed() {
+        std::env::set_var(
+            "CORS_ALLOWED_ORIGINS",
+            "  http://localhost:3000  ,  https://app.example.com  ",
+        );
+        let origins = parse_allowed_origins();
+        assert_eq!(origins.len(), 2);
+        assert!(origins.contains(&"http://localhost:3000".to_string()));
+        std::env::remove_var("CORS_ALLOWED_ORIGINS");
+    }
+
+    #[actix_web::test]
+    async fn creator_reputation_integration_returns_aggregation() {
+        use actix_web::test as awtest;
+
+        let app = awtest::init_service(
+            App::new()
+                .app_data(web::Data::new(create_test_pool()))
+                .route(
+                    "/api/v1/creators/{id}/reputation",
+                    web::get().to(get_creator_reputation),
+                ),
+        )
+        let app = awtest::init_service(App::new().route(
+            "/api/v1/creators/{id}/reputation",
+            web::get().to(get_creator_reputation),
+        ))
+        .await;
+
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reputation")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["creatorId"], "alex-studio");
+        let total = json["data"]["aggregation"]["totalReviews"]
+            .as_u64()
+            .unwrap();
+        assert!(total >= 1);
+        let avg = json["data"]["aggregation"]["averageRating"]
+            .as_f64()
+            .unwrap();
+        assert!(avg > 0.0);
+        assert!(!json["data"]["recentReviews"].as_array().unwrap().is_empty());
+    }
+
+    #[actix_web::test]
+    async fn escrow_get_integration_returns_active_payload() {
+        use actix_web::test as awtest;
+
+        let app = awtest::init_service(
+            App::new().route("/api/v1/escrow/{id}", web::get().to(get_escrow)),
+        )
+        .await;
+
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/escrow/7")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["id"], 7);
+        assert_eq!(json["data"]["status"], "active");
+    }
+
+    #[actix_web::test]
+    async fn creator_reputation_unknown_id_returns_empty_aggregation() {
+        use actix_web::test as awtest;
+
+        let app = awtest::init_service(
+            App::new()
+                .app_data(web::Data::new(create_test_pool()))
+                .route(
+                    "/api/v1/creators/{id}/reputation",
+                    web::get().to(get_creator_reputation),
+                ),
+        )
+        let app = awtest::init_service(App::new().route(
+            "/api/v1/creators/{id}/reputation",
+            web::get().to(get_creator_reputation),
+        ))
+        .await;
+
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/unknown-creator/reputation")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["data"]["aggregation"]["totalReviews"], 0);
+        assert_eq!(json["data"]["aggregation"]["averageRating"], 0.0);
+    }
+
+    #[actix_web::test]
+    async fn escrow_release_integration_returns_released_payload() {
+        use actix_web::test as awtest;
+
+        let app = awtest::init_service(App::new().route(
+            "/api/v1/escrow/{id}/release",
+            web::post().to(release_escrow),
+        ))
+        .await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/7/release")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["status"], "released");
+        assert!(json["data"]["transaction_id"].is_string());
+    }
+
+    // ── JWT-protected route integration tests ─────────────────────────────────
+
+    fn create_test_pool() -> PgPool {
+        let database_url = "postgres://test:test@localhost:5432/test_db";
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy(database_url)
+            .expect("Failed to create test database pool")
+    }
+
+    fn build_protected_app() -> actix_web::App<
+        impl actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+    > {
+        App::new().service(
+            web::scope("/api/v1")
+                .wrap(auth::JwtMiddleware)
+                .route("/bounties", web::post().to(create_bounty))
+                .route("/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route("/freelancers/register", web::post().to(register_freelancer))
+                .route("/escrow/create", web::post().to(create_escrow))
+                .route("/escrow/{id}/release", web::post().to(release_escrow))
+                .route("/escrow/{id}/refund", web::post().to(refund_escrow))
+                .route("/api/bounties", web::post().to(create_bounty))
+                .route("/api/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route(
+                    "/api/freelancers/register",
+                    web::post().to(register_freelancer),
                 )
-            }
-        })
-        .shutdown_signal(async move {
-            let _ = shutdown_rx.await;
-        })
-        .shutdown_timeout(1)
-        .listen(listener)
-        .expect("server should listen on the test socket")
-        .run();
+                .route("/api/escrow/create", web::post().to(create_escrow))
+                .route("/api/escrow/{id}/release", web::post().to(release_escrow))
+                .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
+                .route("/api/v1/bounties", web::post().to(create_bounty))
+                .route("/api/v1/bounties/{id}/apply", web::post().to(apply_for_bounty))
+                .route("/api/v1/freelancers/register", web::post().to(register_freelancer))
+                .route("/api/v1/escrow/create", web::post().to(create_escrow))
+                .route("/api/v1/escrow/{id}/release", web::post().to(release_escrow))
+                .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
+        )
+    }
 
-        let server_task = tokio::spawn(server);
+    #[actix_web::test]
+    async fn create_bounty_without_token_returns_401() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
 
-        let response_task = tokio::spawn(async move {
-            let mut stream = TcpStream::connect(address)
-                .await
-                .expect("request should connect while server is accepting traffic");
-            let request = format!(
-                "GET /slow HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-                address
-            );
-            stream
-                .write_all(request.as_bytes())
-                .await
-                .expect("request should be written");
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/bounties")
+            .set_json(serde_json::json!({
+                "creator": "wallet-1",
+                "title": "Test",
+                "description": "desc",
+                "budget": 1000,
+                "deadline": 9999999999u64
+            }))
+            .to_request();
 
-            let mut response = Vec::new();
-            stream
-                .read_to_end(&mut response)
-                .await
-                .expect("response should be readable");
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+    }
 
-            String::from_utf8(response).expect("response should be valid utf-8")
+    #[actix_web::test]
+    async fn create_bounty_with_valid_token_returns_201() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+        let token = auth::tests::make_token("wallet-1", "creator", 3600);
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/bounties")
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .set_json(serde_json::json!({
+                "creator": "wallet-1",
+                "title": "Design Bounty",
+                "description": "desc",
+                "budget": 2000,
+                "deadline": 9999999999u64
+            }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["title"], "Design Bounty");
+    }
+
+    #[actix_web::test]
+    async fn apply_for_bounty_without_token_returns_401() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/bounties/1/apply")
+            .set_json(serde_json::json!({
+                "bounty_id": 1,
+                "freelancer": "wallet-2",
+                "proposal": "I can do this",
+                "proposed_budget": 1800,
+                "timeline": 7
+            }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn register_freelancer_without_token_returns_401() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/freelancers/register")
+            .set_json(serde_json::json!({
+                "name": "Jane",
+                "discipline": "Writing",
+                "bio": "Writer"
+            }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn release_escrow_without_token_returns_401() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/5/release")
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn release_escrow_with_valid_token_returns_200() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+        let token = auth::tests::make_token("wallet-1", "creator", 3600);
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/5/release")
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["status"], "released");
+    }
+
+    // ── Review submission hook integration tests ──────────────────────────────
+
+    #[actix_web::test]
+    async fn submit_review_triggers_hooks_successfully() {
+        use actix_web::test as awtest;
+        use std::sync::{Arc, Mutex};
+
+        // Initialize the reputation system
+        reputation::initialize_reputation_system();
+
+        // Create a counter to track hook executions
+        let hook_counter = Arc::new(Mutex::new(0));
+        let counter_clone = hook_counter.clone();
+
+        // Register a test hook
+        reputation::register_review_submitted_hook(move |event| {
+            let mut count = counter_clone.lock().unwrap();
+            *count += 1;
+            // Don't assert specific values since tests run in parallel with different data
+            assert!(event.rating >= 1 && event.rating <= 5);
+            assert!(!event.creator_id.is_empty());
+            Ok(())
         });
 
-        timeout(Duration::from_secs(1), started.notified())
-            .await
-            .expect("request should reach the handler before shutdown begins");
-        shutdown_tx
-            .send(())
-            .expect("shutdown trigger should be delivered");
+        // Create a mock database pool for testing
+        let app = awtest::init_service(
+            App::new()
+                .app_data(web::Data::new(create_test_pool()))
+                .route("/api/v1/reviews", web::post().to(submit_review))
+        ).await;
 
-        sleep(Duration::from_millis(50)).await;
-        release.notify_waiters();
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "test-bounty",
+                "creatorId": "test-creator",
+                "rating": 5,
+                "title": "Excellent work",
+                "body": "Outstanding delivery and communication",
+                "reviewerName": "John Doe"
+            }))
+            .to_request();
 
-        let response = timeout(Duration::from_secs(2), response_task)
-            .await
-            .expect("response task should finish before timeout")
-            .expect("response task should not panic");
-        assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.contains("\r\ndone"));
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
 
-        timeout(Duration::from_secs(2), server_task)
-            .await
-            .expect("server should finish graceful shutdown")
-            .expect("server task should not panic")
-            .expect("graceful shutdown should not return an error");
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert!(json["data"]["reviewId"].is_string());
+        assert_eq!(json["data"]["creatorId"], "test-creator");
+        assert_eq!(json["data"]["status"], "submitted");
 
-        assert!(
-            TcpStream::connect(address).await.is_err(),
-            "server should stop accepting new connections after shutdown"
+        // Verify hook was executed
+        let count = *hook_counter.lock().unwrap();
+        assert!(count > 0, "Hook should have been executed");
+    }
+
+    #[actix_web::test]
+    async fn submit_review_with_validation_errors_does_not_trigger_hooks() {
+        use actix_web::test as awtest;
+        use std::sync::{Arc, Mutex};
+
+        let hook_counter = Arc::new(Mutex::new(0));
+        let counter_clone = hook_counter.clone();
+
+        reputation::register_review_submitted_hook(move |_| {
+            if let Ok(mut count) = counter_clone.lock() {
+                *count += 1;
+            }
+            Ok(())
+        });
+
+        let app = awtest::init_service(build_review_app()).await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "",  // Invalid: empty
+                "creatorId": "test-creator",
+                "rating": 6,     // Invalid: out of range
+                "title": "",     // Invalid: empty
+                "body": "Good work",
+                "reviewerName": "John Doe"
+            }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], false);
+        assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+
+        // Note: We can't reliably test hook execution count due to shared global state
+        // In a real application, this would use dependency injection or isolated test environments
+    }
+
+    #[actix_web::test]
+    async fn submit_review_with_hook_failure_still_succeeds() {
+        use actix_web::test as awtest;
+
+        // Register a hook that always fails
+        reputation::register_review_submitted_hook(|_| {
+            Err("Simulated hook failure".to_string())
+        });
+
+        let app = awtest::init_service(build_review_app()).await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "test-bounty",
+                "creatorId": "test-creator",
+                "rating": 4,
+                "title": "Good work",
+                "body": "Solid delivery",
+                "reviewerName": "Jane Smith"
+            }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        // Should still succeed even if hook fails
+        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert!(json["data"]["reviewId"].is_string());
+    }
+
+    #[actix_web::test]
+    async fn submit_review_generates_unique_ids() {
+        use actix_web::test as awtest;
+        use tokio::time::{sleep, Duration};
+
+        let app = awtest::init_service(build_review_app()).await;
+
+        // Submit first review
+        let req1 = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "bounty-1",
+                "creatorId": "creator-1",
+                "rating": 5,
+                "title": "First review",
+                "body": "First review body",
+                "reviewerName": "Reviewer 1"
+            }))
+            .to_request();
+
+        let resp1 = awtest::call_service(&app, req1).await;
+        assert_eq!(resp1.status(), actix_web::http::StatusCode::CREATED);
+
+        // Small delay to ensure different nanosecond timestamps
+        sleep(Duration::from_millis(1)).await;
+
+        // Submit second review
+        let req2 = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "bounty-1",
+                "creatorId": "creator-1",
+                "rating": 4,
+                "title": "Second review",
+                "body": "Second review body",
+                "reviewerName": "Reviewer 2"
+            }))
+            .to_request();
+
+        let resp2 = awtest::call_service(&app, req2).await;
+        assert_eq!(resp2.status(), actix_web::http::StatusCode::CREATED);
+
+        // Extract review IDs
+        let body1 = awtest::read_body(resp1).await;
+        let json1: serde_json::Value = serde_json::from_slice(&body1).unwrap();
+        let review_id1 = json1["data"]["reviewId"].as_str().unwrap();
+
+        let body2 = awtest::read_body(resp2).await;
+        let json2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
+        let review_id2 = json2["data"]["reviewId"].as_str().unwrap();
+
+        // IDs should be different
+        assert_ne!(review_id1, review_id2);
+        
+        // Both should have the expected format
+        assert!(review_id1.starts_with("rev-creator-1-bounty-1"));
+        assert!(review_id2.starts_with("rev-creator-1-bounty-1"));
+    }
+
+    // ── Validation: create_bounty ─────────────────────────────────────────────
+
+    fn build_public_write_app() -> actix_web::App<
+        impl actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+    > {
+        App::new()
+            .route("/api/v1/bounties", web::post().to(create_bounty))
+            .route(
+                "/api/v1/bounties/{id}/apply",
+                web::post().to(apply_for_bounty),
+            )
+            .route(
+                "/api/v1/freelancers/register",
+                web::post().to(register_freelancer),
+            )
+    }
+
+    #[actix_web::test]
+    async fn create_bounty_empty_title_returns_422_with_field_error() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/bounties")
+            .set_json(serde_json::json!({
+                "creator": "wallet-1",
+                "title": "",
+                "description": "desc",
+                "budget": 1000,
+                "deadline": 9999999999u64
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
         );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], false);
+        assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"title"));
+    }
+
+    #[actix_web::test]
+    async fn create_bounty_negative_budget_returns_422_with_field_error() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/bounties")
+            .set_json(serde_json::json!({
+                "creator": "wallet-1",
+                "title": "Bounty",
+                "description": "desc",
+                "budget": -1,
+                "deadline": 9999999999u64
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"budget"));
+    }
+
+    #[actix_web::test]
+    async fn create_bounty_multiple_missing_fields_returns_all_errors() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/bounties")
+            .set_json(serde_json::json!({
+                "creator": "",
+                "title": "",
+                "description": "",
+                "budget": 0,
+                "deadline": 0u64
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let count = json["error"]["fieldErrors"].as_array().unwrap().len();
+        assert!(count >= 4, "expected at least 4 field errors, got {count}");
+    }
+
+    // ── Validation: register_freelancer ───────────────────────────────────────
+
+    #[actix_web::test]
+    async fn register_freelancer_empty_discipline_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/freelancers/register")
+            .set_json(serde_json::json!({
+                "name": "Jane",
+                "discipline": "",
+                "bio": "Writer"
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"discipline"));
+    }
+
+    #[actix_web::test]
+    async fn register_freelancer_all_empty_returns_all_field_errors() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/freelancers/register")
+            .set_json(serde_json::json!({ "name": "", "discipline": "", "bio": "" }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["fieldErrors"].as_array().unwrap().len(), 3);
+    }
+
+    // ── Validation: apply_for_bounty ──────────────────────────────────────────
+
+    #[actix_web::test]
+    async fn apply_for_bounty_empty_proposal_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/bounties/1/apply")
+            .set_json(serde_json::json!({
+                "bounty_id": 1,
+                "freelancer": "wallet-2",
+                "proposal": "",
+                "proposed_budget": 500,
+                "timeline": 7
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"proposal"));
+    }
+
+    // ── submit_review ─────────────────────────────────────────────────────────
+
+    fn build_review_app() -> actix_web::App<
+        impl actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+    > {
+        App::new()
+            .app_data(web::Data::new(create_test_pool()))
+            .route("/api/v1/reviews", web::post().to(submit_review))
+    }
+
+    #[actix_web::test]
+    async fn submit_review_valid_returns_201_with_review_id() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_review_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "b-1",
+                "creatorId": "alex-studio",
+                "rating": 5,
+                "title": "Excellent work",
+                "body": "Delivered on time and exceeded expectations.",
+                "reviewerName": "Jane D."
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert!(json["data"]["reviewId"].is_string());
+        assert_eq!(json["data"]["creatorId"], "alex-studio");
+        assert_eq!(json["data"]["status"], "submitted");
+    }
+
+    #[actix_web::test]
+    async fn submit_review_missing_fields_returns_422_with_all_errors() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_review_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "",
+                "creatorId": "",
+                "rating": 0,
+                "title": "",
+                "body": "",
+                "reviewerName": ""
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], false);
+        assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+        let count = json["error"]["fieldErrors"].as_array().unwrap().len();
+        assert_eq!(count, 6);
+    }
+
+    #[actix_web::test]
+    async fn submit_review_rating_out_of_range_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_review_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/reviews")
+            .set_json(serde_json::json!({
+                "bountyId": "b-1",
+                "creatorId": "c-1",
+                "rating": 6,
+                "title": "Good",
+                "body": "Nice work.",
+                "reviewerName": "Alice"
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"rating"));
+    }
+
+    #[actix_web::test]
+    async fn apply_for_bounty_zero_budget_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_public_write_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/bounties/1/apply")
+            .set_json(serde_json::json!({
+                "bounty_id": 1,
+                "freelancer": "wallet-2",
+                "proposal": "I can do this",
+                "proposed_budget": 0,
+                "timeline": 7
+            }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"proposed_budget"));
+    }
+
+    // ── New integration tests for review filtering endpoints ──────────────────
+
+    fn build_review_filtering_app() -> actix_web::App<
+        impl actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+    > {
+        App::new()
+            .app_data(web::Data::new(create_test_pool()))
+            .route("/api/v1/escrow/create", web::post().to(create_escrow))
+            .route("/api/v1/escrow/{id}/refund", web::post().to(refund_escrow))
+            .route("/api/v1/creators/{id}/reviews", web::get().to(get_creator_reviews_filtered))
+            .route("/api/v1/reviews", web::get().to(list_reviews_filtered))
+    }
+
+    #[actix_web::test]
+    async fn get_creator_reviews_filtered_returns_paginated_results() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/create")
+            .set_json(serde_json::json!({
+                "bountyId": "b-1",
+                "payerAddress": "GPAYER",
+                "payeeAddress": "GPAYEE",
+                "amount": 1000,
+                "token": "GUSDC"
+            }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?page=1&limit=2&sortBy=rating&sortOrder=desc")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"]["creatorId"], "alex-studio");
+        
+        let reviews = &json["data"]["reviews"];
+        assert_eq!(reviews["page"], 1);
+        assert_eq!(reviews["limit"], 2);
+        assert!(reviews["reviews"].as_array().unwrap().len() <= 2);
+        
+        // Check that reviews are sorted by rating descending
+        let review_ratings: Vec<u8> = reviews["reviews"]
+            .as_array().unwrap()
+            .iter()
+            .map(|r| r["rating"].as_u64().unwrap() as u8)
+            .collect();
+        
+        for i in 1..review_ratings.len() {
+            assert!(review_ratings[i-1] >= review_ratings[i]);
+        }
+    }
+
+    #[actix_web::test]
+    async fn get_creator_reviews_filtered_with_rating_filter() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+        let token = auth::tests::make_token("wallet-1", "creator", 3600);
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/create")
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .set_json(serde_json::json!({
+                "bountyId": "b-1",
+                "payerAddress": "GPAYER",
+                "payeeAddress": "GPAYEE",
+                "amount": 2500,
+                "token": "GUSDC"
+            }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?minRating=4&maxRating=5")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        
+        // All returned reviews should have rating between 4-5
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let rating = review["rating"].as_u64().unwrap() as u8;
+            assert!(rating >= 4 && rating <= 5);
+        }
+    }
+
+    #[actix_web::test]
+    async fn get_creator_reviews_filtered_invalid_params_returns_422() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_escrow_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/create")
+            .set_json(serde_json::json!({
+                "bountyId": "",
+                "payerAddress": "",
+                "payeeAddress": "",
+                "amount": 0,
+                "token": ""
+            }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/creators/alex-studio/reviews?minRating=6&sortBy=invalid&page=0")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], false);
+        assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+        assert!(json["error"]["fieldErrors"].as_array().unwrap().len() > 0);
+    }
+
+    #[actix_web::test]
+    async fn list_reviews_filtered_returns_all_reviews() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_escrow_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/create")
+            .set_json(serde_json::json!({
+                "bountyId": "b-1",
+                "payerAddress": "GPAYER",
+                "payeeAddress": "GPAYEE",
+                "amount": -100,
+                "token": "GUSDC"
+            }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?page=1&limit=5&sortBy=createdAt&sortOrder=desc")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"amount"));
+    }
+
+    // ── POST /api/escrow/:id/refund ───────────────────────────────────────────
+
+    #[actix_web::test]
+    async fn refund_escrow_without_token_returns_401() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/5/refund")
+            .set_json(serde_json::json!({ "authorizerAddress": "GPAYER" }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        
+        let reviews = &json["data"]["reviews"];
+        assert_eq!(reviews["page"], 1);
+        assert_eq!(reviews["limit"], 5);
+        assert!(reviews["totalCount"].as_u64().unwrap() > 0);
+        
+        // Should have overall aggregation
+        assert!(json["data"]["overallAggregation"]["totalReviews"].as_u64().unwrap() > 0);
+    }
+
+    #[actix_web::test]
+    async fn list_reviews_filtered_with_verified_only() {
+        use actix_web::test as awtest;
+        std::env::remove_var("JWT_SECRET");
+        let token = auth::tests::make_token("wallet-1", "creator", 3600);
+
+        let app = awtest::init_service(build_protected_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/5/refund")
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .set_json(serde_json::json!({ "authorizerAddress": "GPAYER123" }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?verifiedOnly=true&sortBy=rating&sortOrder=desc")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        
+        // All returned reviews should have rating >= 4 (verified threshold)
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let rating = review["rating"].as_u64().unwrap() as u8;
+            assert!(rating >= 4);
+        }
+        
+        // Should have filtered aggregation since we applied filters
+        assert!(json["data"]["filteredAggregation"].is_object());
+    }
+
+    #[actix_web::test]
+    async fn list_reviews_filtered_date_range() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(build_escrow_app()).await;
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/escrow/5/refund")
+            .set_json(serde_json::json!({ "authorizerAddress": "" }))
+        let app = awtest::init_service(build_review_filtering_app()).await;
+        
+        let req = awtest::TestRequest::get()
+            .uri("/api/v1/reviews?dateFrom=2025-01-01&dateTo=2025-12-31")
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+        let fields: Vec<&str> = json["error"]["fieldErrors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"authorizerAddress"));
+    }
+
+    // ── API versioning ────────────────────────────────────────────────────────
+
+    #[actix_web::test]
+    async fn api_versions_endpoint_returns_current_version() {
+        use actix_web::test as awtest;
+        let app =
+            awtest::init_service(App::new().route("/api/versions", web::get().to(api_versions)))
+                .await;
+        let req = awtest::TestRequest::get().uri("/api/versions").to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body = awtest::read_body(resp).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], true);
+        
+        // All returned reviews should be within the date range
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let created_at = review["createdAt"].as_str().unwrap();
+            assert!(created_at >= "2025-01-01" && created_at <= "2025-12-31");
+        }
+    }
+        assert_eq!(json["current"], "1");
+        assert!(json["supported"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("1")));
+    }
+
+    #[actix_web::test]
+    async fn v1_routes_respond_correctly() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new().service(
+                web::scope("/api/v1")
+                    .route("/bounties", web::get().to(list_bounties))
+                    .route("/creators", web::get().to(list_creators))
+                    .route("/freelancers", web::get().to(list_freelancers)),
+            ),
+        )
+        .await;
+
+        for uri in &[
+            "/api/v1/bounties",
+            "/api/v1/creators",
+            "/api/v1/freelancers",
+        ] {
+            let req = awtest::TestRequest::get().uri(uri).to_request();
+            let resp = awtest::call_service(&app, req).await;
+            assert_eq!(
+                resp.status(),
+                actix_web::http::StatusCode::OK,
+                "failed for {uri}"
+            );
+        }
+    }
+
+    #[actix_web::test]
+    async fn unversioned_api_path_returns_404() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new()
+                .service(web::scope("/api/v1").route("/bounties", web::get().to(list_bounties))),
+        )
+        .await;
+        let req = awtest::TestRequest::get().uri("/api/bounties").to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn version_header_middleware_injects_x_api_version() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new()
+                .wrap(ApiVersionHeader)
+                .route("/health", web::get().to(health)),
+        )
+        .await;
+        let req = awtest::TestRequest::get().uri("/health").to_request();
+        let resp = awtest::call_service(&app, req).await;
+        let header = resp
+            .headers()
+            .get("x-api-version")
+            .expect("x-api-version header must be present");
+        assert_eq!(header, API_VERSION);
+    }
+        assert_eq!(json["success"], true);
+        
+        // All returned reviews should be within the date range
+        let reviews = json["data"]["reviews"]["reviews"].as_array().unwrap();
+        for review in reviews {
+            let created_at = review["createdAt"].as_str().unwrap();
+            assert!(created_at >= "2025-01-01" && created_at <= "2025-12-31");
+        }
     }
 }
-

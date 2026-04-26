@@ -2,9 +2,9 @@ name: CLI checks
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
   cli-checks:
@@ -13,23 +13,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'pnpm'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v2
         with:
-          version: latest
+          version: 8
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install
 
-      - name: Generate Prisma Client
-        run: pnpm run db:generate
-
-      - name: Run frontend lint
+      - name: Run frontend Orbit-style lint
         run: pnpm run frontend:orbit-check
 
       - name: Setup Rust toolchain
@@ -37,18 +39,11 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            backend/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('backend/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
       - name: Run backend clippy
         run: pnpm run backend:clippy
 
       - name: Run smart contract clippy
         run: pnpm run smart-contract:clippy
+
+      - name: Run combined CLI checks
+        run: pnpm run cli-checks

@@ -13,7 +13,8 @@ path = "src/main.rs"
 [dependencies]
 actix-web.workspace = true
 actix-cors = "0.7"
-tracing-actix-web.workspace = true
+actix-rt.workspace = true
+actix-web-httpauth.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -22,24 +23,15 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
-chrono.workspace = true
-dotenvy.workspace = true
 futures.workspace = true
 jsonwebtoken.workspace = true
-redis.workspace = true
-uuid.workspace = true
-deadpool-redis.workspace = true
-utoipa.workspace = true
-utoipa-swagger-ui.workspace = true
-reqwest.workspace = true
-actix-web-prom.workspace = true
-prometheus.workspace = true
+hmac = { version = "0.12", features = ["std"] }
+sha2.workspace = true
+hex.workspace = true
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 
-# Tracing / OpenTelemetry
-opentelemetry.workspace = true
-opentelemetry_sdk.workspace = true
-opentelemetry-otlp.workspace = true
-opentelemetry-semantic-conventions = "0.15"
-tracing-opentelemetry.workspace = true
-stellar-discovery = { path = "../discovery" }
-stellar-common = { path = "../common" }
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

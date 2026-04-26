@@ -1,21 +1,7 @@
 version: '3.8'
 
 services:
-  consul:
-    image: hashicorp/consul:1.17
-    container_name: stellar-consul
-    ports:
-      - "8500:8500"     # HTTP API + UI
-      - "8600:8600/udp" # DNS
-    command: agent -server -bootstrap-expect=1 -ui -client=0.0.0.0
-    volumes:
-      - stellar_consul_data:/consul/data
-    healthcheck:
-      test: ["CMD", "consul", "members"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     container_name: stellar-postgres
@@ -33,6 +19,44 @@ services:
       timeout: 5s
       retries: 5
 
+  # API Service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: stellar-api
+    ports:
+      - "3001:3001"
+    environment:
+      API_HOST: "0.0.0.0"
+      API_PORT: "3001"
+      DATABASE_URL: "postgres://stellar:stellar_dev_password@postgres:5432/stellar_db"
+      RUST_LOG: "info,stellar_api=debug"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./services/api/src:/app/src
+    command: cargo run --bin stellar-api
+
+  # Blockchain Indexer
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile.indexer
+    container_name: stellar-indexer
+    environment:
+      DATABASE_URL: "postgres://stellar:stellar_dev_password@postgres:5432/stellar_db"
+      STELLAR_NETWORK: "testnet"
+      RUST_LOG: "info,stellar_indexer=debug"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./services/indexer/src:/app/src
+    command: cargo run --bin stellar-indexer
+
+  # Redis Cache
   redis:
     image: redis:7-alpine
     container_name: stellar-redis
@@ -46,78 +70,7 @@ services:
       timeout: 5s
       retries: 5
 
-  jaeger:
-    image: jaegertracing/all-in-one:1.55
-    container_name: stellar-jaeger
-    ports:
-      - "16686:16686" # UI
-      - "4317:4317"   # OTLP gRPC collector
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
-
-  api:
-    image: rust:1.81-slim
-    container_name: stellar-api
-    working_dir: /app
-    volumes:
-      - .:/app
-      - cargo_cache:/usr/local/cargo/registry
-    ports:
-      - "3001:3001"
-    environment:
-      API_HOST: "0.0.0.0"
-      API_PORT: "3001"
-      DATABASE_URL: "postgres://stellar:stellar_dev_password@postgres:5432/stellar_db"
-      REDIS_URL: "redis://redis:6379"
-      CONSUL_HTTP_ADDR: "http://consul:8500"
-      RUST_LOG: "info,stellar_api=debug"
-      OTLP_ENDPOINT: "http://jaeger:4317"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      consul:
-        condition: service_healthy
-      jaeger:
-        condition: service_started
-    command: cargo run --bin stellar-api
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:3001/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
-
-  indexer:
-    image: rust:1.81-slim
-    container_name: stellar-indexer
-    working_dir: /app
-    volumes:
-      - .:/app
-      - cargo_cache:/usr/local/cargo/registry
-    environment:
-      DATABASE_URL: "postgres://stellar:stellar_dev_password@postgres:5432/stellar_db"
-      STELLAR_NETWORK: "testnet"
-      STELLAR_RPC_URL: "https://soroban-testnet.stellar.org"
-      CONSUL_HTTP_ADDR: "http://consul:8500"
-      RUST_LOG: "info,stellar_indexer=debug"
-      OTLP_ENDPOINT: "http://jaeger:4317"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      consul:
-        condition: service_healthy
-      jaeger:
-        condition: service_started
-    command: cargo run --bin stellar-indexer
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h postgres -U stellar -d stellar_db || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
-
+  # pgAdmin for Database Management (optional)
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: stellar-pgadmin
@@ -129,36 +82,9 @@ services:
     depends_on:
       - postgres
 
-  # ── Backup service ───────────────────────────────────────────────────────
-  # Runs pg_dump on a cron schedule and uploads to S3 (or S3-compatible store).
-  # Set BACKUP_SCHEDULE (cron syntax) and AWS_* vars in your .env file.
-  # Retention is managed by S3 lifecycle rules on the target bucket.
-  db-backup:
-    image: eeshugerman/postgres-backup-s3:16
-    container_name: stellar-db-backup
-    environment:
-      SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}        # default: daily at 02:00 UTC
-      S3_REGION: ${AWS_REGION}
-      S3_BUCKET: ${BACKUP_S3_BUCKET}
-      S3_PREFIX: ${BACKUP_S3_PREFIX:-stellar/postgres}
-      S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}           # leave empty for AWS S3
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      POSTGRES_HOST: postgres
-      POSTGRES_DATABASE: stellar_db
-      POSTGRES_USER: stellar
-      POSTGRES_PASSWORD: stellar_dev_password
-      POSTGRES_EXTRA_OPTS: --compress=9 --clean --if-exists
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-
 volumes:
-  stellar_consul_data:
   stellar_postgres_data:
   stellar_redis_data:
-  cargo_cache:
 
 networks:
   default:

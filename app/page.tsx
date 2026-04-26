@@ -1,17 +1,15 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useI18n } from '@/components/i18n-provider';
-import { Header } from '@/components/layout/header';
-import { Footer } from '@/components/layout/footer';
-import { CreatorCard } from '@/components/cards/creator-card';
+import { Header } from '@/components/header';
+import { Footer } from '@/components/footer';
+import { CreatorCard } from '@/components/creator-card';
 import { Button } from '@/components/ui/button';
 import { ArrowRight, Sparkles, Users, Target } from 'lucide-react';
-import { creators } from '@/lib/services/creators-data';
+import { creators } from '@/lib/creators-data';
 
 export default function Home() {
   const router = useRouter();
-  const { t } = useI18n();
   const featuredCreators = creators.slice(0, 3);
 
   return (
@@ -28,27 +26,27 @@ export default function Home() {
             <div className="text-center max-w-4xl mx-auto">
               {/* Subtitle Badge */}
               <p className="text-sm font-semibold text-primary mb-4 uppercase tracking-wide">
-                {t('home.heroBadge')}
+                Creator Marketplace & Bounty Platform
               </p>
 
               {/* Main Heading */}
               <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-foreground mb-6 text-balance leading-tight">
-                {t('home.heroTitle')}
+                Connect with World-Class Creative Talent
               </h1>
 
               {/* Subheading */}
               <p className="text-base sm:text-lg text-muted-foreground mb-8 max-w-3xl mx-auto text-balance leading-relaxed">
-                {t('home.heroSubtitle')}
+                Discover, hire, and collaborate with exceptional creators across design, writing, marketing, product management, and 10+ more disciplines. Post bounties, find freelancers, and build amazing projects.
               </p>
 
               {/* CTA Buttons */}
               <div className="flex flex-col sm:flex-row gap-3 justify-center items-center sm:items-stretch mb-8">
                 <Button size="lg" className="w-full sm:w-auto" onClick={() => router.push('/creators')}>
-                  {t('home.browseCreators')}
-                  <ArrowRight size={18} className="ms-2" />
+                  Browse Creators
+                  <ArrowRight size={18} className="ml-2" />
                 </Button>
                 <Button size="lg" variant="outline" className="w-full sm:w-auto" onClick={() => router.push('/bounties')}>
-                  {t('home.postBounty')}
+                  Post a Bounty
                 </Button>
               </div>
             </div>
@@ -63,19 +61,19 @@ export default function Home() {
                 <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
                   {creators.length}+
                 </div>
-                <p className="text-sm sm:text-base text-muted-foreground">{t('home.statsCreators')}</p>
+                <p className="text-sm sm:text-base text-muted-foreground">Stellar Creators</p>
               </div>
               <div className="text-center">
                 <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
                   {creators.reduce((sum, c) => sum + c.projects.length, 0)}+
                 </div>
-                <p className="text-sm sm:text-base text-muted-foreground">{t('home.statsProjects')}</p>
+                <p className="text-sm sm:text-base text-muted-foreground">Incredible Projects</p>
               </div>
               <div className="text-center">
                 <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
                   15+
                 </div>
-                <p className="text-sm sm:text-base text-muted-foreground">{t('home.statsDisciplines')}</p>
+                <p className="text-sm sm:text-base text-muted-foreground">Non-Tech Disciplines</p>
               </div>
             </div>
           </div>
@@ -87,10 +85,10 @@ export default function Home() {
             {/* Section Header */}
             <div className="text-center mb-12 sm:mb-16">
               <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mb-3 sm:mb-4">
-                {t('home.featuredTitle')}
+                Featured Creators
               </h2>
               <p className="text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto">
-                {t('home.featuredSubtitle')}
+                Discover exceptional talent across 15+ disciplines. From UX design to community management.
               </p>
             </div>
 
@@ -104,8 +102,8 @@ export default function Home() {
             {/* View All CTA */}
             <div className="text-center">
               <Button size="lg" variant="outline" className="group" onClick={() => router.push('/creators')}>
-                {t('home.viewAllCreators')}
-                <ArrowRight size={18} className="ms-2 group-hover:translate-x-1 transition-transform rtl:group-hover:-translate-x-1" />
+                View All Creators
+                <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
               </Button>
             </div>
           </div>
@@ -116,10 +114,10 @@ export default function Home() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center mb-12 sm:mb-16">
               <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mb-3">
-                {t('home.whyTitle')}
+                Why Choose Stellar?
               </h2>
               <p className="text-muted-foreground max-w-2xl mx-auto">
-                {t('home.whySubtitle')}
+                The platform built for non-technical talent in tech
               </p>
             </div>
 
@@ -130,10 +128,10 @@ export default function Home() {
                   <Users size={20} className="text-primary" />
                 </div>
                 <h3 className="text-lg sm:text-xl font-bold text-foreground mb-3">
-                  {t('home.feature1Title')}
+                  Connect & Collaborate
                 </h3>
                 <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-                  {t('home.feature1Body')}
+                  Network with industry leaders and find perfect collaborators for your next project.
                 </p>
               </div>
 
@@ -143,10 +141,10 @@ export default function Home() {
                   <Target size={20} className="text-accent" />
                 </div>
                 <h3 className="text-lg sm:text-xl font-bold text-foreground mb-3">
-                  {t('home.feature2Title')}
+                  Bounty Opportunities
                 </h3>
                 <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-                  {t('home.feature2Body')}
+                  Participate in exclusive bounties and showcase your expertise to potential clients.
                 </p>
               </div>
 
@@ -156,10 +154,10 @@ export default function Home() {
                   <Sparkles size={20} className="text-secondary" />
                 </div>
                 <h3 className="text-lg sm:text-xl font-bold text-foreground mb-3">
-                  {t('home.feature3Title')}
+                  Premium Experience
                 </h3>
                 <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-                  {t('home.feature3Body')}
+                  Showcase your portfolio on a professional platform designed for creators.
                 </p>
               </div>
             </div>
@@ -170,18 +168,18 @@ export default function Home() {
         <section className="py-16 sm:py-24 border-t border-border">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mb-4 sm:mb-6">
-              {t('home.ctaTitle')}
+              Ready to Get Started?
             </h2>
             <p className="text-base sm:text-lg text-muted-foreground mb-8 sm:mb-10 max-w-2xl mx-auto">
-              {t('home.ctaSubtitle')}
+              Join thousands of creators and clients finding perfect matches on Stellar.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center items-center sm:items-stretch">
               <Button size="lg" className="w-full sm:w-auto" onClick={() => router.push('/creators')}>
-                {t('home.ctaBrowse')}
-                <ArrowRight size={18} className="ms-2" />
+                Browse Creators
+                <ArrowRight size={18} className="ml-2" />
               </Button>
               <Button size="lg" variant="outline" className="w-full sm:w-auto" onClick={() => router.push('/bounties')}>
-                {t('home.ctaPost')}
+                Post a Bounty
               </Button>
             </div>
           </div>

@@ -1,20 +1,12 @@
 import type { Metadata, Viewport } from 'next'
-import Script from 'next/script'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { ThemeProvider } from 'next-themes'
-import { SessionProvider } from '@/components/providers/session-provider'
-import { I18nProvider } from '@/components/i18n-provider'
-import { Toaster } from '@/components/ui/sonner'
-import AnalyticsClient from './providers/AnalyticsClient'
+import { LayoutProvider } from '@/components/layout-provider'
 import './globals.css'
 
 const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
-
-const PLAUSIBLE_DOMAIN = process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN || 'example.com'
-const PLAUSIBLE_SRC = process.env.NEXT_PUBLIC_PLAUSIBLE_SRC || 'https://plausible.io/js/plausible.js'
-const PLAUSIBLE_API_ENDPOINT = process.env.NEXT_PUBLIC_PLAUSIBLE_API || 'https://plausible.io/api/event'
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -61,42 +53,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <PlausibleScript />
-      </head>
       <body className="font-sans antialiased">
-        <SessionProvider>
-          <I18nProvider>
-            <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-              <AnalyticsClient plausibleDomain={PLAUSIBLE_DOMAIN} />
-              {children}
-              <Toaster richColors closeButton position="top-right" />
-              <Analytics />
-            </ThemeProvider>
-          </I18nProvider>
-        </SessionProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+          <LayoutProvider>
+            {children}
+          </LayoutProvider>
+          <Analytics />
+        </ThemeProvider>
       </body>
     </html>
-  )
-}
-
-function PlausibleScript() {
-  return (
-    <>
-      <Script
-        id="plausible-script"
-        strategy="lazyOnload"
-        data-domain={PLAUSIBLE_DOMAIN}
-        data-api={PLAUSIBLE_API_ENDPOINT}
-        src={PLAUSIBLE_SRC}
-      />
-      <Script id="plausible-queue" strategy="lazyOnload">
-        {`
-          window.plausible = window.plausible || function() {
-            (window.plausible.q = window.plausible.q || []).push(arguments)
-          }
-        `}
-      </Script>
-    </>
   )
 }
