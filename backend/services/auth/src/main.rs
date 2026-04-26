@@ -446,14 +446,42 @@ async fn generate_backup_codes() -> HttpResponse {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    dotenvy::dotenv().ok();
+    // Attempt to load .env file as early as possible
+    let dotenv_result = dotenvy::dotenv();
 
+    // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             std::env::var("RUST_LOG")
                 .unwrap_or_else(|_| "info,stellar_auth=debug".to_string()),
         )
         .init();
+
+    // Log the result of loading .env now that tracing is initialized
+    match dotenv_result {
+        Ok(path) => tracing::info!("Environment variables loaded from {:?}", path),
+        Err(e) => tracing::warn!("No .env file found or error loading it: {}", e),
+    }
+
+    tracing::info!("🔐 Stellar Auth Service Starting...");
+
+    // Validate required environment variables
+    let required_vars = ["JWT_SECRET"];
+    let mut missing_vars = Vec::new();
+    for var in required_vars {
+        if std::env::var(var).is_err() {
+            missing_vars.push(var);
+        }
+    }
+
+    if !missing_vars.is_empty() {
+        let err_msg = format!(
+            "Fatal: Missing required environment variables: {}. Service cannot start.",
+            missing_vars.join(", ")
+        );
+        tracing::error!("{}", err_msg);
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, err_msg));
+    }
 
     let port = std::env::var("AUTH_PORT")
         .unwrap_or_else(|_| "3002".to_string())

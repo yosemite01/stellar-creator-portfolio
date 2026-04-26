@@ -2,13 +2,25 @@
 
 import { notFound } from 'next/navigation';
 import { useRouter } from 'next/navigation';
-import { Header } from '@/components/header';
-import { Footer } from '@/components/footer';
-import { ProjectCard } from '@/components/project-card';
+import { useState, useEffect } from 'react';
+import type { AggregateRating } from '@/lib/services/review-service';
+import { Header } from '@/components/layout/header';
+import { Footer } from '@/components/layout/footer';
+import { ProjectCard } from '@/components/cards/project-card';
 import { Button } from '@/components/ui/button';
-import { creators } from '@/lib/creators-data';
-import { CreatorReputation } from '@/components/creator-reputation';
-import { ArrowLeft, Linkedin, Twitter, ExternalLink } from 'lucide-react';
+import { creators, type Project } from '@/lib/services/creators-data';
+import {
+  projectCategoryOptions,
+  filterProjectsByCategory,
+} from '@/lib/utils/project-helpers';
+import { ArrowLeft, Linkedin, Twitter, ExternalLink, Star, Settings2, LayoutGrid, List } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+import { AggregateRatingDisplay } from '@/components/widgets/rating-display';
+import { SocialShare } from '@/components/common/social-share';
+import Image from 'next/image';
+import { buildOptimizationProps, buildSizes } from '@/lib/utils/image-utils';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { ProjectModal } from '@/components/widgets/project-modal';
 
 interface CreatorProfilePageProps {
   params: {
@@ -18,7 +30,30 @@ interface CreatorProfilePageProps {
 
 export default function CreatorProfilePage({ params }: CreatorProfilePageProps) {
   const router = useRouter();
+  const { data: session } = useSession();
   const creator = creators.find((c) => c.id === params.id);
+  const [aggregate, setAggregate] = useState<AggregateRating | null>(null);
+  const [modalProject, setModalProject] = useState<Project | null>(null);
+  const [projectFilter, setProjectFilter] = useState('All');
+  const [galleryLayout, setGalleryLayout] = useState<'grid' | 'list'>('grid');
+  const heroSizes = buildSizes({
+    mobile: '100vw',
+    tablet: '100vw',
+    desktop: '100vw',
+    largeDesktop: '100vw',
+  });
+
+  // Fetch aggregate rating
+  useEffect(() => {
+    if (!creator) return;
+    fetch(`/api/reviews?creatorId=${creator.id}&limit=1000`)
+      .then((r) => r.json())
+      .then((d) => setAggregate(d.aggregate))
+      .catch(() => {});
+  }, [creator]);
+
+  const projectCategories = projectCategoryOptions(creator?.projects ?? []);
+  const filteredProjects = filterProjectsByCategory(creator?.projects ?? [], projectFilter);
 
   if (!creator) {
     notFound();
@@ -32,10 +67,14 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
         {/* Hero Section with Cover */}
         <section className="relative h-64 sm:h-80 bg-gradient-to-br from-primary/20 to-accent/20 overflow-hidden">
           {creator.coverImage && (
-            <img
+            <Image
               src={creator.coverImage}
-              alt={creator.name}
-              className="w-full h-full object-cover"
+              alt={`${creator.name} cover image`}
+              fill
+              className="object-cover"
+              {...buildOptimizationProps({ priority: true, sizes: heroSizes })}
+              sizes={heroSizes}
+              placeholder="empty"
             />
           )}
           <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent" />
@@ -51,6 +90,21 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
               <ArrowLeft size={20} />
             </Button>
           </div>
+
+          {/* Customize Button - only visible to the creator */}
+          {session && (
+            <div className="absolute top-6 right-4 sm:right-6 lg:right-8">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="bg-background/80 backdrop-blur-sm hover:bg-background/90 gap-1.5"
+                onClick={() => router.push(`/creators/${creator.id}/customize`)}
+              >
+                <Settings2 size={16} />
+                Customize
+              </Button>
+            </div>
+          )}
         </section>
 
         {/* Profile Section */}
@@ -85,7 +139,7 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
                 </p>
 
                 {/* Social Links */}
-                <div className="flex gap-3 mb-8">
+                <div className="flex flex-wrap gap-3 mb-8">
                   {creator.linkedIn && (
                     <a
                       href={creator.linkedIn}
@@ -119,6 +173,11 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
                       Portfolio
                     </a>
                   )}
+                  <SocialShare
+                    title={`Check out ${creator.name} on Stellar Creators`}
+                    description={creator.tagline}
+                    url={`/creators/${creator.id}`}
+                  />
                 </div>
               </div>
 
@@ -184,8 +243,6 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
           </div>
         </section>
 
-        <CreatorReputation creatorId={creator.id} />
-
         {/* Skills Section */}
         {creator.skills.length > 0 && (
           <section className="border-b border-border bg-muted/30 py-12">
@@ -209,12 +266,103 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
         {creator.projects.length > 0 && (
           <section className="py-16 sm:py-24">
             <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-              <h2 className="text-3xl font-bold text-foreground mb-12">Featured Work</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {creator.projects.map((project) => (
-                  <ProjectCard key={project.id} project={project} />
+              <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between mb-8">
+                <div>
+                  <h2 className="text-3xl font-bold text-foreground">Featured Work</h2>
+                  <p className="text-muted-foreground mt-2 max-w-xl text-sm sm:text-base">
+                    Filter by category, switch between grid and list, and open a project for the full
+                    brief, timeline, and tech stack.
+                  </p>
+                </div>
+                <ToggleGroup
+                  type="single"
+                  value={galleryLayout}
+                  onValueChange={(v) => {
+                    if (v === 'grid' || v === 'list') setGalleryLayout(v);
+                  }}
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 self-start sm:self-auto"
+                  aria-label="Gallery layout"
+                >
+                  <ToggleGroupItem value="grid" aria-label="Grid gallery">
+                    <LayoutGrid className="h-4 w-4" />
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="list" aria-label="List gallery">
+                    <List className="h-4 w-4" />
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </div>
+
+              <div
+                className="flex flex-wrap gap-2 mb-8"
+                role="group"
+                aria-label="Filter projects by category"
+              >
+                {projectCategories.map((cat) => (
+                  <Button
+                    key={cat}
+                    type="button"
+                    variant={projectFilter === cat ? 'default' : 'outline'}
+                    size="sm"
+                    className="rounded-full"
+                    onClick={() => setProjectFilter(cat)}
+                  >
+                    {cat}
+                  </Button>
                 ))}
               </div>
+
+              {filteredProjects.length === 0 ? (
+                <p className="text-muted-foreground">No projects in this category.</p>
+              ) : (
+                <div
+                  className={
+                    galleryLayout === 'grid'
+                      ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6'
+                      : 'flex flex-col gap-4'
+                  }
+                >
+                  {filteredProjects.map((project, idx) => (
+                    <ProjectCard
+                      key={project.id}
+                      project={project}
+                      layout={galleryLayout}
+                      imageIndex={idx}
+                      onViewDetails={setModalProject}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        <ProjectModal
+          project={modalProject}
+          open={modalProject !== null}
+          onOpenChange={(open) => {
+            if (!open) setModalProject(null);
+          }}
+        />
+
+        {/* Reviews Section */}
+        {aggregate && aggregate.total > 0 && (
+          <section className="border-b border-border py-12">
+            <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold text-foreground">Reviews</h2>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push(`/creators/${creator.id}/reviews`)}
+                  className="gap-1.5"
+                >
+                  <Star size={14} />
+                  See all {aggregate.total} reviews
+                </Button>
+              </div>
+              <AggregateRatingDisplay aggregate={aggregate} />
             </div>
           </section>
         )}
