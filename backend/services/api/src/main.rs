@@ -344,13 +344,63 @@ pub struct CreatorStats {
 // ==================== Routes ====================
 
 /// Health check endpoint
-async fn health() -> HttpResponse {
-    HttpResponse::Ok()
+async fn health(
+    pool: web::Data<PgPool>,
+    rpc_url: web::Data<String>,
+) -> HttpResponse {
+    let mut db_connected = false;
+    let mut rpc_connected = false;
+
+    // Verify database connection
+    match pool.acquire().await {
+        Ok(_) => {
+            db_connected = true;
+        }
+        Err(e) => {
+            tracing::error!("Database health check failed: {}", e);
+        }
+    }
+
+    // Verify Stellar RPC connectivity
+    // We perform a simple reachability check. In a real scenario, 
+    // we might call a method like 'getNetwork' or 'getHealth'.
+    let client = reqwest::Client::new();
+    match client.get(rpc_url.get_ref()).send().await {
+        Ok(resp) => {
+            if resp.status().is_success() || resp.status().as_u16() == 405 {
+                // 405 Method Not Allowed is acceptable for a GET on a JSON-RPC endpoint
+                rpc_connected = true;
+            }
+        }
+        Err(e) => {
+            tracing::error!("Stellar RPC health check failed: {}", e);
+        }
+    }
+
+    let status = if db_connected && rpc_connected {
+        "healthy"
+    } else if db_connected || rpc_connected {
+        "degraded"
+    } else {
+        "unhealthy"
+    };
+
+    let response_code = if db_connected && rpc_connected {
+        HttpResponse::Ok()
+    } else {
+        HttpResponse::ServiceUnavailable()
+    };
+
+    response_code
         .content_type("application/json")
         .json(serde_json::json!({
-            "status": "healthy",
+            "status": status,
             "service": "stellar-api",
-            "version": "0.1.0"
+            "version": "0.1.0",
+            "dependencies": {
+                "database": if db_connected { "connected" } else { "disconnected" },
+                "stellar_rpc": if rpc_connected { "connected" } else { "disconnected" }
+            }
         }))
 }
 
@@ -1247,12 +1297,40 @@ pub fn cors_middleware() -> Cors {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // Attempt to load .env file as early as possible
+    let dotenv_result = dotenvy::dotenv();
+
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter("info,stellar_api=debug")
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info,stellar_api=debug".to_string()))
         .init();
 
+    // Log the result of loading .env now that tracing is initialized
+    match dotenv_result {
+        Ok(path) => tracing::info!("Environment variables loaded from {:?}", path),
+        Err(e) => tracing::warn!("No .env file found or error loading it: {}", e),
+    }
+
     tracing::info!("Starting Stellar API Server...");
+
+    // Validate required environment variables for production
+    // In a real production environment, we should be strict about these.
+    let required_vars = ["DATABASE_URL", "JWT_SECRET"];
+    let mut missing_vars = Vec::new();
+    for var in required_vars {
+        if std::env::var(var).is_err() {
+            missing_vars.push(var);
+        }
+    }
+
+    if !missing_vars.is_empty() {
+        let err_msg = format!(
+            "Fatal: Missing required environment variables: {}. Service cannot start.",
+            missing_vars.join(", ")
+        );
+        tracing::error!("{}", err_msg);
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, err_msg));
+    }
 
     // Initialize database connection
     let database_url = std::env::var("DATABASE_URL")
@@ -1300,6 +1378,9 @@ async fn main() -> std::io::Result<()> {
     reputation::initialize_reputation_system_with_db(pool.clone());
     tracing::info!("Reputation system initialized with hooks and database");
 
+    let stellar_rpc_url = std::env::var("STELLAR_RPC_URL")
+        .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".to_string());
+    tracing::info!("Stellar RPC URL: {}", stellar_rpc_url);
     // Initialize the ML model (trained on an empty seed; retraining populates it)
     let ml_state = web::Data::new(ml_handlers::MlAppState {
         model: std::sync::Arc::new(ml::SimpleMLModel::new(&[])),
@@ -1320,6 +1401,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(stellar_rpc_url.clone()))
             .app_data(ml_state.clone())
             .app_data(web::Data::new(ws_limiter.clone()))
             .wrap(cors_middleware())
