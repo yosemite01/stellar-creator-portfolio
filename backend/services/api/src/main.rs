@@ -78,6 +78,34 @@ fn parse_u64_env_with_range(name: &str, default: u64, min: u64, max: u64) -> u64
     parsed
 }
 
+fn parse_u32_env_with_range_alias(
+    primary_name: &str,
+    legacy_name: &str,
+    default: u32,
+    min: u32,
+    max: u32,
+) -> u32 {
+    let raw = std::env::var(primary_name)
+        .or_else(|_| std::env::var(legacy_name))
+        .unwrap_or_else(|_| default.to_string());
+
+    let parsed = raw.parse::<u32>().unwrap_or_else(|_| {
+        panic!(
+            "{} (or legacy {}) must be a valid unsigned 32-bit integer, got '{}'",
+            primary_name, legacy_name, raw
+        )
+    });
+
+    if !(min..=max).contains(&parsed) {
+        panic!(
+            "{} (or legacy {}) must be between {} and {} (inclusive), got {}",
+            primary_name, legacy_name, min, max, parsed
+        );
+    }
+
+    parsed
+}
+
 // ==================== Domain Models ====================
 
 /// Machine-readable error codes returned by the API.
@@ -1230,20 +1258,29 @@ async fn main() -> std::io::Result<()> {
     // Initialize database connection
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://stellar:stellar_dev_password@localhost:5432/stellar_db".to_string());
-    let database_max_connections =
-        parse_u32_env_with_range("DATABASE_MAX_CONNECTIONS", 10, 1, 100);
+    let database_max_connections = parse_u32_env_with_range_alias(
+        "DB_POOL_MAX_CONNECTIONS",
+        "DATABASE_MAX_CONNECTIONS",
+        10,
+        1,
+        100,
+    );
+    let db_pool_idle_timeout_seconds =
+        parse_u64_env_with_range("DB_POOL_IDLE_TIMEOUT", 300, 5, 3_600);
     let slow_query_threshold_ms =
         parse_u64_env_with_range("SLOW_QUERY_THRESHOLD_MS", 1_000, 10, 300_000);
     
     tracing::info!("Connecting to database: {}", database_url.replace("stellar_dev_password", "***"));
     tracing::info!(
-        "DB pool max connections: {}, slow query threshold: {}ms",
+        "DB pool max connections: {}, idle timeout: {}s, slow query threshold: {}ms",
         database_max_connections,
+        db_pool_idle_timeout_seconds,
         slow_query_threshold_ms
     );
     
     let pool = PgPoolOptions::new()
         .max_connections(database_max_connections)
+        .idle_timeout(Some(Duration::from_secs(db_pool_idle_timeout_seconds)))
         .log_slow_statements(
             tracing::log::LevelFilter::Warn,
             Duration::from_millis(slow_query_threshold_ms),
@@ -1373,17 +1410,59 @@ mod tests {
 
     #[test]
     fn parse_u32_env_with_range_accepts_valid_pool_size() {
-        std::env::set_var("DATABASE_MAX_CONNECTIONS", "25");
-        let value = parse_u32_env_with_range("DATABASE_MAX_CONNECTIONS", 10, 1, 100);
+        std::env::set_var("DB_POOL_MAX_CONNECTIONS", "25");
+        let value = parse_u32_env_with_range_alias(
+            "DB_POOL_MAX_CONNECTIONS",
+            "DATABASE_MAX_CONNECTIONS",
+            10,
+            1,
+            100,
+        );
         assert_eq!(value, 25);
-        std::env::remove_var("DATABASE_MAX_CONNECTIONS");
+        std::env::remove_var("DB_POOL_MAX_CONNECTIONS");
     }
 
     #[test]
     #[should_panic(expected = "must be between 1 and 100")]
     fn parse_u32_env_with_range_rejects_invalid_pool_size() {
-        std::env::set_var("DATABASE_MAX_CONNECTIONS", "0");
-        let _ = parse_u32_env_with_range("DATABASE_MAX_CONNECTIONS", 10, 1, 100);
+        std::env::set_var("DB_POOL_MAX_CONNECTIONS", "0");
+        let _ = parse_u32_env_with_range_alias(
+            "DB_POOL_MAX_CONNECTIONS",
+            "DATABASE_MAX_CONNECTIONS",
+            10,
+            1,
+            100,
+        );
+    }
+
+    #[test]
+    fn parse_u32_env_with_range_alias_uses_legacy_name() {
+        std::env::remove_var("DB_POOL_MAX_CONNECTIONS");
+        std::env::set_var("DATABASE_MAX_CONNECTIONS", "30");
+        let value = parse_u32_env_with_range_alias(
+            "DB_POOL_MAX_CONNECTIONS",
+            "DATABASE_MAX_CONNECTIONS",
+            10,
+            1,
+            100,
+        );
+        assert_eq!(value, 30);
+        std::env::remove_var("DATABASE_MAX_CONNECTIONS");
+    }
+
+    #[test]
+    fn parse_u64_env_with_range_accepts_db_idle_timeout() {
+        std::env::set_var("DB_POOL_IDLE_TIMEOUT", "600");
+        let value = parse_u64_env_with_range("DB_POOL_IDLE_TIMEOUT", 300, 5, 3_600);
+        assert_eq!(value, 600);
+        std::env::remove_var("DB_POOL_IDLE_TIMEOUT");
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 5 and 3600")]
+    fn parse_u64_env_with_range_rejects_invalid_db_idle_timeout() {
+        std::env::set_var("DB_POOL_IDLE_TIMEOUT", "2");
+        let _ = parse_u64_env_with_range("DB_POOL_IDLE_TIMEOUT", 300, 5, 3_600);
     }
 
     // ── ApiResponse ───────────────────────────────────────────────────────────
