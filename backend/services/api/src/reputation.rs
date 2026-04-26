@@ -408,6 +408,7 @@ pub async fn fetch_creator_reputation_from_db(creator_id: &str) -> ReputationAgg
             stars_2: stars_2 as u32,
             stars_1: stars_1 as u32,
             is_verified,
+            reliability_score: average_rating.unwrap_or(0.0) / 5.0, // Placeholder until DB schema update
             reliability_score: reliability_score.unwrap_or(0.0),
         },
         Ok(None) => aggregate_reviews(&fetch_creator_reviews_from_db(creator_id).await),
@@ -459,6 +460,15 @@ pub fn aggregate_reviews(reviews: &[Review]) -> ReputationAggregation {
         stars[usize::from(r.rating - 1)] += 1;
     }
 
+    let average_rating = if count == 0 {
+        0.0
+    } else {
+        let raw = sum as f64 / f64::from(count);
+        (raw * 100.0).round() / 100.0
+    };
+
+    let reliability_score = compute_reliability_score(reviews);
+    let is_verified = count >= 3 && average_rating >= 4.5;
     let average_rating = if count == 0 { 0.0 } else { ((sum as f64 / count as f64) * 100.0).round() / 100.0 };
     let reliability_score = compute_reliability_score(reviews);
 
@@ -471,6 +481,72 @@ pub fn aggregate_reviews(reviews: &[Review]) -> ReputationAggregation {
         stars_2: stars[1],
         stars_1: stars[0],
         reliability_score,
+        is_verified,
+    }
+}
+
+/// Compute a time-decayed reliability score [0.0, 1.0].
+///
+/// Each review is weighted by e^(-λ * age_days).
+/// λ = 0.02 (half-life ≈ 35 days).
+fn compute_reliability_score(reviews: &[Review]) -> f64 {
+    if reviews.is_empty() {
+        return 0.0;
+    }
+
+    let now = chrono::Utc::now();
+    let lambda = 0.02;
+    let mut weighted_sum = 0.0;
+    let mut total_weight = 0.0;
+
+    for r in reviews {
+        if !(1..=5).contains(&r.rating) {
+            continue;
+        }
+
+        // Parse date (support both full ISO and simple YYYY-MM-DD)
+        let created_at = if r.created_at.contains('T') {
+            chrono::DateTime::parse_from_rfc3339(&r.created_at)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now())
+        } else {
+            chrono::NaiveDate::parse_from_str(&r.created_at, "%Y-%m-%d")
+                .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default())
+                .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now())
+        };
+
+        let age_days = now.signed_duration_since(created_at).num_seconds() as f64 / 86400.0;
+        let weight = (-lambda * age_days.max(0.0)).exp();
+
+        let value = match r.rating {
+            5 => 1.0,
+            4 => 0.8,
+            3 => 0.5,
+            2 => 0.2,
+            _ => 0.0,
+        };
+
+        weighted_sum += value * weight;
+        total_weight += weight;
+    }
+
+    if total_weight > 0.0 {
+        let score = weighted_sum / total_weight;
+        (score * 100.0).round() / 100.0
+    } else {
+        0.0
+    }
+}
+
+pub fn to_public_review(r: &Review) -> PublicReview {
+    PublicReview {
+        id: r.id.clone(),
+        rating: r.rating,
+        title: r.title.clone(),
+        body: r.body.clone(),
+        reviewer_name: r.reviewer_name.clone(),
+        created_at: r.created_at.clone(),
         is_verified: count >= 3 && average_rating >= 4.5,
     }
 }
@@ -582,6 +658,667 @@ mod tests {
         let reviews = vec![Review { id: "1".into(), creator_id: "c1".into(), rating: 5, title: "".into(), body: "".into(), reviewer_name: "".into(), created_at: "2025-01-01".into() }];
         let agg = aggregate_reviews(&reviews);
         assert_eq!(agg.total_reviews, 1);
+        assert_eq!(agg.average_rating, 3.0);
+        assert_eq!(agg.stars_3, 1);
+        assert_eq!(agg.stars_5, 0);
+    }
+
+    #[test]
+    fn reviews_for_creator_returns_only_matching() {
+        let all = reviews_for_creator("alex-studio");
+        assert!(all.iter().all(|r| r.creator_id == "alex-studio"));
+    }
+
+    #[test]
+    fn seed_covers_profile_creator_ids() {
+        let ids = ["alex-studio", "maya-content", "jordan-dev"];
+        for id in ids {
+            assert!(
+                !reviews_for_creator(id).is_empty(),
+                "expected seed reviews for {id}"
+            );
+        }
+    }
+
+    // Extended tests for mathematical precision and edge cases
+    
+    #[test]
+    fn test_aggregate_reviews_precision() {
+        // Test mathematical precision of average calculation
+        let reviews = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-01".into(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-02".into(),
+            },
+            Review {
+                id: "3".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-03".into(),
+            },
+        ];
+        let agg = aggregate_reviews(&reviews);
+        
+        // (5 + 4 + 4) / 3 = 4.333... should round to 4.33
+        assert_eq!(agg.average_rating, 4.33);
+        assert_eq!(agg.total_reviews, 3);
+    }
+
+    #[test]
+    fn test_invalid_ratings_ignored_comprehensive() {
+        let reviews = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 0, // Invalid: too low
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-01".into(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 6, // Invalid: too high
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-02".into(),
+            },
+            Review {
+                id: "3".into(),
+                creator_id: "c1".into(),
+                rating: 3, // Valid
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-04".into(),
+            },
+            Review {
+                id: "4".into(),
+                creator_id: "c1".into(),
+                rating: 4, // Valid
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-05".into(),
+            },
+        ];
+        
+        let agg = aggregate_reviews(&reviews);
+        assert_eq!(agg.total_reviews, 2); // Only 2 valid reviews
+        assert_eq!(agg.average_rating, 3.5); // (3 + 4) / 2 = 3.5
+        assert_eq!(agg.stars_3, 1);
+        assert_eq!(agg.stars_4, 1);
+        assert_eq!(agg.stars_1, 0);
+        assert_eq!(agg.stars_5, 0);
+    }
+
+    #[test]
+    fn test_verification_boundary_conditions() {
+        // Test exactly at verification threshold (3 reviews, 4.5+ average)
+        let reviews_at_threshold = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-01".into(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-02".into(),
+            },
+            Review {
+                id: "3".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-03".into(),
+            },
+        ];
+        let agg = aggregate_reviews(&reviews_at_threshold);
+        assert_eq!(agg.total_reviews, 3);
+        assert!((agg.average_rating - 4.67).abs() < 0.01); // Should be 4.67
+        assert!(agg.is_verified); // >= 4.5 and >= 3 reviews
+
+        // Test just below threshold (3 reviews, < 4.5 average)
+        let reviews_below_threshold = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-01".into(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-02".into(),
+            },
+            Review {
+                id: "3".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: "2025-01-03".into(),
+            },
+        ];
+        let agg = aggregate_reviews(&reviews_below_threshold);
+        assert_eq!(agg.total_reviews, 3);
+        assert!((agg.average_rating - 4.33).abs() < 0.01); // Should be 4.33
+        assert!(!agg.is_verified); // < 4.5 average
+    }
+
+    // ── New tests for filtering and sorting functionality ────────────────────
+
+    fn test_reviews() -> Vec<Review> {
+        vec![
+            Review {
+                id: "r1".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "Excellent".into(),
+                body: "Great work".into(),
+                reviewer_name: "Alice".into(),
+                created_at: "2025-01-15".into(),
+            },
+            Review {
+                id: "r2".into(),
+                creator_id: "c1".into(),
+                rating: 3,
+                title: "Average".into(),
+                body: "Okay work".into(),
+                reviewer_name: "Bob".into(),
+                created_at: "2025-01-10".into(),
+            },
+            Review {
+                id: "r3".into(),
+                creator_id: "c1".into(),
+                rating: 4,
+                title: "Good".into(),
+                body: "Nice work".into(),
+                reviewer_name: "Charlie".into(),
+                created_at: "2025-01-20".into(),
+            },
+            Review {
+                id: "r4".into(),
+                creator_id: "c1".into(),
+                rating: 2,
+                title: "Poor".into(),
+                body: "Needs improvement".into(),
+                reviewer_name: "David".into(),
+                created_at: "2025-01-05".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_filter_reviews_by_rating() {
+        let reviews = test_reviews();
+        
+        // Filter for high ratings (4-5)
+        let filters = ReviewFilters {
+            min_rating: Some(4),
+            max_rating: Some(5),
+            date_from: None,
+            date_to: None,
+            verified_only: None,
+            sort_by: None,
+            sort_order: None,
+            page: None,
+            limit: None,
+        };
+        
+        let filtered = filter_reviews(&reviews, &filters);
+        assert_eq!(filtered.len(), 2); // r1 (5) and r3 (4)
+        assert!(filtered.iter().all(|r| r.rating >= 4));
+    }
+
+    #[test]
+    fn test_filter_reviews_by_date_range() {
+        let reviews = test_reviews();
+        
+        let filters = ReviewFilters {
+            min_rating: None,
+            max_rating: None,
+            date_from: Some("2025-01-10".into()),
+            date_to: Some("2025-01-15".into()),
+            verified_only: None,
+            sort_by: None,
+            sort_order: None,
+            page: None,
+            limit: None,
+        };
+        
+        let filtered = filter_reviews(&reviews, &filters);
+        assert_eq!(filtered.len(), 2); // r1 and r2
+    }
+
+    #[test]
+    fn test_filter_reviews_verified_only() {
+        let reviews = test_reviews();
+        
+        let filters = ReviewFilters {
+            min_rating: None,
+            max_rating: None,
+            date_from: None,
+            date_to: None,
+            verified_only: Some(true),
+            sort_by: None,
+            sort_order: None,
+            page: None,
+            limit: None,
+        };
+        
+        let filtered = filter_reviews(&reviews, &filters);
+        assert_eq!(filtered.len(), 2); // r1 (5) and r3 (4)
+        assert!(filtered.iter().all(|r| r.rating >= 4));
+    }
+
+    #[test]
+    fn test_sort_reviews_by_rating() {
+        let reviews = test_reviews();
+        let mut reviews_copy = reviews.clone();
+        
+        sort_reviews(&mut reviews_copy, &ReviewSortBy::Rating, &SortOrder::Desc);
+        
+        // Should be sorted: 5, 4, 3, 2
+        assert_eq!(reviews_copy[0].rating, 5);
+        assert_eq!(reviews_copy[1].rating, 4);
+        assert_eq!(reviews_copy[2].rating, 3);
+        assert_eq!(reviews_copy[3].rating, 2);
+    }
+
+    #[test]
+    fn test_sort_reviews_by_date() {
+        let reviews = test_reviews();
+        let mut reviews_copy = reviews.clone();
+        
+        sort_reviews(&mut reviews_copy, &ReviewSortBy::CreatedAt, &SortOrder::Desc);
+        
+        // Should be sorted by date descending: 2025-01-20, 2025-01-15, 2025-01-10, 2025-01-05
+        assert_eq!(reviews_copy[0].created_at, "2025-01-20");
+        assert_eq!(reviews_copy[1].created_at, "2025-01-15");
+        assert_eq!(reviews_copy[2].created_at, "2025-01-10");
+        assert_eq!(reviews_copy[3].created_at, "2025-01-05");
+    }
+
+    #[test]
+    fn test_sort_reviews_by_reviewer_name() {
+        let reviews = test_reviews();
+        let mut reviews_copy = reviews.clone();
+        
+        sort_reviews(&mut reviews_copy, &ReviewSortBy::ReviewerName, &SortOrder::Asc);
+        
+        // Should be sorted alphabetically: Alice, Bob, Charlie, David
+        assert_eq!(reviews_copy[0].reviewer_name, "Alice");
+        assert_eq!(reviews_copy[1].reviewer_name, "Bob");
+        assert_eq!(reviews_copy[2].reviewer_name, "Charlie");
+        assert_eq!(reviews_copy[3].reviewer_name, "David");
+    }
+
+    #[test]
+    fn test_paginate_reviews() {
+        let reviews = test_reviews();
+        
+        // Test first page
+        let page1 = paginate_reviews(reviews.clone(), 1, 2);
+        assert_eq!(page1.reviews.len(), 2);
+        assert_eq!(page1.total_count, 4);
+        assert_eq!(page1.total_pages, 2);
+        assert!(page1.has_next);
+        assert!(!page1.has_prev);
+        
+        // Test second page
+        let page2 = paginate_reviews(reviews.clone(), 2, 2);
+        assert_eq!(page2.reviews.len(), 2);
+        assert_eq!(page2.page, 2);
+        assert!(!page2.has_next);
+        assert!(page2.has_prev);
+    }
+
+    #[test]
+    fn test_paginate_reviews_empty() {
+        let reviews = Vec::new();
+        let paginated = paginate_reviews(reviews, 1, 10);
+        
+        assert_eq!(paginated.reviews.len(), 0);
+        assert_eq!(paginated.total_count, 0);
+        assert_eq!(paginated.total_pages, 0);
+        assert!(!paginated.has_next);
+        assert!(!paginated.has_prev);
+    }
+
+    #[test]
+    fn test_parse_review_filters_valid() {
+        let mut query = HashMap::new();
+        query.insert("minRating".to_string(), "3".to_string());
+        query.insert("maxRating".to_string(), "5".to_string());
+        query.insert("sortBy".to_string(), "rating".to_string());
+        query.insert("sortOrder".to_string(), "desc".to_string());
+        query.insert("page".to_string(), "2".to_string());
+        query.insert("limit".to_string(), "20".to_string());
+        
+        let filters = parse_review_filters(&query).unwrap();
+        assert_eq!(filters.min_rating, Some(3));
+        assert_eq!(filters.max_rating, Some(5));
+        assert_eq!(filters.sort_by, Some(ReviewSortBy::Rating));
+        assert_eq!(filters.sort_order, Some(SortOrder::Desc));
+        assert_eq!(filters.page, Some(2));
+        assert_eq!(filters.limit, Some(20));
+    }
+
+    #[test]
+    fn test_parse_review_filters_invalid_rating_range() {
+        let mut query = HashMap::new();
+        query.insert("minRating".to_string(), "5".to_string());
+        query.insert("maxRating".to_string(), "3".to_string());
+        
+        let result = parse_review_filters(&query);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("minRating cannot be greater than maxRating")));
+    }
+
+    #[test]
+    fn test_parse_review_filters_invalid_values() {
+        let mut query = HashMap::new();
+        query.insert("minRating".to_string(), "0".to_string()); // Invalid: too low
+        query.insert("sortBy".to_string(), "invalid".to_string()); // Invalid sort field
+        query.insert("page".to_string(), "0".to_string()); // Invalid: must be >= 1
+        
+        let result = parse_review_filters(&query);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 3);
+    }
+
+    #[test]
+    fn test_get_filtered_creator_reviews_integration() {
+        // This test uses the seed data, so we test with a known creator
+        let filters = ReviewFilters {
+            min_rating: Some(4),
+            max_rating: None,
+            date_from: None,
+            date_to: None,
+            verified_only: None,
+            sort_by: Some(ReviewSortBy::Rating),
+            sort_order: Some(SortOrder::Desc),
+            page: Some(1),
+            limit: Some(10),
+        };
+        
+        let result = get_filtered_creator_reviews("alex-studio", &filters);
+        
+        assert_eq!(result.creator_id, "alex-studio");
+        assert!(result.aggregation.total_reviews > 0);
+        assert!(result.reviews.total_count <= result.aggregation.total_reviews);
+        assert!(result.aggregation.reliability_score > 0.0);
+        
+        // All returned reviews should have rating >= 4
+        assert!(result.reviews.reviews.iter().all(|r| r.rating >= 4));
+    }
+
+    #[test]
+    fn test_reliability_score_time_decay() {
+        let now = chrono::Utc::now();
+        let recent_date = now.to_rfc3339();
+        let old_date = (now - chrono::Duration::days(100)).to_rfc3339();
+
+        // Scenario 1: Recent high rating, old low rating
+        let reviews_a = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c1".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: recent_date.clone(),
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c1".into(),
+                rating: 1,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: old_date.clone(),
+            },
+        ];
+        let score_a = compute_reliability_score(&reviews_a);
+
+        // Scenario 2: Old high rating, recent low rating
+        let reviews_b = vec![
+            Review {
+                id: "1".into(),
+                creator_id: "c2".into(),
+                rating: 1,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: recent_date,
+            },
+            Review {
+                id: "2".into(),
+                creator_id: "c2".into(),
+                rating: 5,
+                title: "".into(),
+                body: "".into(),
+                reviewer_name: "".into(),
+                created_at: old_date,
+            },
+        ];
+        let score_b = compute_reliability_score(&reviews_b);
+
+        // Score A should be much higher than Score B because the 5-star is recent in A
+        assert!(score_a > score_b, "Recent high rating should outweigh old low rating. A: {}, B: {}", score_a, score_b);
+        assert!(score_a > 0.7); // Should be close to 1.0
+        assert!(score_b < 0.3); // Should be close to 0.0
+    }
+
+    // ── Tests for review submission hooks ─────────────────────────────────────
+
+    #[test]
+    fn test_on_review_submitted_validation() {
+        // Test with invalid data
+        let result = on_review_submitted("", "creator1", 6, "", "", "");
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.len() >= 5); // Should have multiple validation errors
+        
+        // Test with valid data
+        let result = on_review_submitted(
+            "bounty123",
+            "creator1", 
+            5,
+            "Great work",
+            "Excellent delivery",
+            "John Doe"
+        );
+        assert!(result.is_ok());
+        let review_id = result.unwrap();
+        assert!(review_id.starts_with("rev-creator1-bounty123"));
+    }
+
+    #[test]
+    fn test_review_submitted_event_creation() {
+        let event = ReviewSubmittedEvent {
+            review_id: "test-review-1".to_string(),
+            creator_id: "creator1".to_string(),
+            rating: 5,
+            title: "Excellent".to_string(),
+            body: "Great work".to_string(),
+            reviewer_name: "John".to_string(),
+            bounty_id: "bounty1".to_string(),
+            submitted_at: "2025-01-01T00:00:00Z".to_string(),
+        };
+        
+        assert_eq!(event.creator_id, "creator1");
+        assert_eq!(event.rating, 5);
+        assert_eq!(event.title, "Excellent");
+    }
+
+    #[test]
+    fn test_hook_registration_and_execution() {
+        use std::sync::{Arc, Mutex};
+        
+        // Create a counter to track hook executions
+        let counter = Arc::new(Mutex::new(0));
+        let counter_clone = counter.clone();
+        
+        // Register a test hook
+        register_review_submitted_hook(move |_event| {
+            if let Ok(mut count) = counter_clone.lock() {
+                *count += 1;
+            }
+            Ok(())
+        });
+        
+        // Create a test event
+        let event = ReviewSubmittedEvent {
+            review_id: "test-review".to_string(),
+            creator_id: "test-creator".to_string(),
+            rating: 4,
+            title: "Test".to_string(),
+            body: "Test body".to_string(),
+            reviewer_name: "Tester".to_string(),
+            bounty_id: "test-bounty".to_string(),
+            submitted_at: "2025-01-01T00:00:00Z".to_string(),
+        };
+        
+        // Trigger hooks
+        let _errors = trigger_review_submitted_hooks(&event);
+        // Don't assert errors is empty since other tests may have registered failing hooks
+        
+        // Check that our hook was executed (if no mutex poisoning occurred)
+        let count_result = counter.lock();
+        if let Ok(count) = count_result {
+            assert!(*count > 0);
+        }
+    }
+
+    #[test]
+    fn test_hook_error_handling() {
+        // Register a hook that always fails
+        register_review_submitted_hook(|_event| {
+            Err("Test error".to_string())
+        });
+        
+        let event = ReviewSubmittedEvent {
+            review_id: "test-review".to_string(),
+            creator_id: "test-creator".to_string(),
+            rating: 4,
+            title: "Test".to_string(),
+            body: "Test body".to_string(),
+            reviewer_name: "Tester".to_string(),
+            bounty_id: "test-bounty".to_string(),
+            submitted_at: "2025-01-01T00:00:00Z".to_string(),
+        };
+        
+        let errors = trigger_review_submitted_hooks(&event);
+        // Should have at least one error from our failing hook
+        assert!(errors.iter().any(|e| e.contains("Test error")));
+    }
+
+    #[test]
+    fn test_default_reputation_update_hook() {
+        let event = ReviewSubmittedEvent {
+            review_id: "test-review".to_string(),
+            creator_id: "alex-studio".to_string(), // Use existing creator from seed data
+            rating: 5,
+            title: "Excellent work".to_string(),
+            body: "Outstanding delivery".to_string(),
+            reviewer_name: "Test Reviewer".to_string(),
+            bounty_id: "test-bounty".to_string(),
+            submitted_at: "2025-01-01T00:00:00Z".to_string(),
+        };
+        
+        let result = default_reputation_update_hook(&event);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_rating_validation_boundaries() {
+        // Test rating boundaries
+        assert!(on_review_submitted("bounty1", "creator1", 0, "title", "body", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 6, "title", "body", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 1, "title", "body", "reviewer").is_ok());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer").is_ok());
+    }
+
+    #[test]
+    fn test_empty_field_validation() {
+        // Test each required field
+        assert!(on_review_submitted("", "creator1", 5, "title", "body", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "", 5, "title", "body", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "", "body", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "").is_err());
+    }
+
+    #[test]
+    fn test_whitespace_field_validation() {
+        // Test fields with only whitespace
+        assert!(on_review_submitted("   ", "creator1", 5, "title", "body", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "   ", 5, "title", "body", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "   ", "body", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "   ", "reviewer").is_err());
+        assert!(on_review_submitted("bounty1", "creator1", 5, "title", "body", "   ").is_err());
+    }
+
+    #[test]
+    fn test_review_id_generation() {
+        let result1 = on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer");
+        let result2 = on_review_submitted("bounty1", "creator1", 5, "title", "body", "reviewer");
+        
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        
+        let id1 = result1.unwrap();
+        let id2 = result2.unwrap();
+        
+        // IDs should be different (due to timestamp)
+        assert_ne!(id1, id2);
+        
+        // Both should start with the expected prefix
+        assert!(id1.starts_with("rev-creator1-bounty1"));
+        assert!(id2.starts_with("rev-creator1-bounty1"));
         assert_eq!(agg.average_rating, 5.0);
     }
 }
