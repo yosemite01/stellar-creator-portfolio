@@ -1,0 +1,291 @@
+    Checking stellar-freelancer-contract v0.1.0 (/home/phantom-call/stellar-creator-portfolio/backend/contracts/freelancer)
+error: symbol too long: length 10, max 9
+  --> contracts/freelancer/src/lib.rs:39:42
+   |
+39 | const FREELANCER: Symbol = symbol_short!("freelancer");
+   |                                          ^^^^^^^^^^^^
+
+error: symbol too long: length 10, max 9
+   --> contracts/freelancer/src/lib.rs:112:40
+    |
+112 |             (FREELANCER, symbol_short!("registered"), freelancer),
+    |                                        ^^^^^^^^^^^^
+
+error[E0425]: cannot find type `Vec` in this scope
+  --> contracts/freelancer/src/lib.rs:17:17
+   |
+17 |     pub skills: Vec<String>,
+   |                 ^^^ not found in this scope
+   |
+help: consider importing this struct
+   |
+ 3 + use soroban_sdk::Vec;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+  --> contracts/freelancer/src/lib.rs:87:21
+   |
+87 |             skills: Vec::new(&env),
+   |                     ^^^ use of undeclared type `Vec`
+   |
+help: consider importing this struct
+   |
+ 3 + use soroban_sdk::Vec;
+   |
+
+error[E0425]: cannot find type `Vec` in this scope
+  --> contracts/freelancer/src/lib.rs:93:30
+   |
+93 |         let mut freelancers: Vec<Address> = env
+   |                              ^^^ not found in this scope
+   |
+help: consider importing this struct
+   |
+ 3 + use soroban_sdk::Vec;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+  --> contracts/freelancer/src/lib.rs:97:24
+   |
+97 |             .unwrap_or(Vec::new(&env));
+   |                        ^^^ use of undeclared type `Vec`
+   |
+help: consider importing this struct
+   |
+ 3 + use soroban_sdk::Vec;
+   |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:295:54
+    |
+295 |     pub fn get_all_freelancer_addresses(env: Env) -> Vec<Address> {
+    |                                                      ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:299:24
+    |
+299 |             .unwrap_or(Vec::new(&env))
+    |                        ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:306:10
+    |
+306 |     ) -> Vec<FreelancerProfile> {
+    |          ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:307:26
+    |
+307 |         let freelancers: Vec<Address> = env
+    |                          ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:311:24
+    |
+311 |             .unwrap_or(Vec::new(&env));
+    |                        ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:312:26
+    |
+312 |         let mut result = Vec::new(&env);
+    |                          ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:390:10
+    |
+390 |     ) -> Vec<FreelancerProfile> {
+    |          ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:391:26
+    |
+391 |         let freelancers: Vec<Address> = env
+    |                          ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:395:24
+    |
+395 |             .unwrap_or(Vec::new(&env));
+    |                        ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:396:26
+    |
+396 |         let mut result = Vec::new(&env);
+    |                          ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:417:10
+    |
+417 |     ) -> Vec<FreelancerProfile> {
+    |          ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:418:26
+    |
+418 |         let freelancers: Vec<Address> = env
+    |                          ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:422:24
+    |
+422 |             .unwrap_or(Vec::new(&env));
+    |                        ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:423:26
+    |
+423 |         let mut result = Vec::new(&env);
+    |                          ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:444:10
+    |
+444 |     ) -> Vec<FreelancerProfile> {
+    |          ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> contracts/freelancer/src/lib.rs:445:26
+    |
+445 |         let freelancers: Vec<Address> = env
+    |                          ^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:449:24
+    |
+449 |             .unwrap_or(Vec::new(&env));
+    |                        ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Vec`
+   --> contracts/freelancer/src/lib.rs:450:26
+    |
+450 |         let mut result = Vec::new(&env);
+    |                          ^^^ use of undeclared type `Vec`
+    |
+help: consider importing this struct
+    |
+  3 + use soroban_sdk::Vec;
+    |
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:111:22
+    |
+111 |         env.events().publish(
+    |                      ^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:172:22
+    |
+172 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:256:22
+    |
+256 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:348:22
+    |
+348 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:376:26
+    |
+376 |             env.events().publish(
+    |                          ^^^^^^^
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+warning: `stellar-freelancer-contract` (lib) generated 5 warnings
+error: could not compile `stellar-freelancer-contract` (lib) due to 24 previous errors; 5 warnings emitted
