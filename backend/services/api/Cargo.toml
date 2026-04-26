@@ -30,7 +30,6 @@ sha2.workspace = true
 hex.workspace = true
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-chrono = "0.4"
 
 [profile.release]
 opt-level = 3

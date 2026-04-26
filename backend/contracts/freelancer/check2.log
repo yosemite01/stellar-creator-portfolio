@@ -1,0 +1,47 @@
+    Checking stellar-freelancer-contract v0.1.0 (/home/phantom-call/stellar-creator-portfolio/backend/contracts/freelancer)
+error: symbol too long: length 10, max 9
+  --> contracts/freelancer/src/lib.rs:39:42
+   |
+39 | const FREELANCER: Symbol = symbol_short!("freelancer");
+   |                                          ^^^^^^^^^^^^
+
+error: symbol too long: length 10, max 9
+   --> contracts/freelancer/src/lib.rs:112:40
+    |
+112 |             (FREELANCER, symbol_short!("registered"), freelancer),
+    |                                        ^^^^^^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:111:22
+    |
+111 |         env.events().publish(
+    |                      ^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:172:22
+    |
+172 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:256:22
+    |
+256 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:348:22
+    |
+348 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:376:26
+    |
+376 |             env.events().publish(
+    |                          ^^^^^^^
+
+warning: `stellar-freelancer-contract` (lib) generated 5 warnings
+error: could not compile `stellar-freelancer-contract` (lib) due to 2 previous errors; 5 warnings emitted

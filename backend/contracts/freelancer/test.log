@@ -1,0 +1,59 @@
+   Compiling stellar-freelancer-contract v0.1.0 (/home/phantom-call/stellar-creator-portfolio/backend/contracts/freelancer)
+error: symbol too long: length 10, max 9
+  --> contracts/freelancer/src/event_tests.rs:40:27
+   |
+40 |             symbol_short!("freelancer").into_val(&env),
+   |                           ^^^^^^^^^^^^
+
+error: symbol too long: length 10, max 9
+  --> contracts/freelancer/src/event_tests.rs:41:27
+   |
+41 |             symbol_short!("registered").into_val(&env),
+   |                           ^^^^^^^^^^^^
+
+error: symbol too long: length 10, max 9
+   --> contracts/freelancer/src/event_tests.rs:101:27
+    |
+101 |             symbol_short!("freelancer").into_val(&env),
+    |                           ^^^^^^^^^^^^
+
+error: symbol too long: length 10, max 9
+   --> contracts/freelancer/src/event_tests.rs:170:27
+    |
+170 |             symbol_short!("freelancer").into_val(&env),
+    |                           ^^^^^^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:111:22
+    |
+111 |         env.events().publish(
+    |                      ^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:172:22
+    |
+172 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:256:22
+    |
+256 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:348:22
+    |
+348 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/freelancer/src/lib.rs:376:26
+    |
+376 |             env.events().publish(
+    |                          ^^^^^^^
+
+warning: `stellar-freelancer-contract` (lib test) generated 5 warnings
+error: could not compile `stellar-freelancer-contract` (lib test) due to 4 previous errors; 5 warnings emitted
