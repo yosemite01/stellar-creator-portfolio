@@ -5,6 +5,7 @@ use actix_web::{http, middleware, web, App, HttpResponse, HttpServer};
 use futures::future::{ok, Ready};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::time::Duration;
 
 mod analytics;
 mod auth;
@@ -13,9 +14,97 @@ mod event_indexer;
 mod reputation;
 mod verification_rewards;
 mod webhook;
+mod websocket;
 
 pub const API_VERSION: &str = "1";
 pub const API_PREFIX: &str = "/api/v1";
+
+// ==================== Startup Configuration ====================
+
+fn parse_u16_env_with_range(name: &str, default: u16, min: u16, max: u16) -> u16 {
+    let raw = std::env::var(name).unwrap_or_else(|_| default.to_string());
+    let parsed = raw.parse::<u16>().unwrap_or_else(|_| {
+        panic!(
+            "{} must be a valid unsigned 16-bit integer, got '{}'",
+            name, raw
+        )
+    });
+
+    if !(min..=max).contains(&parsed) {
+        panic!(
+            "{} must be between {} and {} (inclusive), got {}",
+            name, min, max, parsed
+        );
+    }
+
+    parsed
+}
+
+fn parse_u32_env_with_range(name: &str, default: u32, min: u32, max: u32) -> u32 {
+    let raw = std::env::var(name).unwrap_or_else(|_| default.to_string());
+    let parsed = raw.parse::<u32>().unwrap_or_else(|_| {
+        panic!(
+            "{} must be a valid unsigned 32-bit integer, got '{}'",
+            name, raw
+        )
+    });
+
+    if !(min..=max).contains(&parsed) {
+        panic!(
+            "{} must be between {} and {} (inclusive), got {}",
+            name, min, max, parsed
+        );
+    }
+
+    parsed
+}
+
+fn parse_u64_env_with_range(name: &str, default: u64, min: u64, max: u64) -> u64 {
+    let raw = std::env::var(name).unwrap_or_else(|_| default.to_string());
+    let parsed = raw.parse::<u64>().unwrap_or_else(|_| {
+        panic!(
+            "{} must be a valid unsigned 64-bit integer, got '{}'",
+            name, raw
+        )
+    });
+
+    if !(min..=max).contains(&parsed) {
+        panic!(
+            "{} must be between {} and {} (inclusive), got {}",
+            name, min, max, parsed
+        );
+    }
+
+    parsed
+}
+
+fn parse_u32_env_with_range_alias(
+    primary_name: &str,
+    legacy_name: &str,
+    default: u32,
+    min: u32,
+    max: u32,
+) -> u32 {
+    let raw = std::env::var(primary_name)
+        .or_else(|_| std::env::var(legacy_name))
+        .unwrap_or_else(|_| default.to_string());
+
+    let parsed = raw.parse::<u32>().unwrap_or_else(|_| {
+        panic!(
+            "{} (or legacy {}) must be a valid unsigned 32-bit integer, got '{}'",
+            primary_name, legacy_name, raw
+        )
+    });
+
+    if !(min..=max).contains(&parsed) {
+        panic!(
+            "{} (or legacy {}) must be between {} and {} (inclusive), got {}",
+            primary_name, legacy_name, min, max, parsed
+        );
+    }
+
+    parsed
+}
 
 // ==================== Domain Models ====================
 
@@ -1165,11 +1254,33 @@ async fn main() -> std::io::Result<()> {
     // Initialize database connection
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://stellar:stellar_dev_password@localhost:5432/stellar_db".to_string());
+    let database_max_connections = parse_u32_env_with_range_alias(
+        "DB_POOL_MAX_CONNECTIONS",
+        "DATABASE_MAX_CONNECTIONS",
+        10,
+        1,
+        100,
+    );
+    let db_pool_idle_timeout_seconds =
+        parse_u64_env_with_range("DB_POOL_IDLE_TIMEOUT", 300, 5, 3_600);
+    let slow_query_threshold_ms =
+        parse_u64_env_with_range("SLOW_QUERY_THRESHOLD_MS", 1_000, 10, 300_000);
     
     tracing::info!("Connecting to database: {}", database_url.replace("stellar_dev_password", "***"));
+    tracing::info!(
+        "DB pool max connections: {}, idle timeout: {}s, slow query threshold: {}ms",
+        database_max_connections,
+        db_pool_idle_timeout_seconds,
+        slow_query_threshold_ms
+    );
     
     let pool = PgPoolOptions::new()
-        .max_connections(10)
+        .max_connections(database_max_connections)
+        .idle_timeout(Some(Duration::from_secs(db_pool_idle_timeout_seconds)))
+        .log_slow_statements(
+            tracing::log::LevelFilter::Warn,
+            Duration::from_millis(slow_query_threshold_ms),
+        )
         .connect(&database_url)
         .await
         .expect("Failed to connect to database");
@@ -1186,18 +1297,17 @@ async fn main() -> std::io::Result<()> {
     reputation::initialize_reputation_system_with_db(pool.clone());
     tracing::info!("Reputation system initialized with hooks and database");
 
-    let port = std::env::var("API_PORT")
-        .unwrap_or_else(|_| "3001".to_string())
-        .parse::<u16>()
-        .expect("API_PORT must be a valid port number");
+    let port = parse_u16_env_with_range("API_PORT", 3001, 1, 65535);
 
     let host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
     tracing::info!("Server starting on {}:{}", host, port);
+    let ws_limiter = websocket::WsConnectionLimiter::from_env();
 
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(ws_limiter.clone()))
             .wrap(cors_middleware())
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
@@ -1205,6 +1315,8 @@ async fn main() -> std::io::Result<()> {
             // Health check & version discovery (unversioned)
             .route("/health", web::get().to(health))
             .route("/api/versions", web::get().to(api_versions))
+            .route("/ws", web::get().to(websocket::ws_handler))
+            .route("/api/v1/ws/metrics", web::get().to(websocket::websocket_metrics))
             // v1 public read-only routes
             .service(
                 web::scope("/api/v1")
@@ -1260,6 +1372,94 @@ async fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Startup configuration parsing ──────────────────────────────────────────
+
+    #[test]
+    fn parse_u64_env_with_range_uses_default_when_missing() {
+        std::env::remove_var("SLOW_QUERY_THRESHOLD_MS");
+        let value = parse_u64_env_with_range("SLOW_QUERY_THRESHOLD_MS", 1000, 10, 300_000);
+        assert_eq!(value, 1000);
+    }
+
+    #[test]
+    fn parse_u64_env_with_range_accepts_valid_value() {
+        std::env::set_var("SLOW_QUERY_THRESHOLD_MS", "2500");
+        let value = parse_u64_env_with_range("SLOW_QUERY_THRESHOLD_MS", 1000, 10, 300_000);
+        assert_eq!(value, 2500);
+        std::env::remove_var("SLOW_QUERY_THRESHOLD_MS");
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 10 and 300000")]
+    fn parse_u64_env_with_range_rejects_out_of_range_value() {
+        std::env::set_var("SLOW_QUERY_THRESHOLD_MS", "5");
+        let _ = parse_u64_env_with_range("SLOW_QUERY_THRESHOLD_MS", 1000, 10, 300_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be a valid unsigned 64-bit integer")]
+    fn parse_u64_env_with_range_rejects_non_numeric_value() {
+        std::env::set_var("SLOW_QUERY_THRESHOLD_MS", "abc");
+        let _ = parse_u64_env_with_range("SLOW_QUERY_THRESHOLD_MS", 1000, 10, 300_000);
+    }
+
+    #[test]
+    fn parse_u32_env_with_range_accepts_valid_pool_size() {
+        std::env::set_var("DB_POOL_MAX_CONNECTIONS", "25");
+        let value = parse_u32_env_with_range_alias(
+            "DB_POOL_MAX_CONNECTIONS",
+            "DATABASE_MAX_CONNECTIONS",
+            10,
+            1,
+            100,
+        );
+        assert_eq!(value, 25);
+        std::env::remove_var("DB_POOL_MAX_CONNECTIONS");
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 1 and 100")]
+    fn parse_u32_env_with_range_rejects_invalid_pool_size() {
+        std::env::set_var("DB_POOL_MAX_CONNECTIONS", "0");
+        let _ = parse_u32_env_with_range_alias(
+            "DB_POOL_MAX_CONNECTIONS",
+            "DATABASE_MAX_CONNECTIONS",
+            10,
+            1,
+            100,
+        );
+    }
+
+    #[test]
+    fn parse_u32_env_with_range_alias_uses_legacy_name() {
+        std::env::remove_var("DB_POOL_MAX_CONNECTIONS");
+        std::env::set_var("DATABASE_MAX_CONNECTIONS", "30");
+        let value = parse_u32_env_with_range_alias(
+            "DB_POOL_MAX_CONNECTIONS",
+            "DATABASE_MAX_CONNECTIONS",
+            10,
+            1,
+            100,
+        );
+        assert_eq!(value, 30);
+        std::env::remove_var("DATABASE_MAX_CONNECTIONS");
+    }
+
+    #[test]
+    fn parse_u64_env_with_range_accepts_db_idle_timeout() {
+        std::env::set_var("DB_POOL_IDLE_TIMEOUT", "600");
+        let value = parse_u64_env_with_range("DB_POOL_IDLE_TIMEOUT", 300, 5, 3_600);
+        assert_eq!(value, 600);
+        std::env::remove_var("DB_POOL_IDLE_TIMEOUT");
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 5 and 3600")]
+    fn parse_u64_env_with_range_rejects_invalid_db_idle_timeout() {
+        std::env::set_var("DB_POOL_IDLE_TIMEOUT", "2");
+        let _ = parse_u64_env_with_range("DB_POOL_IDLE_TIMEOUT", 300, 5, 3_600);
+    }
 
     // ── ApiResponse ───────────────────────────────────────────────────────────
 
