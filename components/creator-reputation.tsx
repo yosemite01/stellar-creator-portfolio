@@ -8,7 +8,13 @@ import { ReviewFilters, type ReviewFilterOptions } from '@/components/review-fil
 import { ErrorAlert } from '@/components/error-alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { CheckCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CheckCircle, ChevronLeft, ChevronRight, Info } from 'lucide-react';
+import { 
+  Tooltip, 
+  TooltipContent, 
+  TooltipProvider, 
+  TooltipTrigger 
+} from '@/components/ui/tooltip';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -204,25 +210,38 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
               </p>
             </div>
             
-            {/* Reliability Index - NEW FEATURE #372 */}
+            {/* Reliability Index - NEW FEATURE #364 */}
             <div className="flex-1 flex justify-end">
-              <div className="bg-primary/5 border border-primary/10 rounded-xl p-4 flex flex-col items-center min-w-[140px] transition-all hover:bg-primary/10 group">
-                <div className="text-2xl font-bold text-primary group-hover:scale-110 transition-transform">
-                  {Math.round(aggregation.reliabilityScore * 100)}%
-                </div>
-                <div className="text-[10px] uppercase tracking-wider font-bold text-primary/60 mt-1">
-                  Reliability Index
-                </div>
-                <div className="w-full h-1 bg-primary/20 rounded-full mt-3 overflow-hidden">
-                  <div 
-                    className="h-full bg-primary transition-all duration-1000 ease-out" 
-                    style={{ width: `${Math.round(aggregation.reliabilityScore * 100)}%` }}
-                  />
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-2 text-center leading-tight">
-                  Weighted by recency & <br/>review consistency
-                </p>
-              </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="bg-primary/5 border border-primary/10 rounded-xl p-4 flex flex-col items-center min-w-[140px] cursor-help transition-all hover:bg-primary/10 group">
+                      <div className="text-2xl font-bold text-primary group-hover:scale-110 transition-transform">
+                        {Math.round(aggregation.reliabilityScore * 100)}%
+                      </div>
+                      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-primary/60 mt-1">
+                        Reliability Index
+                        <Info size={10} />
+                      </div>
+                      <div className="w-full h-1 bg-primary/20 rounded-full mt-3 overflow-hidden">
+                        <div 
+                          className="h-full bg-primary transition-all duration-1000 ease-out" 
+                          style={{ width: `${Math.round(aggregation.reliabilityScore * 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-2 text-center leading-tight">
+                        Weighted by recency & <br/>review consistency
+                      </p>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs p-3">
+                    <p className="text-xs leading-relaxed">
+                      This index uses a time-decayed algorithm where recent reviews have more weight. 
+                      It also factors in rating consistency to provide a realistic measure of current performance.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </div>
 
