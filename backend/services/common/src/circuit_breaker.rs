@@ -116,8 +116,20 @@ impl Clone for ServiceCircuitBreaker {
     }
 }
 
+/// Configuration for a circuit breaker.
 pub struct CircuitBreakerConfig {
+    /// The number of consecutive failures that will cause the circuit to open.
+    /// 
+    /// A lower threshold makes the circuit more sensitive to failures, which
+    /// protects downstream services but may cause false positives during
+    /// transient network blips.
     pub failure_threshold: u32,
+
+    /// The duration to wait before attempting to close the circuit again.
+    /// 
+    /// After this timeout expires, the circuit enters a "half-open" state where
+    /// a single successful call will close it, while a failure will immediately
+    /// re-open it.
     pub recovery_timeout: Duration,
 }
 
@@ -131,6 +143,11 @@ impl Default for CircuitBreakerConfig {
 }
 
 impl CircuitBreakerConfig {
+    /// Predefined configuration for database operations.
+    /// 
+    /// Uses a low failure threshold (3) and moderate recovery timeout (10s)
+    /// as database connectivity issues are often critical and should be
+    /// reacted to quickly.
     pub fn for_database() -> Self {
         Self {
             failure_threshold: 3,
@@ -138,6 +155,11 @@ impl CircuitBreakerConfig {
         }
     }
 
+    /// Predefined configuration for cache operations.
+    /// 
+    /// Uses a standard failure threshold (5) and aggressive recovery timeout (5s)
+    /// since cache failures are often transient and we want to resume normal
+    /// operation as soon as possible.
     pub fn for_cache() -> Self {
         Self {
             failure_threshold: 5,
@@ -145,6 +167,10 @@ impl CircuitBreakerConfig {
         }
     }
 
+    /// Predefined configuration for RPC/external service calls.
+    /// 
+    /// Uses a standard failure threshold (5) and conservative recovery timeout (30s)
+    /// to avoid overwhelming external services that might be struggling.
     pub fn for_rpc() -> Self {
         Self {
             failure_threshold: 5,
