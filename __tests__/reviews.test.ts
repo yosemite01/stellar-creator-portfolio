@@ -69,6 +69,25 @@ describe('createReview', () => {
     expect(review.helpfulCount).toBe(0)
     expect(review.rating).toBe(4)
   })
+
+  it('detects duplicate submissions for the same creator and reviewer', async () => {
+    const { createReview, hasReviewerSubmittedForCreator } = await import('@/lib/review-service')
+    const creatorId = 'creator-duplicate-test'
+    const reviewerId = 'reviewer-duplicate-test'
+
+    createReview({
+      creatorId,
+      reviewerId,
+      reviewerName: 'Duplicate User',
+      rating: 5,
+      title: 'Great collaboration',
+      body: 'The creator delivered excellent work on time.',
+      isVerifiedPurchase: false,
+    })
+
+    expect(hasReviewerSubmittedForCreator(creatorId, reviewerId)).toBe(true)
+    expect(hasReviewerSubmittedForCreator(creatorId, 'other-reviewer')).toBe(false)
+  })
 })
 
 describe('voteOnReview', () => {
@@ -173,19 +192,41 @@ describe('getReviewsForCreator', () => {
 describe('review validator schemas', () => {
   it('rejects rating outside 1-5', async () => {
     const { reviewSchema } = await import('@/lib/validators')
-    const result = reviewSchema.safeParse({ creatorId: 'c', rating: 6, title: 'T', body: 'Body content here.' })
+    const result = reviewSchema.safeParse({ creatorId: 'c', rating: 6, title: 'Great', body: 'Body content here.' })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects a title that is only whitespace', async () => {
+    const { reviewSchema } = await import('@/lib/validators')
+    const result = reviewSchema.safeParse({ creatorId: 'c', rating: 4, title: '   ', body: 'Body content here.' })
     expect(result.success).toBe(false)
   })
 
   it('rejects body shorter than 10 chars', async () => {
     const { reviewSchema } = await import('@/lib/validators')
-    const result = reviewSchema.safeParse({ creatorId: 'c', rating: 4, title: 'T', body: 'Short' })
+    const result = reviewSchema.safeParse({ creatorId: 'c', rating: 4, title: 'Great', body: 'Short' })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects disallowed review content', async () => {
+    const { reviewSchema } = await import('@/lib/validators')
+    const result = reviewSchema.safeParse({
+      creatorId: 'c',
+      rating: 4,
+      title: 'Great work',
+      body: 'Great work <script>alert("xss")</script>',
+    })
     expect(result.success).toBe(false)
   })
 
   it('accepts valid review input', async () => {
     const { reviewSchema } = await import('@/lib/validators')
-    const result = reviewSchema.safeParse({ creatorId: 'c', rating: 4, title: 'Great', body: 'This is a valid review body.' })
+    const result = reviewSchema.safeParse({ creatorId: ' c ', rating: 4, title: '  Great   work ', body: 'This   is a valid review body.' })
     expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.creatorId).toBe('c')
+      expect(result.data.title).toBe('Great work')
+      expect(result.data.body).toBe('This is a valid review body.')
+    }
   })
 })

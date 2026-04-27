@@ -96,6 +96,21 @@ export const applicationUpdateSchema = z.object({
   status: z.enum(['pending', 'accepted', 'rejected']).optional(),
 })
 
+const reviewText = (min: number, max: number) =>
+  z.string()
+    .transform((value) => value.trim().replace(/\s+/g, ' '))
+    .pipe(z.string().min(min).max(max))
+
+const DISALLOWED_REVIEW_PATTERNS = [
+  /<script/i,
+  /javascript:/i,
+  /\b(?:free money|click here|buy now|visit my profile)\b/i,
+]
+
+function containsDisallowedReviewContent(value: string): boolean {
+  return DISALLOWED_REVIEW_PATTERNS.some((pattern) => pattern.test(value))
+}
+
 export type CreatorInput = z.infer<typeof creatorSchema>
 export type CreatorUpdateInput = z.infer<typeof creatorUpdateSchema>
 export type BountyInput = z.infer<typeof bountySchema>
@@ -107,10 +122,18 @@ export type ApplicationUpdateInput = z.infer<typeof applicationUpdateSchema>
 export type PaginationInput = z.infer<typeof paginationSchema>
 
 export const reviewSchema = z.object({
-  creatorId: z.string().min(1),
+  creatorId: z.string().trim().min(1),
   rating: z.number().int().min(1).max(5),
-  title: z.string().min(1).max(100),
-  body: z.string().min(10).max(2000),
+  title: reviewText(3, 100),
+  body: reviewText(10, 2000),
+}).superRefine((data, ctx) => {
+  if (containsDisallowedReviewContent(data.title) || containsDisallowedReviewContent(data.body)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Review contains disallowed content',
+      path: ['body'],
+    })
+  }
 })
 
 export const reviewVoteSchema = z.object({

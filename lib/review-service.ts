@@ -114,6 +114,15 @@ export function createReview(
   return review
 }
 
+export function hasReviewerSubmittedForCreator(creatorId: string, reviewerId: string): boolean {
+  return Array.from(reviewStore.values()).some(
+    (review) =>
+      review.creatorId === creatorId &&
+      review.reviewerId === reviewerId &&
+      review.status !== 'rejected'
+  )
+}
+
 export function voteOnReview(
   reviewId: string,
   userId: string,

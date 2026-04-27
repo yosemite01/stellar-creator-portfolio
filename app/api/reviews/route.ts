@@ -6,28 +6,11 @@ import {
   getReviewsForCreator,
   calculateAggregate,
   getPendingReviews,
+  hasReviewerSubmittedForCreator,
   moderateReview,
   voteOnReview,
 } from '@/lib/review-service'
-import { z } from 'zod'
-import { validateRequest, formatZodErrors } from '@/lib/validators'
-
-const createReviewSchema = z.object({
-  creatorId: z.string().min(1),
-  rating: z.number().int().min(1).max(5),
-  title: z.string().min(1).max(100),
-  body: z.string().min(10).max(2000),
-})
-
-const voteSchema = z.object({
-  reviewId: z.string().min(1),
-  vote: z.enum(['helpful', 'not_helpful']),
-})
-
-const moderateSchema = z.object({
-  reviewId: z.string().min(1),
-  status: z.enum(['approved', 'rejected']),
-})
+import { validateRequest, formatZodErrors, reviewSchema, reviewVoteSchema, reviewModerateSchema } from '@/lib/validators'
 
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>()
 
@@ -112,7 +95,7 @@ export async function POST(request: NextRequest) {
 
   // Vote
   if (action === 'vote') {
-    const validation = validateRequest(voteSchema, body)
+    const validation = validateRequest(reviewVoteSchema, body)
     if (!validation.success) {
       return NextResponse.json({ error: 'Validation failed', details: formatZodErrors(validation.errors) }, { status: 400 })
     }
@@ -126,7 +109,7 @@ export async function POST(request: NextRequest) {
     if (session.user.role !== 'ADMIN') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
-    const validation = validateRequest(moderateSchema, body)
+    const validation = validateRequest(reviewModerateSchema, body)
     if (!validation.success) {
       return NextResponse.json({ error: 'Validation failed', details: formatZodErrors(validation.errors) }, { status: 400 })
     }
@@ -136,15 +119,17 @@ export async function POST(request: NextRequest) {
   }
 
   // Create review
-  const validation = validateRequest(createReviewSchema, body)
+  const validation = validateRequest(reviewSchema, body)
   if (!validation.success) {
     return NextResponse.json({ error: 'Validation failed', details: formatZodErrors(validation.errors) }, { status: 400 })
   }
 
-  // Basic content moderation: block obvious spam/profanity patterns
-  const blockedPatterns = [/<script/i, /javascript:/i]
-  if (blockedPatterns.some((p) => p.test(validation.data.body) || p.test(validation.data.title))) {
-    return NextResponse.json({ error: 'Review contains disallowed content' }, { status: 422 })
+  if (validation.data.creatorId === session.user.id) {
+    return NextResponse.json({ error: 'You cannot review your own creator profile' }, { status: 422 })
+  }
+
+  if (hasReviewerSubmittedForCreator(validation.data.creatorId, session.user.id)) {
+    return NextResponse.json({ error: 'You have already submitted a review for this creator' }, { status: 409 })
   }
 
   const review = createReview({
