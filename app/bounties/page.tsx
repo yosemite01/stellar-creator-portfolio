@@ -5,6 +5,13 @@ import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { Button } from '@/components/ui/button';
 import { bounties, Bounty } from '@/lib/creators-data';
+import { ArrowRight, Filter, Calendar, DollarSign, Zap, Search, Lock, CheckCircle2 } from 'lucide-react';
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyContent, EmptyMedia } from '@/components/ui/empty';
+
+export default function BountiesPage() {
+  const [selectedDifficulty, setSelectedDifficulty] = useState('All');
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [releasedBountyIds, setReleasedBountyIds] = useState<Set<string>>(new Set());
 import { ArrowRight, Filter, Calendar, DollarSign, Zap, X, CheckCircle, Loader2, ExternalLink, ShieldCheck } from 'lucide-react';
 import { submitEscrowTransaction, releaseEscrow } from '@/lib/api-client';
 import { validateEscrowTransaction } from '@/lib/api-models';
@@ -222,6 +229,68 @@ function PaymentStatusBadge({ status }: { status: string }) {
     disputed: { label: 'Payment Disputed', color: 'bg-red-500/20 text-red-700 dark:text-red-400' },
   };
 
+  const getPaymentStatus = (bounty: Bounty) => {
+    if (releasedBountyIds.has(bounty.id)) return 'released';
+    return bounty.paymentStatus;
+  };
+
+  const releasePayment = (bountyId: string) => {
+    setReleasedBountyIds((current) => new Set(current).add(bountyId));
+  };
+
+  const BountyCard = ({ bounty }: { bounty: Bounty }) => {
+    const paymentStatus = getPaymentStatus(bounty);
+    const canReleasePayment = bounty.status === 'completed' && paymentStatus === 'funded';
+
+    return (
+      <div className="bg-card border border-border rounded-lg p-6 hover:shadow-lg transition-all hover:-translate-y-1">
+        {/* Header */}
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-bold text-foreground mb-1 line-clamp-2">
+              {bounty.title}
+            </h3>
+            <p className="text-sm text-muted-foreground">{bounty.category}</p>
+          </div>
+          <span className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap ml-4 capitalize ${getDifficultyColor(bounty.difficulty)}`}>
+            {bounty.difficulty}
+          </span>
+        </div>
+
+        {/* Description */}
+        <p className="text-sm text-muted-foreground mb-4 line-clamp-2">
+          {bounty.description}
+        </p>
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 gap-4 mb-4 py-4 border-y border-border">
+          <div className="flex items-center gap-2">
+            <DollarSign size={16} className="text-accent" />
+            <div>
+              <p className="text-xs text-muted-foreground">Budget</p>
+              <p className="font-semibold text-foreground">${bounty.budget.toLocaleString()}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Calendar size={16} className="text-accent" />
+            <div>
+              <p className="text-xs text-muted-foreground">Timeline</p>
+              <p className="font-semibold text-foreground">
+                {Math.ceil((bounty.deadline.getTime() - Date.now()) / (1000 * 60 * 60 * 24))} days
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 mb-4 rounded-lg bg-secondary/40 px-3 py-2">
+          <div className="flex items-center gap-2 text-sm">
+            {paymentStatus === 'released' ? (
+              <CheckCircle2 size={16} className="text-green-600" />
+            ) : (
+              <Lock size={16} className="text-primary" />
+            )}
+            <span className="font-medium capitalize">{paymentStatus}</span>
+            <span className="text-muted-foreground">escrow</span>
   const { label, color } = statusConfig[status] || statusConfig.open;
 
   return (
@@ -294,9 +363,45 @@ function BountyCard({ bounty, onApply }: { bounty: Bounty; onApply: (b: Bounty) 
             <p className="text-xs text-muted-foreground">Timeline</p>
             <p className="font-semibold text-foreground">{daysLeft} days</p>
           </div>
+          {bounty.escrowId && (
+            <span className="text-xs text-muted-foreground">{bounty.escrowId}</span>
+          )}
+        </div>
+
+        {/* Tags */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          {bounty.tags.slice(0, 3).map((tag) => (
+            <span
+              key={tag}
+              className="inline-block px-2 py-1 bg-secondary/50 text-secondary-foreground rounded text-xs font-medium"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-muted-foreground">
+            <Zap size={14} className="inline mr-1" />
+            {bounty.applicants} applications
+          </div>
+          {canReleasePayment ? (
+            <Button size="sm" variant="default" onClick={() => releasePayment(bounty.id)}>
+              Release Payment
+            </Button>
+          ) : (
+            <Button size="sm" variant="default" className="group" disabled={paymentStatus === 'released'}>
+              {paymentStatus === 'released' ? 'Paid' : 'Apply Now'}
+              {paymentStatus !== 'released' && (
+                <ArrowRight size={14} className="ml-2 group-hover:translate-x-0.5 transition-transform" />
+              )}
+            </Button>
+          )}
         </div>
       </div>
-
+    );
+  };
       <div className="flex flex-wrap gap-2 mb-4">
         {bounty.tags.slice(0, 3).map((tag) => (
           <span key={tag} className="inline-block px-2 py-1 bg-secondary/50 text-secondary-foreground rounded text-xs font-medium">

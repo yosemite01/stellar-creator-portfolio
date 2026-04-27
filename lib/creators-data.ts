@@ -61,11 +61,6 @@ export const creators: Creator[] = [
     twitter: 'https://x.com/alexchen',
     portfolio: 'https://alexchen.design',
     skills: ['Figma', 'Design Systems', 'Prototyping', 'User Research', 'Accessibility', 'Design Thinking'],
-    stats: {
-      projects: 45,
-      clients: 20,
-      experience: 8,
-    },
     projects: [
       {
         id: 'project-1',
@@ -282,6 +277,9 @@ export interface Bounty {
   category: string;
   tags: string[];
   applicants: number;
+  status: 'open' | 'in-progress' | 'completed' | 'cancelled';
+  paymentStatus: 'unfunded' | 'funded' | 'released' | 'refunded';
+  escrowId?: string;
   status: 'open' | 'in-progress' | 'completed' | 'cancelled' | 'disputed';
   postedBy: string;
   creatorAddress?: string;
@@ -316,6 +314,8 @@ export const bounties: Bounty[] = [
     tags: ['Branding', 'Design', 'Web3', 'Logo Design'],
     applicants: 12,
     status: 'open',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-1',
     postedBy: 'company-1',
     creatorAddress: 'GCREATOR123...',
     postedDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
@@ -333,6 +333,9 @@ export const bounties: Bounty[] = [
     category: 'Technical Writing',
     tags: ['API Docs', 'Technical Writing', 'Documentation'],
     applicants: 8,
+    status: 'open',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-2',
     status: 'in-progress',
     postedBy: 'company-2',
     creatorAddress: 'GCREATOR456...',
@@ -352,6 +355,8 @@ export const bounties: Bounty[] = [
     category: 'Content Creation',
     tags: ['Social Media', 'Content', 'Video', 'Graphics'],
     applicants: 15,
+    status: 'open',
+    paymentStatus: 'unfunded',
     status: 'completed',
     postedBy: 'company-3',
     creatorAddress: 'GCREATOR789...',
@@ -371,6 +376,9 @@ export const bounties: Bounty[] = [
     category: 'UX Research',
     tags: ['UX Research', 'User Testing', 'Mobile App', 'Analytics'],
     applicants: 6,
+    status: 'completed',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-4',
     status: 'disputed',
     postedBy: 'company-4',
     creatorAddress: 'GCREATOR000...',

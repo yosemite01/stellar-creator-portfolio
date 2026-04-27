@@ -79,7 +79,12 @@ export function ReviewList({ reviews, creatorName = 'Creator' }: ReviewListProps
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div>
                       <p className="font-semibold text-sm">{review.reviewerName}</p>
-                      <ReviewStars rating={review.rating} />
+                      <div className="flex items-center gap-2">
+                        <ReviewStars rating={review.rating} />
+                        <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 uppercase tracking-tight">
+                          Verified Project
+                        </span>
+                      </div>
                     </div>
                     <p className="text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</p>
                   </div>

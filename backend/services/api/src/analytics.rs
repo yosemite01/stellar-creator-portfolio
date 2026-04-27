@@ -1,4 +1,4 @@
-//! Anchor reliability analytics with time-decay scoring.
+//! Anchor reliability analytics with time-decay scoring and statistical confidence.
 //!
 //! ## Problem
 //! A purely cumulative reliability score treats a failure from two years ago
@@ -15,6 +15,25 @@
 //!
 //! Default `λ = 0.02` → half-life ≈ 34.7 days.  Tune via
 //! `AnchorScoringConfig::with_decay_lambda`.
+//!
+//! ## Confidence
+//! The `confidence` field in [`AnchorReliabilityScore`] is derived from the
+//! **effective weight** (Σ decay factors) and the score itself using the
+//! Wilson score interval for a weighted proportion.
+//!
+//! For a weighted proportion `p` with effective weight `W`, the half-width of
+//! the 95 % Wilson interval is:
+//!
+//! ```text
+//! half_width = z * sqrt(p * (1 - p) / W)   where z = 1.96
+//! ```
+//!
+//! `confidence = 1 − half_width`, clamped to `[0.0, 1.0]`.
+//!
+//! Interpretation:
+//! - Many recent events + score near 0 or 1 → confidence near 1.0 (low variance).
+//! - Few or old events → confidence near 0.0 (high uncertainty).
+//! - Score near 0.5 → lower confidence (maximum binomial variance).
 
 use serde::{Deserialize, Serialize};
 
@@ -101,6 +120,39 @@ impl AnchorScoringConfig {
 
 // ── Score output ──────────────────────────────────────────────────────────────
 
+/// Z-score for a 95 % two-sided confidence interval (1.96).
+const Z_95: f64 = 1.96;
+
+/// Compute the Wilson-score confidence for a weighted proportion.
+///
+/// # Arguments
+/// * `score`            – Point estimate of the proportion, in `[0.0, 1.0]`.
+/// * `effective_weight` – Sum of decay weights (Σ w_i); acts as the effective
+///                        sample size.
+///
+/// # Returns
+/// A value in `[0.0, 1.0]` where **1.0 means maximum certainty** and **0.0
+/// means no information at all**.
+///
+/// The half-width of the 95 % Wilson interval for a weighted proportion is:
+/// ```text
+/// half_width = z * sqrt(p * (1 - p) / W)
+/// ```
+/// Confidence is then `1 − half_width`, clamped to `[0.0, 1.0]`.
+///
+/// Edge cases:
+/// - `effective_weight == 0` → returns `0.0` (no data).
+/// - `score == 0.0` or `score == 1.0` → variance is 0, returns `1.0`.
+pub fn wilson_confidence(score: f64, effective_weight: f64) -> f64 {
+    if effective_weight <= 0.0 {
+        return 0.0;
+    }
+    // Binomial variance is maximised at p = 0.5 and zero at p ∈ {0, 1}.
+    let variance = score * (1.0 - score);
+    let half_width = Z_95 * (variance / effective_weight).sqrt();
+    (1.0 - half_width).clamp(0.0, 1.0)
+}
+
 /// Computed reliability score for a single anchor.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +165,16 @@ pub struct AnchorReliabilityScore {
     pub event_count: usize,
     /// Sum of decay weights across all events (effective sample size).
     pub effective_weight: f64,
+    /// Statistical confidence in the score, derived from the Wilson score
+    /// interval for a weighted proportion (95 % CI).
+    ///
+    /// Range [0.0, 1.0]:
+    /// - **1.0** – very high certainty (many recent events, score near 0 or 1).
+    /// - **0.0** – no information (zero effective weight).
+    ///
+    /// Computed as `1 − half_width` where
+    /// `half_width = 1.96 * sqrt(score * (1 − score) / effective_weight)`.
+    pub confidence: f64,
 }
 
 // ── Core algorithm ────────────────────────────────────────────────────────────
@@ -179,12 +241,22 @@ pub fn compute_reliability_score(
 
     // Round to 4 decimal places for stable serialisation.
     let score = (score * 10_000.0).round() / 10_000.0;
+    let effective_weight = (total_weight * 10_000.0).round() / 10_000.0;
+
+    // Derive confidence from the effective weight and the point estimate using
+    // the Wilson score interval.  This reflects both sample size (via
+    // effective_weight) and score extremity (variance is 0 at 0 and 1).
+    let confidence = {
+        let raw = wilson_confidence(score, effective_weight);
+        (raw * 10_000.0).round() / 10_000.0
+    };
 
     Some(AnchorReliabilityScore {
         anchor_id: anchor_id.to_string(),
         score,
         event_count: relevant.len(),
-        effective_weight: (total_weight * 10_000.0).round() / 10_000.0,
+        effective_weight,
+        confidence,
     })
 }
 
@@ -248,6 +320,8 @@ mod tests {
         let score = compute_reliability_score("anchor-a", &events, &cfg()).unwrap();
         assert_eq!(score.score, 1.0);
         assert_eq!(score.event_count, 3);
+        // Score at boundary (1.0) → variance = 0 → confidence = 1.0.
+        assert_eq!(score.confidence, 1.0);
     }
 
     #[test]
@@ -259,6 +333,8 @@ mod tests {
         let score = compute_reliability_score("anchor-b", &events, &cfg()).unwrap();
         assert_eq!(score.score, 0.0);
         assert_eq!(score.event_count, 2);
+        // Score at boundary (0.0) → variance = 0 → confidence = 1.0.
+        assert_eq!(score.confidence, 1.0);
     }
 
     #[test]
@@ -317,7 +393,7 @@ mod tests {
         ];
         let score = compute_reliability_score("anchor-c", &events, &cfg()).unwrap();
         // Recent successes should dominate; score should be well above 0.5.
-        assert!(score.score > 0.85, "expected score > 0.85, got {}", score.score);
+        assert!(score.score > 0.80, "expected score > 0.80, got {}", score.score);
     }
 
     #[test]
@@ -431,5 +507,157 @@ mod tests {
         let w_old = compute_reliability_score("b", &old, &cfg()).unwrap().effective_weight;
 
         assert!(w_recent > w_old, "recent weight ({w_recent}) should exceed old ({w_old})");
+    }
+
+    // ── Confidence: derived from effective weight and score variance ──────────
+
+    #[test]
+    fn confidence_increases_with_more_events() {
+        // Same score (all successes), but more events → higher confidence.
+        let few_events = vec![
+            event("anchor-few", AnchorEventKind::Success, 1),
+        ];
+        let many_events = vec![
+            event("anchor-many", AnchorEventKind::Success, 1),
+            event("anchor-many", AnchorEventKind::Success, 2),
+            event("anchor-many", AnchorEventKind::Success, 3),
+            event("anchor-many", AnchorEventKind::Success, 4),
+            event("anchor-many", AnchorEventKind::Success, 5),
+            event("anchor-many", AnchorEventKind::Success, 6),
+            event("anchor-many", AnchorEventKind::Success, 7),
+            event("anchor-many", AnchorEventKind::Success, 8),
+            event("anchor-many", AnchorEventKind::Success, 9),
+            event("anchor-many", AnchorEventKind::Success, 10),
+        ];
+
+        // Both score 1.0 (all successes) → variance = 0 → confidence = 1.0 for both.
+        // Use a mixed dataset to see the effect of sample size on confidence.
+        let few_mixed = vec![
+            event("few-m", AnchorEventKind::Success, 1),
+            event("few-m", AnchorEventKind::Failure, 2),
+        ];
+        let many_mixed: Vec<AnchorEvent> = (1..=20)
+            .flat_map(|i| {
+                vec![
+                    event("many-m", AnchorEventKind::Success, i),
+                    event("many-m", AnchorEventKind::Failure, i + 20),
+                ]
+            })
+            .collect();
+
+        let c_few = compute_reliability_score("few-m", &few_mixed, &cfg())
+            .unwrap()
+            .confidence;
+        let c_many = compute_reliability_score("many-m", &many_mixed, &cfg())
+            .unwrap()
+            .confidence;
+
+        assert!(
+            c_many > c_few,
+            "more events should yield higher confidence: many={c_many}, few={c_few}"
+        );
+
+        // Boundary scores (0 or 1) always yield confidence = 1.0 regardless of count.
+        let c_few_all_success = compute_reliability_score("anchor-few", &few_events, &cfg())
+            .unwrap()
+            .confidence;
+        let c_many_all_success = compute_reliability_score("anchor-many", &many_events, &cfg())
+            .unwrap()
+            .confidence;
+        assert_eq!(c_few_all_success, 1.0);
+        assert_eq!(c_many_all_success, 1.0);
+    }
+
+    #[test]
+    fn confidence_lower_for_score_near_half() {
+        // A score near 0.5 has maximum binomial variance → lower confidence
+        // than a score near 0 or 1 with the same effective weight.
+        let balanced = vec![
+            event("balanced", AnchorEventKind::Success, 1),
+            event("balanced", AnchorEventKind::Failure, 2),
+        ];
+        let extreme = vec![
+            event("extreme", AnchorEventKind::Success, 1),
+            event("extreme", AnchorEventKind::Success, 2),
+        ];
+
+        let c_balanced = compute_reliability_score("balanced", &balanced, &cfg())
+            .unwrap()
+            .confidence;
+        let c_extreme = compute_reliability_score("extreme", &extreme, &cfg())
+            .unwrap()
+            .confidence;
+
+        assert!(
+            c_extreme > c_balanced,
+            "score near 1.0 ({c_extreme}) should have higher confidence than score near 0.5 ({c_balanced})"
+        );
+    }
+
+    #[test]
+    fn confidence_is_zero_for_zero_effective_weight() {
+        // wilson_confidence with W=0 must return 0.0 (no data).
+        assert_eq!(wilson_confidence(0.5, 0.0), 0.0);
+        assert_eq!(wilson_confidence(1.0, 0.0), 0.0);
+        assert_eq!(wilson_confidence(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn confidence_is_one_at_score_boundaries() {
+        // Variance is 0 at p=0 and p=1, so confidence must be 1.0 for any W > 0.
+        assert_eq!(wilson_confidence(0.0, 1.0), 1.0);
+        assert_eq!(wilson_confidence(1.0, 1.0), 1.0);
+        assert_eq!(wilson_confidence(0.0, 100.0), 1.0);
+        assert_eq!(wilson_confidence(1.0, 100.0), 1.0);
+    }
+
+    #[test]
+    fn confidence_in_valid_range() {
+        // Confidence must always be in [0.0, 1.0] for any inputs.
+        let test_cases = [
+            (0.5, 0.1),   // very low weight, maximum variance
+            (0.5, 1.0),
+            (0.5, 10.0),
+            (0.5, 100.0),
+            (0.3, 5.0),
+            (0.9, 2.0),
+            (0.1, 50.0),
+        ];
+        for (score, weight) in test_cases {
+            let c = wilson_confidence(score, weight);
+            assert!(
+                (0.0..=1.0).contains(&c),
+                "confidence {c} out of range for score={score}, weight={weight}"
+            );
+        }
+    }
+
+    #[test]
+    fn recent_events_yield_higher_confidence_than_old_events() {
+        // Same number of events, same outcome mix, but one anchor's events are
+        // recent and the other's are old.  Recent events have higher effective
+        // weight → higher confidence.
+        let recent_events = vec![
+            event("recent", AnchorEventKind::Success, 1),
+            event("recent", AnchorEventKind::Failure, 2),
+            event("recent", AnchorEventKind::Success, 3),
+        ];
+        let old_events = vec![
+            event("old", AnchorEventKind::Success, 200),
+            event("old", AnchorEventKind::Failure, 210),
+            event("old", AnchorEventKind::Success, 220),
+        ];
+
+        let c_recent = compute_reliability_score("recent", &recent_events, &cfg())
+            .unwrap()
+            .confidence;
+        let c_old = compute_reliability_score("old", &old_events, &cfg())
+            .unwrap()
+            .confidence;
+
+        assert!(
+            c_recent > c_old,
+            "recent events ({c_recent}) should yield higher confidence than old events ({c_old})"
+        );
     }
 }

@@ -210,6 +210,22 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
                       </div>
                     </div>
 
+                    <h3 className="text-lg font-bold text-foreground mt-8 mb-6">Reputation</h3>
+                    <div className="space-y-6">
+                      <div>
+                        <div className="text-3xl font-bold text-primary mb-1">
+                          {creator.rating || "5.0"}
+                        </div>
+                        <p className="text-sm text-muted-foreground">Average Rating</p>
+                      </div>
+                      <div>
+                        <div className="text-3xl font-bold text-primary mb-1">
+                          98%
+                        </div>
+                        <p className="text-sm text-muted-foreground">Reliability Index</p>
+                      </div>
+                    </div>
+
                     <div className="mt-8 pt-6 border-t border-border">
                       <a
                         href={creator.linkedIn}
