@@ -25,7 +25,14 @@ export default function CreatorReviewsPage({ params }: ReviewsPageProps) {
   const creator = creators.find((c) => c.id === params.id);
 
   const [reviews, setReviews] = useState<Review[]>([]);
-  const [aggregate, setAggregate] = useState<AggregateRating>({ average: 0, total: 0, breakdown: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } });
+  const [aggregate, setAggregate] = useState<AggregateRating>({
+    average: 0,
+    score: 0,
+    confidence: 0,
+    total: 0,
+    verifiedCount: 0,
+    breakdown: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+  });
   const [sort, setSort] = useState<SortOption>('recent');
   const [filterRating, setFilterRating] = useState<number | undefined>();
   const [page, setPage] = useState(1);

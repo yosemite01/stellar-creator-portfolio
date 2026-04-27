@@ -8,7 +8,10 @@ describe('calculateAggregate', () => {
     const { calculateAggregate } = await import('@/lib/review-service')
     const result = calculateAggregate([])
     expect(result.average).toBe(0)
+    expect(result.score).toBe(0)
+    expect(result.confidence).toBe(0)
     expect(result.total).toBe(0)
+    expect(result.verifiedCount).toBe(0)
     expect(result.breakdown[5]).toBe(0)
   })
 
@@ -22,6 +25,8 @@ describe('calculateAggregate', () => {
 
     const result = calculateAggregate(reviews)
     expect(result.average).toBe(4)
+    expect(result.score).toBe(80)
+    expect(result.confidence).toBe(30)
     expect(result.total).toBe(3)
     expect(result.breakdown[5]).toBe(1)
     expect(result.breakdown[4]).toBe(1)
@@ -48,7 +53,29 @@ describe('calculateAggregate', () => {
     ] as any[]
     const result = calculateAggregate(reviews)
     expect(result.average).toBe(5)
+    expect(result.score).toBe(83)
     expect(result.total).toBe(1)
+  })
+
+  it('tracks verified reviews in the aggregate', async () => {
+    const { calculateAggregate } = await import('@/lib/review-service')
+    const reviews = [
+      { rating: 5, status: 'approved', isVerifiedPurchase: true },
+      { rating: 4, status: 'approved', isVerifiedPurchase: false },
+      { rating: 4, status: 'approved', isVerifiedPurchase: true },
+    ] as any[]
+    const result = calculateAggregate(reviews)
+
+    expect(result.verifiedCount).toBe(2)
+  })
+})
+
+describe('calculateAggregateScore', () => {
+  it('uses a bayesian prior so small sample scores are not overconfident', async () => {
+    const { calculateAggregateScore } = await import('@/lib/review-service')
+
+    expect(calculateAggregateScore(5, 1)).toBe(83)
+    expect(calculateAggregateScore(50, 10)).toBe(93)
   })
 })
 

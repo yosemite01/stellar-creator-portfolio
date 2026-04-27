@@ -260,7 +260,7 @@ export default function CreatorProfilePage({ params }: CreatorProfilePageProps) 
                   className="gap-1.5"
                 >
                   <Star size={14} />
-                  See all {aggregate.total} reviews
+                  Score {aggregate.score} · See all {aggregate.total} reviews
                 </Button>
               </div>
               <AggregateRatingDisplay aggregate={aggregate} />

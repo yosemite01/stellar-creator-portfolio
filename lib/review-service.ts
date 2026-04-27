@@ -28,8 +28,22 @@ export interface ReviewVote {
 
 export interface AggregateRating {
   average: number
+  score: number
+  confidence: number
   total: number
+  verifiedCount: number
   breakdown: Record<1 | 2 | 3 | 4 | 5, number>
+}
+
+const SCORE_PRIOR_RATING = 4
+const SCORE_PRIOR_WEIGHT = 5
+const SCORE_CONFIDENCE_TARGET = 10
+
+export function calculateAggregateScore(ratingSum: number, total: number): number {
+  if (total <= 0) return 0
+
+  const weightedAverage = (ratingSum + SCORE_PRIOR_RATING * SCORE_PRIOR_WEIGHT) / (total + SCORE_PRIOR_WEIGHT)
+  return Math.round((weightedAverage / 5) * 100)
 }
 
 // In-memory store (replace with DB calls in production)
@@ -41,18 +55,30 @@ export function calculateAggregate(reviews: Review[]): AggregateRating {
   const breakdown: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
 
   if (approved.length === 0) {
-    return { average: 0, total: 0, breakdown: breakdown as AggregateRating['breakdown'] }
+    return {
+      average: 0,
+      score: 0,
+      confidence: 0,
+      total: 0,
+      verifiedCount: 0,
+      breakdown: breakdown as AggregateRating['breakdown'],
+    }
   }
 
   let sum = 0
+  let verifiedCount = 0
   for (const r of approved) {
     sum += r.rating
     breakdown[r.rating] = (breakdown[r.rating] || 0) + 1
+    if (r.isVerifiedPurchase) verifiedCount++
   }
 
   return {
     average: Math.round((sum / approved.length) * 10) / 10,
+    score: calculateAggregateScore(sum, approved.length),
+    confidence: Math.round(Math.min(1, approved.length / SCORE_CONFIDENCE_TARGET) * 100),
     total: approved.length,
+    verifiedCount,
     breakdown: breakdown as AggregateRating['breakdown'],
   }
 }

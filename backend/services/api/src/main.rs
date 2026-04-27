@@ -129,6 +129,20 @@ fn parse_u64_to_i64(value: u64, field: &str) -> Result<i64, HttpResponse> {
         .map_err(|_| json_error(StatusCode::BAD_REQUEST, format!("{field} is outside the supported range")))
 }
 
+const REVIEW_SCORE_PRIOR_RATING: f64 = 4.0;
+const REVIEW_SCORE_PRIOR_WEIGHT: f64 = 5.0;
+
+#[allow(dead_code)]
+fn calculate_review_aggregate_score(rating_sum: i64, total_reviews: i64) -> i64 {
+    if total_reviews <= 0 {
+        return 0;
+    }
+
+    let weighted_average = (rating_sum as f64 + REVIEW_SCORE_PRIOR_RATING * REVIEW_SCORE_PRIOR_WEIGHT)
+        / (total_reviews as f64 + REVIEW_SCORE_PRIOR_WEIGHT);
+    ((weighted_average / 5.0) * 100.0).round() as i64
+}
+
 /// Health check
 #[utoipa::path(
     get, path = "/health",
@@ -868,6 +882,17 @@ mod tests {
         assert!(paths.contains_key("/api/bounties"));
         assert!(paths.contains_key("/api/freelancers"));
         assert!(paths.contains_key("/api/escrow/{id}"));
+    }
+
+    #[test]
+    fn review_aggregate_score_uses_bayesian_prior() {
+        assert_eq!(calculate_review_aggregate_score(5, 1), 83);
+        assert_eq!(calculate_review_aggregate_score(50, 10), 93);
+    }
+
+    #[test]
+    fn review_aggregate_score_is_zero_without_reviews() {
+        assert_eq!(calculate_review_aggregate_score(0, 0), 0);
     }
 
     #[test]

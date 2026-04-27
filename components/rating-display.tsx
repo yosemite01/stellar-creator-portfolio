@@ -88,7 +88,7 @@ interface AggregateRatingDisplayProps {
 }
 
 export function AggregateRatingDisplay({ aggregate, className }: AggregateRatingDisplayProps) {
-  const { average, total, breakdown } = aggregate;
+  const { average, score, confidence, total, verifiedCount, breakdown } = aggregate;
 
   return (
     <div className={cn('flex flex-col sm:flex-row gap-6 items-start sm:items-center', className)}>
@@ -97,6 +97,22 @@ export function AggregateRatingDisplay({ aggregate, className }: AggregateRating
         <div className="text-5xl font-bold text-foreground">{average.toFixed(1)}</div>
         <StarRating value={average} size="sm" className="justify-center mt-1" />
         <p className="text-xs text-muted-foreground mt-1">{total} review{total !== 1 ? 's' : ''}</p>
+      </div>
+
+      <div className="min-w-[140px] rounded-xl border border-border bg-background/70 p-4 text-center shadow-sm">
+        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+          Reputation
+        </div>
+        <div className="mt-1 text-4xl font-black text-primary">{score}</div>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-all duration-500"
+            style={{ width: `${score}%` }}
+          />
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {confidence}% confidence · {verifiedCount} verified
+        </p>
       </div>
 
       {/* Breakdown bars */}
