@@ -57,9 +57,7 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         let jwt_secret = std::env::var("JWT_SECRET")
             .context("JWT_SECRET is required for signing access tokens")?;
-        if jwt_secret.len() < 32 {
-            anyhow::bail!("JWT_SECRET must be at least 32 characters");
-        }
+        validate_jwt_secret(&jwt_secret)?;
 
         let mint_secret = std::env::var("AUTH_MINT_SECRET")
             .ok()
@@ -130,6 +128,32 @@ impl Config {
     }
 }
 
+fn validate_jwt_secret(jwt_secret: &str) -> Result<()> {
+    if jwt_secret.len() < 32 {
+        anyhow::bail!("JWT_SECRET must be at least 32 characters");
+    }
+
+    let normalized = jwt_secret.trim().to_lowercase();
+    let weak_values = [
+        "change-me-in-production",
+        "stellar-dev-secret",
+        "your-secret-key",
+        "default",
+        "secret",
+        "jwt_secret",
+    ];
+
+    if weak_values.contains(&normalized.as_str())
+        || normalized.contains("change-me")
+        || normalized.contains("replace-with")
+        || normalized.contains("example")
+    {
+        anyhow::bail!("JWT_SECRET must not use a default or placeholder value");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +181,16 @@ mod tests {
         assert_eq!(google_config.client_secret, "gsecret");
         assert_eq!(google_config.redirect_uri, "https://localhost/callback");
     }
-}
 
+    #[test]
+    fn rejects_default_jwt_secret() {
+        let err = validate_jwt_secret("change-me-in-production").expect_err("default secret should fail");
+        assert!(err.to_string().contains("placeholder"));
+    }
+
+    #[test]
+    fn rejects_short_jwt_secret() {
+        let err = validate_jwt_secret("too-short").expect_err("short secret should fail");
+        assert!(err.to_string().contains("at least 32"));
+    }
+}
