@@ -394,6 +394,14 @@ export const getCreatorsByDiscipline = (discipline: string): Creator[] => {
   return creators.filter(creator => creator.discipline === discipline);
 };
 
+export const isValidCreatorId = (id: string): boolean =>
+  /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id);
+
+export const getCreatorById = (id: string): Creator | undefined => {
+  if (!isValidCreatorId(id)) return undefined;
+  return creators.find(creator => creator.id === id);
+};
+
 /**
  * Search creators by name, bio, or skills.
  * Optionally also filter by discipline.
