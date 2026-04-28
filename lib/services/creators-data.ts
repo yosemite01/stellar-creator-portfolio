@@ -479,6 +479,18 @@ export const getCreatorsByDiscipline = (discipline: string): Creator[] => {
   return creators.filter(creator => creator.discipline === discipline);
 };
 
+export function isValidCreatorId(id: string): boolean {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id);
+}
+
+export function getCreatorById(id: string): Creator | undefined {
+  if (!isValidCreatorId(id)) {
+    return undefined;
+  }
+
+  return creators.find((creator) => creator.id === id);
+}
+
 export interface CreatorSearchParams {
   query?: string;
   discipline?: string;

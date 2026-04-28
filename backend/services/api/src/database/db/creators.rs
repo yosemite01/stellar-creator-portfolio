@@ -152,8 +152,44 @@ pub fn filter_creators(creators: Vec<Creator>, discipline: Option<String>, searc
 }
 
 pub fn get_creator_by_id(creator_id: &str) -> Option<Creator> {
+    if !is_valid_creator_id(creator_id) {
+        return None;
+    }
+
     let creators = get_mock_creators();
     creators
         .into_iter()
         .find(|creator| creator.id == creator_id)
+}
+
+pub fn is_valid_creator_id(creator_id: &str) -> bool {
+    !creator_id.is_empty()
+        && creator_id
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        && !creator_id.starts_with('-')
+        && !creator_id.ends_with('-')
+        && !creator_id.contains("--")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{get_creator_by_id, is_valid_creator_id};
+
+    #[test]
+    fn get_creator_by_id_returns_known_creator() {
+        let creator = get_creator_by_id("alex-studio").expect("known creator");
+        assert_eq!(creator.name, "Alex Chen");
+    }
+
+    #[test]
+    fn get_creator_by_id_returns_none_for_missing_creator() {
+        assert!(get_creator_by_id("missing-creator").is_none());
+    }
+
+    #[test]
+    fn get_creator_by_id_rejects_malformed_ids() {
+        assert!(!is_valid_creator_id("../alex-studio"));
+        assert!(get_creator_by_id("../alex-studio").is_none());
+    }
 }

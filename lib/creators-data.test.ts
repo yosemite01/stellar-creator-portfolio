@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   getCreatorsByDiscipline,
+  getCreatorById,
+  isValidCreatorId,
   searchCreators,
   formatAvailability,
   formatBudget,
@@ -23,6 +25,21 @@ describe('getCreatorsByDiscipline', () => {
 
   it('returns empty array for unknown discipline', () => {
     expect(getCreatorsByDiscipline('Astrology')).toHaveLength(0);
+  });
+});
+
+describe('getCreatorById', () => {
+  it('returns a creator for a known id', () => {
+    expect(getCreatorById('alex-studio')?.name).toBe('Alex Chen');
+  });
+
+  it('returns undefined for a missing creator', () => {
+    expect(getCreatorById('missing-creator')).toBeUndefined();
+  });
+
+  it('rejects malformed ids', () => {
+    expect(isValidCreatorId('Alex Studio')).toBe(false);
+    expect(getCreatorById('../alex-studio')).toBeUndefined();
   });
 });
 
