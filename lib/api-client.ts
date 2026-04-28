@@ -51,8 +51,8 @@ export class ApiClientError extends Error {
 
 const BASE_URL =
   typeof process !== 'undefined'
-    ? (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001')
-    : 'http://localhost:3001';
+    ? (process.env.NEXT_PUBLIC_API_URL ?? '')
+    : '';
 
 export const API_VERSION = 'v1';
 export const API_BASE = `/api/${API_VERSION}`;
