@@ -3,9 +3,11 @@
  * 
  * Provides consistent error formatting and user-friendly messages
  * for API error responses across the frontend.
+ * Integrates with centralized error tracking for production observability.
  */
 
 import type { ApiError, ApiResponse } from '@/lib/api-models';
+import { errorTracker, type ErrorContext } from '@/lib/error-tracking';
 
 /**
  * User-friendly error messages for different error codes.
@@ -105,20 +107,34 @@ export function formatApiError(
 
 /**
  * Handle an API response and throw if it failed.
+ * Automatically tracks errors to centralized monitoring.
  */
 export function handleApiResponse<T>(
   response: ApiResponse<T>,
+  context?: ErrorContext,
 ): T {
   if (!response.success && response.error) {
     const formatted = formatApiError(response.error);
     const error = new Error(formatted.userMessage);
     (error as any).code = formatted.code;
     (error as any).fieldErrors = formatted.fieldErrors;
+
+    // Track error to centralized system
+    void errorTracker.captureError(error, {
+      ...context,
+      metadata: {
+        code: formatted.code,
+        fieldErrors: formatted.fieldErrors,
+      },
+    });
+
     throw error;
   }
 
   if (!response.data) {
-    throw new Error('No data in API response');
+    const error = new Error('No data in API response');
+    void errorTracker.captureError(error, context);
+    throw error;
   }
 
   return response.data;
