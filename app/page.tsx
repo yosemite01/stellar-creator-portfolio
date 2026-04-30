@@ -7,6 +7,9 @@ import { CreatorCard } from '@/components/creator-card';
 import { Button } from '@/components/ui/button';
 import { ArrowRight, Sparkles, Users, Target } from 'lucide-react';
 import { creators } from '@/lib/creators-data';
+import { TestimonialsSection } from '@/components/testimonials';
+import { FeaturedBounties } from '@/components/featured-bounties';
+import { AnimatedCounter } from '@/components/animated-counter';
 
 export default function Home() {
   const router = useRouter();
@@ -57,27 +60,15 @@ export default function Home() {
         <section className="py-12 sm:py-16 border-b border-border bg-muted/30">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8">
-              <div className="text-center">
-                <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
-                  {creators.length}+
-                </div>
-                <p className="text-sm sm:text-base text-muted-foreground">Stellar Creators</p>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
-                  {creators.reduce((sum, c) => sum + c.projects.length, 0)}+
-                </div>
-                <p className="text-sm sm:text-base text-muted-foreground">Incredible Projects</p>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl sm:text-4xl font-bold text-primary mb-2">
-                  15+
-                </div>
-                <p className="text-sm sm:text-base text-muted-foreground">Non-Tech Disciplines</p>
-              </div>
+              <AnimatedCounter value={creators.length} label="Stellar Creators" suffix="+" />
+              <AnimatedCounter value={creators.reduce((sum, c) => sum + c.projects.length, 0)} label="Incredible Projects" suffix="+" />
+              <AnimatedCounter value={15} label="Non-Tech Disciplines" suffix="+" />
             </div>
           </div>
         </section>
+
+        {/* Featured Bounties Section */}
+        <FeaturedBounties />
 
         {/* Featured Creators Section */}
         <section className="py-16 sm:py-24">
@@ -108,6 +99,9 @@ export default function Home() {
             </div>
           </div>
         </section>
+
+        {/* Testimonials Section */}
+        <TestimonialsSection />
 
         {/* Features Section */}
         <section className="py-16 sm:py-24 bg-muted/30 border-b border-border">
