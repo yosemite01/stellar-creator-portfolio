@@ -17,9 +17,35 @@ export function Header() {
     setMounted(true);
   }, []);
 
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isMenuOpen) {
+        setIsMenuOpen(false);
+      }
+    };
+
+    if (isMenuOpen) {
+      document.addEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'hidden';
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'unset';
+    };
+  }, [isMenuOpen]);
+
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
   };
+
+  const navigationItems = [
+    { href: '/', label: 'Home' },
+    { href: '/creators', label: 'Creators' },
+    { href: '/freelancers', label: 'Hire' },
+    { href: '/bounties', label: 'Bounties' },
+    { href: '/about', label: 'About' },
+  ];
 
   return (
     <header className="sticky top-0 z-50 w-full bg-background/80 backdrop-blur-md border-b border-border">
@@ -96,6 +122,19 @@ export function Header() {
 
         {/* Mobile Navigation */}
         {isMenuOpen && (
+          <nav className="md:hidden animate-in slide-in-from-top border-t border-border bg-background">
+            <div className="flex flex-col py-2">
+              {navigationItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="block px-4 py-3 text-sm font-medium text-foreground hover:text-primary hover:bg-secondary/50 transition-colors min-h-[44px] flex items-center"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </div>
           <nav className="md:hidden pb-4 border-t border-border">
             <Link href="/" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
               Home
