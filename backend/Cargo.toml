@@ -4,29 +4,30 @@ members = [
     "contracts/escrow",
     "contracts/freelancer",
     "contracts/governance",
+    "contracts/stellar_insights",
     "services/api",
     "services/auth",
-    "services/notifications",
-    "services/indexer",
+    "tests",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70.0"
+rust-version = "1.74.0"
 authors = ["Stellar Team"]
 license = "MIT"
 repository = "https://github.com/stellar/stellar-platform"
 
 [workspace.dependencies]
 # Soroban SDK
-soroban-sdk = { version = "21.5", features = ["contract"] }
+soroban-sdk = "21.7.7"
 soroban-spec-tools = "21.5"
 
 # Web & HTTP
 actix-web = "4.4"
 actix-rt = "2.9"
+reqwest = { version = "0.11", features = ["json"] }
 tokio = { version = "1.35", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -38,8 +39,13 @@ diesel = { version = "2.1", features = ["postgres"] }
 # Cryptography & Blockchain
 ed25519-dalek = "2.1"
 sha2 = "0.10"
+hmac = { version = "0.12", features = ["std"] }
 hex = "0.4"
 stellar-sdk = "21.0"
+
+# Auth
+jsonwebtoken = "9"
+actix-web-httpauth = "0.8"
 
 # Utilities
 thiserror = "1.0"
@@ -47,6 +53,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
 futures = "0.3"
+dotenvy = "0.15"
 
 # Testing
 tokio-test = "0.4"

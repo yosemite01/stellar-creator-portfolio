@@ -61,11 +61,6 @@ export const creators: Creator[] = [
     twitter: 'https://x.com/alexchen',
     portfolio: 'https://alexchen.design',
     skills: ['Figma', 'Design Systems', 'Prototyping', 'User Research', 'Accessibility', 'Design Thinking'],
-    stats: {
-      projects: 45,
-      clients: 20,
-      experience: 8,
-    },
     projects: [
       {
         id: 'project-1',
@@ -283,7 +278,12 @@ export interface Bounty {
   tags: string[];
   applicants: number;
   status: 'open' | 'in-progress' | 'completed' | 'cancelled';
+  paymentStatus: 'unfunded' | 'funded' | 'released' | 'refunded';
+  escrowId?: string;
+  status: 'open' | 'in-progress' | 'completed' | 'cancelled' | 'disputed';
   postedBy: string;
+  creatorAddress?: string;
+  escrowId?: string;
   postedDate: Date;
   requiredSkills: string[];
   deliverables: string;
@@ -314,7 +314,10 @@ export const bounties: Bounty[] = [
     tags: ['Branding', 'Design', 'Web3', 'Logo Design'],
     applicants: 12,
     status: 'open',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-1',
     postedBy: 'company-1',
+    creatorAddress: 'GCREATOR123...',
     postedDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
     requiredSkills: ['Brand Design', 'Logo Design', 'Typography', 'Figma'],
     deliverables: 'Logo files, brand guide PDF, color palette, typography system',
@@ -331,7 +334,12 @@ export const bounties: Bounty[] = [
     tags: ['API Docs', 'Technical Writing', 'Documentation'],
     applicants: 8,
     status: 'open',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-2',
+    status: 'in-progress',
     postedBy: 'company-2',
+    creatorAddress: 'GCREATOR456...',
+    escrowId: 'esc_77',
     postedDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
     requiredSkills: ['Technical Writing', 'API Knowledge', 'Markdown'],
     deliverables: 'Complete API documentation, guides, and examples',
@@ -348,7 +356,11 @@ export const bounties: Bounty[] = [
     tags: ['Social Media', 'Content', 'Video', 'Graphics'],
     applicants: 15,
     status: 'open',
+    paymentStatus: 'unfunded',
+    status: 'completed',
     postedBy: 'company-3',
+    creatorAddress: 'GCREATOR789...',
+    escrowId: 'esc_92',
     postedDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
     requiredSkills: ['Video Production', 'Graphic Design', 'Copywriting', 'Social Media'],
     deliverables: 'Content calendar, 60 pieces of content, performance tracking',
@@ -364,8 +376,13 @@ export const bounties: Bounty[] = [
     category: 'UX Research',
     tags: ['UX Research', 'User Testing', 'Mobile App', 'Analytics'],
     applicants: 6,
-    status: 'open',
+    status: 'completed',
+    paymentStatus: 'funded',
+    escrowId: 'escrow-4',
+    status: 'disputed',
     postedBy: 'company-4',
+    creatorAddress: 'GCREATOR000...',
+    escrowId: 'esc_105',
     postedDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
     requiredSkills: ['UX Research', 'User Testing', 'Analysis', 'Reporting'],
     deliverables: 'Research report, testing videos, recommendations, analysis',
@@ -376,6 +393,45 @@ export const getCreatorsByDiscipline = (discipline: string): Creator[] => {
   if (discipline === 'All') return creators;
   return creators.filter(creator => creator.discipline === discipline);
 };
+
+export const isValidCreatorId = (id: string): boolean =>
+  /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id);
+
+export const getCreatorById = (id: string): Creator | undefined => {
+  if (!isValidCreatorId(id)) return undefined;
+  return creators.find(creator => creator.id === id);
+};
+
+/**
+ * Search creators by name, bio, or skills.
+ * Optionally also filter by discipline.
+ */
+export const searchCreators = (query: string, discipline?: string): Creator[] => {
+  const q = query.toLowerCase();
+  return creators.filter(creator => {
+    const matchesDiscipline = !discipline || discipline === 'All' || creator.discipline === discipline;
+    const matchesQuery =
+      !q ||
+      creator.name.toLowerCase().includes(q) ||
+      creator.bio.toLowerCase().includes(q) ||
+      creator.skills.some(s => s.toLowerCase().includes(q));
+    return matchesDiscipline && matchesQuery;
+  });
+};
+
+/** Format availability status for display. */
+export const formatAvailability = (availability?: Creator['availability']): string => {
+  switch (availability) {
+    case 'available': return 'Available now';
+    case 'limited': return 'Limited availability';
+    case 'unavailable': return 'Unavailable';
+    default: return 'Status unknown';
+  }
+};
+
+/** Format a budget number as a USD string. */
+export const formatBudget = (budget: number, currency = 'USD'): string =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(budget);
 
 export const getBountiesByCategory = (category: string): Bounty[] => {
   if (category === 'All') return bounties;

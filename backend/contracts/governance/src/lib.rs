@@ -28,55 +28,11 @@ pub struct Proposal {
 }
 
 #[contract]
-pub trait GovernanceContractTrait {
-    /// Get current governance config
-    fn get_config(env: Env) -> GovernanceConfig;
-
-    /// Update platform fee (admin only)
-    fn set_platform_fee(
-        env: Env,
-        admin: Address,
-        fee_percent: u32,
-    ) -> bool;
-
-    /// Update bounty budget limits (admin only)
-    fn set_bounty_limits(
-        env: Env,
-        admin: Address,
-        min_budget: i128,
-        max_budget: i128,
-    ) -> bool;
-
-    /// Create governance proposal
-    fn create_proposal(
-        env: Env,
-        proposer: Address,
-        title: String,
-        description: String,
-        voting_period: u64,
-    ) -> u64;
-
-    /// Vote on proposal
-    fn vote(
-        env: Env,
-        voter: Address,
-        proposal_id: u64,
-        vote_yes: bool,
-    ) -> bool;
-
-    /// Get proposal details
-    fn get_proposal(env: Env, proposal_id: u64) -> Proposal;
-
-    /// Execute approved proposal
-    fn execute_proposal(env: Env, proposal_id: u64) -> bool;
-}
-
-#[contractimpl]
 pub struct GovernanceContract;
 
 #[contractimpl]
-impl GovernanceContractTrait for GovernanceContract {
-    fn get_config(env: Env) -> GovernanceConfig {
+impl GovernanceContract {
+    pub fn get_config(env: Env) -> GovernanceConfig {
         let config_key = Symbol::new(&env, "governance_config");
         env.storage()
             .persistent()
@@ -88,13 +44,13 @@ impl GovernanceContractTrait for GovernanceContract {
                     min_bounty_budget: 100,
                     max_bounty_budget: 1_000_000,
                     dispute_resolution_period: 7 * 24 * 3600, // 7 days
-                    admin_address: Address::random(&env),
+                    admin_address: env.current_contract_address(),
                     last_updated: 0,
                 }
             })
     }
 
-    fn set_platform_fee(
+    pub fn set_platform_fee(
         env: Env,
         admin: Address,
         fee_percent: u32,
@@ -112,10 +68,14 @@ impl GovernanceContractTrait for GovernanceContract {
 
         env.storage().persistent().set(&config_key, &config);
 
+        // Extend TTL for config storage (30 days in ledgers)
+        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
+        env.storage().persistent().extend_ttl(&config_key, 4096, ledger_ttl);
+
         true
     }
 
-    fn set_bounty_limits(
+    pub fn set_bounty_limits(
         env: Env,
         admin: Address,
         min_budget: i128,
@@ -136,10 +96,14 @@ impl GovernanceContractTrait for GovernanceContract {
 
         env.storage().persistent().set(&config_key, &config);
 
+        // Extend TTL for config storage (30 days in ledgers)
+        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
+        env.storage().persistent().extend_ttl(&config_key, 4096, ledger_ttl);
+
         true
     }
 
-    fn create_proposal(
+    pub fn create_proposal(
         env: Env,
         proposer: Address,
         title: String,
@@ -165,21 +129,26 @@ impl GovernanceContractTrait for GovernanceContract {
             description,
             yes_votes: 0,
             no_votes: 0,
-            status: String::from_slice(&env, "pending"),
+            status: String::from_str(&env, "pending"),
             created_at: env.ledger().timestamp(),
             voting_deadline: env.ledger().timestamp() + voting_period,
         };
 
-        let proposal_key = Symbol::new(&env, &format!("proposal_{}", proposal_id));
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         env.storage().persistent().set(&proposal_key, &proposal);
         env.storage()
             .persistent()
             .set(&proposal_counter_key, &counter);
 
+        // Extend TTL for proposal storage (30 days in ledgers)
+        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
+        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
+        env.storage().persistent().extend_ttl(&proposal_counter_key, 4096, ledger_ttl);
+
         proposal_id
     }
 
-    fn vote(
+    pub fn vote(
         env: Env,
         voter: Address,
         proposal_id: u64,
@@ -187,24 +156,22 @@ impl GovernanceContractTrait for GovernanceContract {
     ) -> bool {
         voter.require_auth();
 
-        let proposal_key = Symbol::new(&env, &format!("proposal_{}", proposal_id));
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         let mut proposal = env
             .storage()
             .persistent()
-            .get::<Symbol, Proposal>(&proposal_key)
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
             .expect("Proposal not found");
 
-        assert_eq!(proposal.status.as_slice(), b"pending", "Proposal not pending");
+        let pending = String::from_str(&env, "pending");
+        assert!(proposal.status == pending, "Proposal not pending");
         assert!(
             env.ledger().timestamp() < proposal.voting_deadline,
             "Voting period has ended"
         );
 
         // Check if voter already voted (simplified - in reality use a mapping)
-        let vote_key = Symbol::new(
-            &env,
-            &format!("vote_{}_{}", proposal_id, voter),
-        );
+        let vote_key = (Symbol::new(&env, "vote"), proposal_id, voter.clone());
         assert!(
             !env.storage().persistent().has(&vote_key),
             "Already voted"
@@ -219,38 +186,48 @@ impl GovernanceContractTrait for GovernanceContract {
         env.storage().persistent().set(&proposal_key, &proposal);
         env.storage().persistent().set(&vote_key, &true);
 
+        // Extend TTL for vote storage (30 days in ledgers)
+        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
+        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
+        env.storage().persistent().extend_ttl(&vote_key, 4096, ledger_ttl);
+
         true
     }
 
-    fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
-        let proposal_key = Symbol::new(&env, &format!("proposal_{}", proposal_id));
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         env.storage()
             .persistent()
-            .get::<Symbol, Proposal>(&proposal_key)
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
             .expect("Proposal not found")
     }
 
-    fn execute_proposal(env: Env, proposal_id: u64) -> bool {
-        let proposal_key = Symbol::new(&env, &format!("proposal_{}", proposal_id));
+    pub fn execute_proposal(env: Env, proposal_id: u64) -> bool {
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         let mut proposal = env
             .storage()
             .persistent()
-            .get::<Symbol, Proposal>(&proposal_key)
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
             .expect("Proposal not found");
 
         assert!(
             env.ledger().timestamp() >= proposal.voting_deadline,
             "Voting still in progress"
         );
-        assert_eq!(proposal.status.as_slice(), b"pending", "Proposal not pending");
+        let pending = String::from_str(&env, "pending");
+        assert!(proposal.status == pending, "Proposal not pending");
 
         if proposal.yes_votes > proposal.no_votes {
-            proposal.status = String::from_slice(&env, "approved");
+            proposal.status = String::from_str(&env, "approved");
         } else {
-            proposal.status = String::from_slice(&env, "rejected");
+            proposal.status = String::from_str(&env, "rejected");
         }
 
         env.storage().persistent().set(&proposal_key, &proposal);
+
+        // Extend TTL for proposal storage (30 days in ledgers)
+        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
+        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
 
         true
     }

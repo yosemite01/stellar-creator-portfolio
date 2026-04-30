@@ -416,11 +416,17 @@ NODE_ENV=production pnpm start
 Currently, no environment variables are required for the base installation. Future integrations may require:
 
 ```env
-DATABASE_URL=          # For database integration
+DB_ENGINE=postgresql   # Production default: postgresql. Use sqlite for local/test.
+DATABASE_URL=          # PostgreSQL URL in production; sqlite:./stellar.db for local SQLite
 NEXT_PUBLIC_API_URL=   # For API endpoints
 AUTH_SECRET=           # For authentication
 STRIPE_API_KEY=        # For payments
 ```
+
+Production deployments should provision PostgreSQL and set `DATABASE_URL` to a
+`postgres://` or `postgresql://` connection string. SQLite remains supported for
+local development and tests by setting `DB_ENGINE=sqlite` or using a
+`sqlite:` database URL.
 
 ## API Routes (Extensible)
 
@@ -532,6 +538,13 @@ docker-compose up
 # - pgAdmin: http://localhost:5050 (admin/admin)
 # - PostgreSQL: localhost:5432
 # - Redis: localhost:6379
+```
+
+PostgreSQL is the production database. For local-only API experiments or tests,
+use SQLite explicitly:
+
+```bash
+DB_ENGINE=sqlite DATABASE_URL=sqlite:./stellar.db cargo run --bin stellar-api
 ```
 
 ### Backend Development
