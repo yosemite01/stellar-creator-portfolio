@@ -6,7 +6,6 @@ import { useTheme } from 'next-themes';
 import { Moon, Sun, Menu, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { ConnectWalletButton } from '@/components/connect-wallet-button';
 
 export function Header() {
   const { theme, setTheme } = useTheme();
@@ -91,22 +90,19 @@ export function Header() {
           {/* Right Actions */}
           <div className="flex items-center gap-2">
             {mounted && (
-              <>
-                <ConnectWalletButton />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={toggleTheme}
-                  aria-label="Toggle theme"
-                  aria-pressed={theme === 'dark'}
-                >
-                  {theme === 'dark' ? (
-                    <Sun size={20} className="text-accent" />
-                  ) : (
-                    <Moon size={20} className="text-primary" />
-                  )}
-                </Button>
-              </>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleTheme}
+                aria-label="Toggle theme"
+                aria-pressed={theme === 'dark'}
+              >
+                {theme === 'dark' ? (
+                  <Sun size={20} className="text-accent" />
+                ) : (
+                  <Moon size={20} className="text-primary" />
+                )}
+              </Button>
             )}
 
             {/* Mobile Menu Button */}
@@ -122,7 +118,7 @@ export function Header() {
 
         {/* Mobile Navigation */}
         {isMenuOpen && (
-          <nav className="md:hidden animate-in slide-in-from-top border-t border-border bg-background">
+          <nav className="md:hidden border-t border-border bg-background">
             <div className="flex flex-col py-2">
               {navigationItems.map((item) => (
                 <Link
@@ -135,25 +131,6 @@ export function Header() {
                 </Link>
               ))}
             </div>
-          <nav className="md:hidden pb-4 border-t border-border">
-            <Link href="/" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Home
-            </Link>
-            <Link href="/creators" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Creators
-            </Link>
-            <Link href="/freelancers" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Hire
-            </Link>
-            <Link href="/bounties" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Bounties
-            </Link>
-            <Link href="/reviews" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Reviews
-            </Link>
-            <Link href="/about" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
-              About
-            </Link>
           </nav>
         )}
       </div>

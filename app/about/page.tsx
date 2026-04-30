@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { Button } from '@/components/ui/button';
+import { TeamSection } from '@/components/team-section';
 import { ArrowRight, Heart, Globe, Zap } from 'lucide-react';
 
 export default function AboutPage() {
@@ -149,14 +150,7 @@ export default function AboutPage() {
         </section>
 
         {/* Team Section */}
-        <section className="border-t border-border bg-muted/30 py-16 sm:py-24">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h2 className="text-3xl font-bold text-foreground mb-8 text-center">Built for Creators</h2>
-            <p className="text-lg text-muted-foreground text-center mb-12">
-              Stellar was created by designers, writers, and creators who understand the challenges and opportunities in the creative industry. We're passionate about building tools that make your work shine.
-            </p>
-          </div>
-        </section>
+        <TeamSection />
 
         {/* CTA Section */}
         <section className="py-16 sm:py-24">
