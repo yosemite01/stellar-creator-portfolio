@@ -13,6 +13,9 @@ crate-type = ["cdylib"]
 soroban-sdk.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
 [profile.release]
 opt-level = "z"
 strip = true

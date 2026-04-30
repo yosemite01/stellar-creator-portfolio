@@ -12,7 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 actix-web.workspace = true
+actix-cors = "0.7"
+actix-ws = "0.3"
 actix-rt.workspace = true
+actix-web-httpauth.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -21,7 +24,16 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+dotenvy.workspace = true
 futures.workspace = true
+jsonwebtoken.workspace = true
+hmac = { version = "0.12", features = ["std"] }
+sha2.workspace = true
+hex.workspace = true
+stellar-sdk.workspace = true
+reqwest.workspace = true
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [profile.release]
 opt-level = 3
