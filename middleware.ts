@@ -1,22 +1,10 @@
 /**
- * Next.js middleware for environment validation
- * Runs on application startup to validate critical configuration
+ * Next.js middleware
  */
 
-import { validateEnvironment, logEnvironmentConfig } from '@/lib/env-validation'
-
-// Validate environment on startup
-try {
-  validateEnvironment()
-  logEnvironmentConfig()
-} catch (error) {
-  console.error('Failed to start application due to environment validation errors')
-  process.exit(1)
-}
-
-// Middleware function (required by Next.js even if empty)
+// Middleware function
 export function middleware() {
-  // Validation happens at module load time above
+  // Currently no middleware needed
 }
 
 export const config = {
