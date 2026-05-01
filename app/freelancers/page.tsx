@@ -68,10 +68,10 @@ export default function FreelancersPage() {
                   <button
                     key={discipline}
                     onClick={() => setSelectedDiscipline(discipline)}
-                    className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                    className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ease-out ${
                       selectedDiscipline === discipline
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-muted-foreground hover:bg-secondary'
+                        ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25 scale-105'
+                        : 'bg-muted/60 text-muted-foreground hover:bg-secondary/70 hover:text-foreground hover:shadow-md active:scale-95'
                     }`}
                   >
                     {discipline}
