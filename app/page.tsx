@@ -21,11 +21,11 @@ export default function Home() {
 
       <main className="flex-grow">
         {/* Hero Section */}
-        <section className="relative overflow-hidden border-b border-border">
+        <section className="relative overflow-hidden border-b border-border/40">
           {/* Minimal Background - Professional Look */}
-          <div className="absolute inset-0 bg-gradient-to-b from-primary/3 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent" />
 
-          <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24 md:py-32">
+          <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24 md:py-32 animate-fade-in">
             <div className="text-center max-w-4xl mx-auto">
               {/* Subtitle Badge */}
               <p className="text-sm font-semibold text-primary mb-4 uppercase tracking-wide">

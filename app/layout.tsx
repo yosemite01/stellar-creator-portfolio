@@ -12,9 +12,10 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#5a4ba3' },
+    { media: '(prefers-color-scheme: light)', color: '#6166f1' },
     { media: '(prefers-color-scheme: dark)', color: '#a78bfa' },
   ],
+  colorScheme: 'light dark',
 }
 
 export const metadata: Metadata = {
@@ -52,9 +53,9 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className="font-sans antialiased">
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+    <html lang="en" suppressHydrationWarning className="scroll-smooth">
+      <body className="font-sans antialiased transition-smooth">
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange={false}>
           <LayoutProvider>
             {children}
           </LayoutProvider>
