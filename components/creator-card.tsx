@@ -23,7 +23,7 @@ export function CreatorCard({ creator }: CreatorCardProps) {
   return (
     <div
       onClick={handleCardClick}
-      className="group h-full bg-card border border-border rounded-lg overflow-hidden hover:shadow-lg transition-all duration-300 hover:-translate-y-1 cursor-pointer"
+      className="group h-full bg-card border border-border/60 rounded-lg overflow-hidden hover:shadow-xl shadow-sm transition-smooth hover:-translate-y-2 cursor-pointer"
     >
       {/* Cover Image */}
       <div className="aspect-video bg-gradient-to-br from-primary/20 to-accent/20 overflow-hidden relative">

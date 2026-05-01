@@ -47,9 +47,9 @@ export function Header() {
   ];
 
   return (
-    <header className="sticky top-0 z-50 w-full bg-background/80 backdrop-blur-md border-b border-border">
+    <header className="sticky top-0 z-50 w-full bg-background/75 backdrop-blur-xl border-b border-border/40 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
+        <div className="flex items-center justify-between h-16 transition-smooth">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2 group">
             <Image
@@ -67,24 +67,15 @@ export function Header() {
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center gap-1">
-            <Link href="/" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Home
-            </Link>
-            <Link href="/creators" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Creators
-            </Link>
-            <Link href="/freelancers" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Hire
-            </Link>
-            <Link href="/bounties" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Bounties
-            </Link>
-            <Link href="/reviews" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              Reviews
-            </Link>
-            <Link href="/about" className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-lg hover:bg-secondary/50">
-              About
-            </Link>
+            {navigationItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="px-4 py-2 text-sm font-medium text-foreground hover:text-primary bg-transparent hover:bg-secondary/40 transition-smooth rounded-lg"
+              >
+                {item.label}
+              </Link>
+            ))}
           </nav>
 
           {/* Right Actions */}
@@ -96,18 +87,19 @@ export function Header() {
                 onClick={toggleTheme}
                 aria-label="Toggle theme"
                 aria-pressed={theme === 'dark'}
+                className="rounded-lg hover:bg-secondary/40 transition-smooth"
               >
                 {theme === 'dark' ? (
-                  <Sun size={20} className="text-accent" />
+                  <Sun size={20} className="text-accent animate-rotate-slow" />
                 ) : (
-                  <Moon size={20} className="text-primary" />
+                  <Moon size={20} className="text-primary animate-pulse-slow" />
                 )}
               </Button>
             )}
 
             {/* Mobile Menu Button */}
             <button
-              className="md:hidden p-2 hover:bg-secondary rounded-lg transition-colors"
+              className="md:hidden p-2 hover:bg-secondary/40 rounded-lg transition-smooth"
               onClick={() => setIsMenuOpen(!isMenuOpen)}
               aria-label="Toggle menu"
             >
@@ -118,14 +110,17 @@ export function Header() {
 
         {/* Mobile Navigation */}
         {isMenuOpen && (
-          <nav className="md:hidden border-t border-border bg-background">
+          <nav className="md:hidden border-t border-border/40 bg-background animate-slide-up">
             <div className="flex flex-col py-2">
-              {navigationItems.map((item) => (
+              {navigationItems.map((item, index) => (
                 <Link
                   key={item.href}
                   href={item.href}
-                  className="block px-4 py-3 text-sm font-medium text-foreground hover:text-primary hover:bg-secondary/50 transition-colors min-h-[44px] flex items-center"
+                  className="block px-4 py-3 text-sm font-medium text-foreground hover:text-primary hover:bg-secondary/40 transition-smooth min-h-[44px] flex items-center"
                   onClick={() => setIsMenuOpen(false)}
+                  style={{
+                    animation: `slide-up 0.3s ease-out ${index * 0.05}s backwards`,
+                  }}
                 >
                   {item.label}
                 </Link>
