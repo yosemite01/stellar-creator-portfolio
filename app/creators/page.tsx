@@ -40,7 +40,9 @@ export default function CreatorsPage() {
                     variant={selectedDiscipline === discipline ? 'default' : 'outline'}
                     size="sm"
                     onClick={() => setSelectedDiscipline(discipline)}
-                    className="transition-all"
+                    className={`transition-all duration-200 ease-out ${
+                      selectedDiscipline === discipline ? 'scale-105 shadow-lg shadow-primary/30' : 'hover:scale-105'
+                    }`}
                   >
                     {discipline}
                   </Button>

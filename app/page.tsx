@@ -43,12 +43,21 @@ export default function Home() {
               </p>
 
               {/* CTA Buttons */}
-              <div className="flex flex-col sm:flex-row gap-3 justify-center items-center sm:items-stretch mb-8">
-                <Button size="lg" className="w-full sm:w-auto" onClick={() => router.push('/creators')}>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center sm:items-stretch mb-8">
+                <Button
+                  size="lg"
+                  className="w-full sm:w-auto shadow-lg shadow-primary/30 hover:shadow-xl hover:shadow-primary/40 hover:-translate-y-1 transition-all duration-200"
+                  onClick={() => router.push('/creators')}
+                >
                   Browse Creators
-                  <ArrowRight size={18} className="ml-2" />
+                  <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
                 </Button>
-                <Button size="lg" variant="outline" className="w-full sm:w-auto" onClick={() => router.push('/bounties')}>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="w-full sm:w-auto hover:bg-accent/10 hover:border-accent/60 hover:-translate-y-1 transition-all duration-200"
+                  onClick={() => router.push('/bounties')}
+                >
                   Post a Bounty
                 </Button>
               </div>
