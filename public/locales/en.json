@@ -1,0 +1,58 @@
+{
+  "common": {
+    "appName": "Stellar"
+  },
+  "languageSwitcher": {
+    "label": "Language",
+    "aria": "Change language",
+    "current": "Current language: {{name}}"
+  },
+  "nav": {
+    "home": "Home",
+    "creators": "Creators",
+    "hire": "Hire",
+    "bounties": "Bounties",
+    "about": "About",
+    "matches": "Matches",
+    "disputes": "Disputes",
+    "dashboard": "Dashboard",
+    "profile": "Profile",
+    "notifications": "Notifications",
+    "logOut": "Log out",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu"
+  },
+  "auth": {
+    "signIn": "Sign In",
+    "signUp": "Sign Up"
+  },
+  "home": {
+    "heroBadge": "Creator Marketplace & Bounty Platform",
+    "heroTitle": "Connect with World-Class Creative Talent",
+    "heroSubtitle": "Discover, hire, and collaborate with exceptional creators across design, writing, marketing, product management, and 10+ more disciplines. Post bounties, find freelancers, and build amazing projects.",
+    "browseCreators": "Browse Creators",
+    "postBounty": "Post a Bounty",
+    "statsCreators": "Stellar Creators",
+    "statsProjects": "Incredible Projects",
+    "statsDisciplines": "Non-Tech Disciplines",
+    "featuredTitle": "Featured Creators",
+    "featuredSubtitle": "Discover exceptional talent across 15+ disciplines. From UX design to community management.",
+    "viewAllCreators": "View All Creators",
+    "whyTitle": "Why Choose Stellar?",
+    "whySubtitle": "The platform built for non-technical talent in tech",
+    "feature1Title": "Connect & Collaborate",
+    "feature1Body": "Network with industry leaders and find perfect collaborators for your next project.",
+    "feature2Title": "Bounty Opportunities",
+    "feature2Body": "Participate in exclusive bounties and showcase your expertise to potential clients.",
+    "feature3Title": "Premium Experience",
+    "feature3Body": "Showcase your portfolio on a professional platform designed for creators.",
+    "ctaTitle": "Ready to Get Started?",
+    "ctaSubtitle": "Join thousands of creators and clients finding perfect matches on Stellar.",
+    "ctaBrowse": "Browse Creators",
+    "ctaPost": "Post a Bounty"
+  },
+  "i18n": {
+    "sampleGreeting": "Hello, {{name}}",
+    "sampleCurrencyNote": "Prices shown in {{currency}}"
+  }
+}

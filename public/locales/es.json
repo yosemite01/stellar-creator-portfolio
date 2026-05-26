@@ -1,0 +1,58 @@
+{
+  "common": {
+    "appName": "Stellar"
+  },
+  "languageSwitcher": {
+    "label": "Idioma",
+    "aria": "Cambiar idioma",
+    "current": "Idioma actual: {{name}}"
+  },
+  "nav": {
+    "home": "Inicio",
+    "creators": "Creadores",
+    "hire": "Contratar",
+    "bounties": "Recompensas",
+    "about": "Acerca de",
+    "matches": "Coincidencias",
+    "disputes": "Disputas",
+    "dashboard": "Panel",
+    "profile": "Perfil",
+    "notifications": "Notificaciones",
+    "logOut": "Cerrar sesión",
+    "openMenu": "Abrir menú",
+    "closeMenu": "Cerrar menú"
+  },
+  "auth": {
+    "signIn": "Iniciar sesión",
+    "signUp": "Registrarse"
+  },
+  "home": {
+    "heroBadge": "Mercado de creadores y plataforma de recompensas",
+    "heroTitle": "Conéctate con talento creativo de clase mundial",
+    "heroSubtitle": "Descubre, contrata y colabora con creadores excepcionales en diseño, redacción, marketing, gestión de producto y más de 10 disciplinas. Publica recompensas, encuentra freelancers y construye proyectos increíbles.",
+    "browseCreators": "Explorar creadores",
+    "postBounty": "Publicar recompensa",
+    "statsCreators": "Creadores Stellar",
+    "statsProjects": "Proyectos increíbles",
+    "statsDisciplines": "Disciplinas no técnicas",
+    "featuredTitle": "Creadores destacados",
+    "featuredSubtitle": "Descubre talento excepcional en más de 15 disciplinas. Desde UX hasta gestión de comunidades.",
+    "viewAllCreators": "Ver todos los creadores",
+    "whyTitle": "¿Por qué Stellar?",
+    "whySubtitle": "La plataforma pensada para el talento no técnico en tecnología",
+    "feature1Title": "Conecta y colabora",
+    "feature1Body": "Conecta con líderes del sector y encuentra colaboradores perfectos para tu próximo proyecto.",
+    "feature2Title": "Oportunidades de recompensas",
+    "feature2Body": "Participa en recompensas exclusivas y muestra tu experiencia a posibles clientes.",
+    "feature3Title": "Experiencia premium",
+    "feature3Body": "Muestra tu portafolio en una plataforma profesional diseñada para creadores.",
+    "ctaTitle": "¿Listo para empezar?",
+    "ctaSubtitle": "Únete a miles de creadores y clientes que encuentran el match perfecto en Stellar.",
+    "ctaBrowse": "Explorar creadores",
+    "ctaPost": "Publicar recompensa"
+  },
+  "i18n": {
+    "sampleGreeting": "Hola, {{name}}",
+    "sampleCurrencyNote": "Precios en {{currency}}"
+  }
+}

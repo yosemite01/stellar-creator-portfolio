@@ -1,0 +1,52 @@
+name: Load Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Target base URL (Next.js)'
+        required: false
+        default: 'http://localhost:3000'
+      rust_api_url:
+        description: 'Rust API URL'
+        required: false
+        default: 'http://localhost:3001'
+      test:
+        description: 'Test to run (smoke|stress|soak|spike)'
+        required: false
+        default: 'smoke'
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update && sudo apt-get install -y k6
+
+      - name: Run load test
+        env:
+          BASE_URL: ${{ github.event.inputs.base_url }}
+          RUST_API_URL: ${{ github.event.inputs.rust_api_url }}
+        run: |
+          k6 run \
+            -e BASE_URL=$BASE_URL \
+            -e RUST_API_URL=$RUST_API_URL \
+            --out json=load-test-results.json \
+            load-tests/${{ github.event.inputs.test }}.test.js
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results-${{ github.event.inputs.test }}
+          path: load-test-results.json
+          retention-days: 30

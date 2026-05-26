@@ -1,0 +1,51 @@
+{
+  "name": "stellar-creator-portfolio",
+  "version": "1.0.0",
+  "description": "Professional creator portfolio as a Progressive Web App",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && npm run validate:pwa",
+    "start": "next start",
+    "lint": "eslint . --ext ts,tsx",
+    "format": "prettier --write .",
+    "type-check": "tsc --noEmit",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:pwa": "vitest run service-worker.test.ts pwa-integration.test.ts lighthouse-pwa.test.ts",
+    "validate:pwa": "node scripts/validate-pwa.js",
+    "lighthouse": "lighthouse http://localhost:3000 --view --chrome-flags=\"--headless --no-sandbox\"",
+    "lighthouse:ci": "lighthouse http://localhost:3000 --output=json --output-path=./lighthouse-report.json",
+    "generate:icons": "node scripts/generate-icons.js",
+    "generate:vapid": "web-push generate-vapid-keys",
+    "serve": "npm run build && npm start",
+    "clean": "rm -rf .next dist coverage playwright-report"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "next": "^14.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@testing-library/react": "^14.0.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "eslint": "^8.50.0",
+    "eslint-config-next": "^14.0.0",
+    "lighthouse": "^11.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.2.0",
+    "vitest": "^1.0.0",
+    "web-push": "^3.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "common": {
+    "appName": "Stellar"
+  },
+  "languageSwitcher": {
+    "label": "Langue",
+    "aria": "Changer de langue",
+    "current": "Langue actuelle : {{name}}"
+  },
+  "nav": {
+    "home": "Accueil",
+    "creators": "Créateurs",
+    "hire": "Recruter",
+    "bounties": "Récompenses",
+    "about": "À propos",
+    "matches": "Correspondances",
+    "disputes": "Litiges",
+    "dashboard": "Tableau de bord",
+    "profile": "Profil",
+    "notifications": "Notifications",
+    "logOut": "Déconnexion",
+    "openMenu": "Ouvrir le menu",
+    "closeMenu": "Fermer le menu"
+  },
+  "auth": {
+    "signIn": "Connexion",
+    "signUp": "Inscription"
+  },
+  "home": {
+    "heroBadge": "Marché des créateurs et plateforme de récompenses",
+    "heroTitle": "Connectez-vous à des talents créatifs de classe mondiale",
+    "heroSubtitle": "Découvrez, embauchez et collaborez avec des créateurs exceptionnels en design, rédaction, marketing, gestion de produit et plus de 10 disciplines. Publiez des récompenses, trouvez des freelances et réalisez des projets incroyables.",
+    "browseCreators": "Parcourir les créateurs",
+    "postBounty": "Publier une récompense",
+    "statsCreators": "Créateurs Stellar",
+    "statsProjects": "Projets incroyables",
+    "statsDisciplines": "Disciplines non techniques",
+    "featuredTitle": "Créateurs à la une",
+    "featuredSubtitle": "Découvrez des talents exceptionnels dans plus de 15 disciplines, du design UX à la gestion de communauté.",
+    "viewAllCreators": "Voir tous les créateurs",
+    "whyTitle": "Pourquoi Stellar ?",
+    "whySubtitle": "La plateforme pensée pour les talents non techniques dans la tech",
+    "feature1Title": "Connectez-vous et collaborez",
+    "feature1Body": "Réseautez avec des leaders et trouvez les collaborateurs idéaux pour votre prochain projet.",
+    "feature2Title": "Opportunités de récompenses",
+    "feature2Body": "Participez à des récompenses exclusives et mettez en avant votre expertise auprès de clients potentiels.",
+    "feature3Title": "Expérience premium",
+    "feature3Body": "Présentez votre portfolio sur une plateforme professionnelle conçue pour les créateurs.",
+    "ctaTitle": "Prêt à commencer ?",
+    "ctaSubtitle": "Rejoignez des milliers de créateurs et clients qui trouvent le match parfait sur Stellar.",
+    "ctaBrowse": "Parcourir les créateurs",
+    "ctaPost": "Publier une récompense"
+  },
+  "i18n": {
+    "sampleGreeting": "Bonjour, {{name}}",
+    "sampleCurrencyNote": "Prix affichés en {{currency}}"
+  }
+}

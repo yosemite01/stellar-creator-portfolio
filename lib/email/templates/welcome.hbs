@@ -1,0 +1,11 @@
+<h1>Welcome to Stellar Creators 🎉</h1>
+<p>Hi {{name}},</p>
+<p>Your email has been verified and your account is now active. You're all set to start exploring the platform.</p>
+{{#if isCreator}}
+<p>As a <strong>creator</strong>, you can set up your profile, showcase your portfolio, and start receiving bounty applications.</p>
+{{else}}
+<p>As a <strong>client</strong>, you can post bounties, browse creators, and hire top talent for your projects.</p>
+{{/if}}
+<a href="{{dashboardUrl}}" class="btn">Go to Dashboard</a>
+<hr class="divider" />
+<p class="small">Need help getting started? Visit our <a href="{{appUrl}}/about">about page</a> to learn more.</p>
