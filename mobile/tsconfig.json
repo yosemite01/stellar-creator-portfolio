@@ -10,16 +10,7 @@
     "jsx": "react-native",
     "lib": ["ES2020"],
     "target": "ES2020",
-    "module": "commonjs",
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"],
-      "@components/*": ["src/components/*"],
-      "@screens/*": ["src/screens/*"],
-      "@services/*": ["src/services/*"],
-      "@hooks/*": ["src/hooks/*"],
-      "@types/*": ["src/types/*"]
-    }
+    "module": "commonjs"
   },
   "include": [
     "**/*.ts",
