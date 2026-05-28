@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Stellar",
+    "name": "Stellar Creator Portfolio",
     "slug": "stellar-creator-portfolio",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,45 +9,27 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0f172a"
+      "backgroundColor": "#ffffff"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.stellar.creatorportfolio",
-      "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Stellar needs access to your photo library to upload portfolio images.",
-        "NSCameraUsageDescription": "Stellar needs camera access to capture portfolio photos."
-      }
+      "bundleIdentifier": "com.stellarcreator.portfolio"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0f172a"
+        "backgroundColor": "#ffffff"
       },
-      "package": "com.stellar.creatorportfolio",
-      "permissions": [
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
-      ]
+      "package": "com.stellarcreator.portfolio"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-localization",
-      "@react-native-async-storage/async-storage",
-      "expo-network",
-      [
-        "expo-build-properties",
-        {
-          "ios": { "newArchEnabled": true },
-          "android": { "newArchEnabled": true }
-        }
-      ]
-    ],
-    "extra": {
-      "eas": { "projectId": "stellar-creator-portfolio" }
-    }
+      "expo-router"
+    ]
   }
 }
