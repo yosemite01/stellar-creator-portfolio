@@ -19,6 +19,9 @@
       },
       "package": "com.stellarcreator.portfolio"
     },
+    "plugins": [
+      "expo-notifications"
+    ],
     "web": {
       "bundler": "metro"
     }

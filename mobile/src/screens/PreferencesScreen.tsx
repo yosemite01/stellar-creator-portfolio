@@ -13,6 +13,8 @@ import {
   RefreshControl,
   Text,
   TouchableOpacity,
+  Clipboard,
+  Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { usePreferences } from '../hooks/usePreferences';
@@ -20,6 +22,8 @@ import { PreferenceSection } from '../components/PreferenceSection';
 import { PreferenceToggle } from '../components/PreferenceToggle';
 import { PreferenceSelect } from '../components/PreferenceSelect';
 import { PreferenceSlider } from '../components/PreferenceSlider';
+import { PreferenceCard } from '../components/PreferenceCard';
+import { usePushNotifications } from '../hooks/usePushNotifications';
 
 export const PreferencesScreen: React.FC = () => {
   const {
@@ -30,6 +34,19 @@ export const PreferencesScreen: React.FC = () => {
     resetPreferences,
     refreshPreferences,
   } = usePreferences();
+
+  const {
+    expoPushToken,
+    permissionStatus,
+    isDevice,
+    notificationsHistory,
+    isRegistering,
+    error: pushError,
+    registerForPushNotifications,
+    sendTestLocalNotification,
+    simulateRemoteNotification,
+    clearHistory,
+  } = usePushNotifications();
 
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -410,6 +427,143 @@ export const PreferencesScreen: React.FC = () => {
           />
         </PreferenceSection>
 
+        {/* Push Notification Integration */}
+        <PreferenceSection
+          title="Push Notification Center"
+          description="Natively manage and test secure Expo push notification workflows"
+          icon="📲"
+        >
+          {/* Main Controls Card */}
+          <PreferenceCard
+            title="Expo Registration Status"
+            subtitle={isDevice ? "Physical device mode" : "Simulator mode (using local notifications fallback)"}
+          >
+            {!isDevice && (
+              <View style={styles.warningBanner}>
+                <Text style={styles.warningText}>
+                  ⚠️ Simulator environment: Push tokens require a physical device. Foreground and local scheduling tests remain functional.
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.statusRow}>
+              <Text style={styles.statusLabel}>Permission Status:</Text>
+              <View style={[
+                styles.statusBadge,
+                permissionStatus === 'granted' ? styles.badgeGranted :
+                permissionStatus === 'denied' ? styles.badgeDenied : styles.badgeUndetermined
+              ]}>
+                <Text style={styles.badgeText}>
+                  {permissionStatus.toUpperCase()}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.tokenSection}>
+              <Text style={styles.statusLabel}>Expo Push Token:</Text>
+              {expoPushToken ? (
+                <View style={styles.tokenContainer}>
+                  <Text style={styles.tokenText} numberOfLines={1} ellipsizeMode="middle">
+                    {expoPushToken}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.copyButton}
+                    onPress={() => {
+                      Clipboard.setString(expoPushToken);
+                      Alert.alert('Copied!', 'Expo Push Token has been copied to your clipboard.');
+                    }}
+                  >
+                    <Text style={styles.copyButtonText}>Copy</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <Text style={styles.noTokenText}>
+                  {pushError ? `Error: ${pushError}` : 'No token generated. Register below to fetch.'}
+                </Text>
+              )}
+            </View>
+
+            <View style={styles.actionsContainer}>
+              <TouchableOpacity
+                style={[styles.primaryButton, isRegistering && styles.disabledButton]}
+                onPress={registerForPushNotifications}
+                disabled={isRegistering}
+              >
+                {isRegistering ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={styles.primaryButtonText}>Register Device & Fetch Token</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.testButtonsContainer}>
+              <TouchableOpacity
+                style={[styles.secondaryButton, permissionStatus !== 'granted' && styles.disabledButton]}
+                onPress={() => sendTestLocalNotification()}
+                disabled={permissionStatus !== 'granted'}
+              >
+                <Text style={styles.secondaryButtonText}>Local Test Alert</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.secondaryButton}
+                onPress={() => simulateRemoteNotification()}
+              >
+                <Text style={styles.secondaryButtonText}>Simulate Remote Push</Text>
+              </TouchableOpacity>
+            </View>
+          </PreferenceCard>
+
+          {/* Activity Logs Card */}
+          <PreferenceCard
+            title="Notification Activity Log"
+            subtitle="Logs of foreground and simulated notifications"
+          >
+            <View style={styles.logsHeader}>
+              <Text style={styles.logsCount}>
+                {notificationsHistory.length} Event(s) logged
+              </Text>
+              {notificationsHistory.length > 0 && (
+                <TouchableOpacity onPress={clearHistory}>
+                  <Text style={styles.clearLogsText}>Clear Log</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {notificationsHistory.length === 0 ? (
+              <Text style={styles.emptyLogsText}>
+                No notification activity recorded yet.
+              </Text>
+            ) : (
+              <View style={styles.logsList}>
+                {notificationsHistory.map((log) => (
+                  <View key={log.id} style={styles.logCard}>
+                    <View style={styles.logMeta}>
+                      <View style={[
+                        styles.logTypeBadge,
+                        log.type === 'push' ? styles.logTypePush :
+                        log.type === 'local' ? styles.logTypeLocal : styles.logTypeSimulated
+                      ]}>
+                        <Text style={styles.logTypeText}>{log.type.toUpperCase()}</Text>
+                      </View>
+                      <Text style={styles.logTime}>
+                        {new Date(log.timestamp).toLocaleTimeString()}
+                      </Text>
+                    </View>
+                    <Text style={styles.logTitle}>{log.title}</Text>
+                    <Text style={styles.logBody}>{log.body}</Text>
+                    {Object.keys(log.data).length > 0 && (
+                      <Text style={styles.logData}>
+                        Data: {JSON.stringify(log.data, null, 2)}
+                      </Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+            )}
+          </PreferenceCard>
+        </PreferenceSection>
+
         <View style={styles.footer}>
           <Text style={styles.footerText}>
             Preferences are saved automatically
@@ -488,5 +642,213 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 13,
     color: '#9ca3af',
+  },
+  warningBanner: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fef3c7',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  warningText: {
+    color: '#b45309',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  statusLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4b5563',
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 9999,
+  },
+  badgeGranted: {
+    backgroundColor: '#d1fae5',
+  },
+  badgeDenied: {
+    backgroundColor: '#fee2e2',
+  },
+  badgeUndetermined: {
+    backgroundColor: '#e5e7eb',
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
+  tokenSection: {
+    marginBottom: 16,
+  },
+  tokenContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 8,
+    paddingLeft: 12,
+    paddingRight: 4,
+    paddingVertical: 4,
+    marginTop: 8,
+  },
+  tokenText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#374151',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  copyButton: {
+    backgroundColor: '#6366f1',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  copyButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  noTokenText: {
+    fontSize: 13,
+    color: '#9ca3af',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  actionsContainer: {
+    marginBottom: 12,
+  },
+  primaryButton: {
+    backgroundColor: '#6366f1',
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#6366f1',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  primaryButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  disabledButton: {
+    opacity: 0.6,
+  },
+  testButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  secondaryButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  secondaryButtonText: {
+    color: '#4b5563',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  logsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    marginTop: 8,
+  },
+  logsCount: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4b5563',
+  },
+  clearLogsText: {
+    fontSize: 13,
+    color: '#ef4444',
+    fontWeight: '600',
+  },
+  emptyLogsText: {
+    fontSize: 13,
+    color: '#9ca3af',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  logsList: {
+    marginTop: 4,
+  },
+  logCard: {
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+  },
+  logMeta: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  logTypeBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  logTypePush: {
+    backgroundColor: '#dbeafe',
+  },
+  logTypeLocal: {
+    backgroundColor: '#e0f2fe',
+  },
+  logTypeSimulated: {
+    backgroundColor: '#f3e8ff',
+  },
+  logTypeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  logTime: {
+    fontSize: 11,
+    color: '#9ca3af',
+  },
+  logTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  logBody: {
+    fontSize: 13,
+    color: '#4b5563',
+    lineHeight: 18,
+  },
+  logData: {
+    fontSize: 11,
+    color: '#4b5563',
+    backgroundColor: '#f3f4f6',
+    padding: 6,
+    borderRadius: 4,
+    marginTop: 6,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
 });

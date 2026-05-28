@@ -13,7 +13,12 @@ export { PreferencesService } from './services/PreferencesService';
 export { usePreferences } from './hooks/usePreferences';
 
 // Components
-export * from './components';
+export {
+  PreferenceToggle,
+  PreferenceSelect,
+  PreferenceSlider,
+  PreferenceCard
+} from './components';
 
 // Screens
 export { PreferencesScreen } from './screens/PreferencesScreen';
