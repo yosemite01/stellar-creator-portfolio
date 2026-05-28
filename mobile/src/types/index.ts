@@ -4,13 +4,13 @@
 
 // ─── Network / Offline ────────────────────────────────────────────────────────
 
-export type NetworkState = 'online' | 'offline' | 'unknown';
+export type NetworkState = "online" | "offline" | "unknown";
 
-export type SyncStatus = 'synced' | 'pending' | 'syncing' | 'error';
+export type SyncStatus = "synced" | "pending" | "syncing" | "error";
 
 export interface QueuedOperation {
   id: string;
-  type: 'create' | 'update' | 'delete';
+  type: "create" | "update" | "delete";
   endpoint: string;
   payload: unknown;
   retries: number;
@@ -19,7 +19,7 @@ export interface QueuedOperation {
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
-export type ThemeMode = 'light' | 'dark' | 'system';
+export type ThemeMode = "light" | "dark" | "system";
 
 export interface ThemeColors {
   background: string;
@@ -36,7 +36,7 @@ export interface ThemeColors {
 
 // ─── Analytics / Dashboard ────────────────────────────────────────────────────
 
-export type AnalyticsPeriod = '7d' | '30d' | '90d' | 'all';
+export type AnalyticsPeriod = "7d" | "30d" | "90d" | "all";
 
 export interface MetricCard {
   id: string;
@@ -44,12 +44,12 @@ export interface MetricCard {
   value: number;
   previousValue: number;
   unit: string;
-  trend: 'up' | 'down' | 'flat';
+  trend: "up" | "down" | "flat";
   trendPct: number;
 }
 
 export interface ChartDataPoint {
-  label: string;       // x-axis label (date, week, etc.)
+  label: string; // x-axis label (date, week, etc.)
   value: number;
   secondaryValue?: number;
 }
@@ -74,6 +74,15 @@ export type RootStackParamList = {
   MainTabs: undefined;
   Dashboard: { period?: AnalyticsPeriod };
   LanguageSettings: undefined;
+  // Issue #542 — Creator Native Profile
+  CreatorProfile: { creatorId: string };
+  // Issue #544 — Freelancer Directory
+  FreelancerDirectory: undefined;
+  FreelancerProfile: { creatorId: string };
+  // Issue #545 — Image Picker
+  ImagePicker: { maxImages?: number };
+  // Issue #543 — Deep-Linking (Messaging already existed)
+  Messaging: { conversationId: string; recipientName?: string };
 };
 
 export type MainTabParamList = {

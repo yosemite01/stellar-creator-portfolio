@@ -1,23 +1,43 @@
 /**
  * AppNavigator — root navigation tree.
  *
- * Uses transition presets from transitions.ts (Issue 2).
- * All screens are themed via useTheme() (Issue 3).
+ * Uses transition presets from transitions.ts.
+ * All screens are themed via useTheme().
+ * Deep-linking wired via LINKING_OPTIONS (Issue #543).
+ *
+ * Screens registered:
+ *  - MainTabs (bottom tab navigator)
+ *  - Dashboard
+ *  - LanguageSettings
+ *  - CreatorProfile   (Issue #542)
+ *  - FreelancerDirectory (Issue #544)
+ *  - FreelancerProfile   (Issue #544)
+ *  - ImagePicker      (Issue #545)
+ *  - Messaging
  */
 
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import React from "react";
+import { StyleSheet, Text, View } from "react-native";
+import {
+  NavigationContainer,
+  DefaultTheme,
+  DarkTheme,
+} from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 
-import { DashboardScreen }      from '../screens/DashboardScreen';
-import { ThemeSettingsScreen }  from '../screens/ThemeSettingsScreen';
-import { OfflineScreen }        from '../screens/OfflineScreen';
-import { useTheme }             from '../theme/ThemeProvider';
-import { ScreenTransitions, GestureConfig } from './transitions';
-import { RootStackParamList, MainTabParamList } from '../types';
-import { FontSize, FontWeight } from '../theme/tokens';
+import { DashboardScreen } from "../screens/DashboardScreen";
+import { ThemeSettingsScreen } from "../screens/ThemeSettingsScreen";
+import { OfflineScreen } from "../screens/OfflineScreen";
+import { CreatorProfileScreen } from "../screens/CreatorProfileScreen";
+import { FreelancerDirectoryScreen } from "../screens/FreelancerDirectoryScreen";
+import { ImagePickerScreen } from "../screens/ImagePickerScreen";
+import { MessagingScreen } from "../screens/MessagingScreen";
+import { useTheme } from "../theme/ThemeProvider";
+import { ScreenTransitions, GestureConfig } from "./transitions";
+import { RootStackParamList, MainTabParamList } from "../types";
+import { FontSize, FontWeight } from "../theme/tokens";
+import { LINKING_OPTIONS } from "../config/DeepLinkConfig";
 
 // ─── Placeholder ──────────────────────────────────────────────────────────────
 
@@ -30,13 +50,13 @@ function Placeholder({ name }: { name: string }) {
   );
 }
 const ph = StyleSheet.create({
-  c: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  c: { flex: 1, alignItems: "center", justifyContent: "center" },
   t: { fontSize: FontSize.xl, fontWeight: FontWeight.semibold },
 });
 
 // ─── Navigators ───────────────────────────────────────────────────────────────
 
-const Tab   = createBottomTabNavigator<MainTabParamList>();
+const Tab = createBottomTabNavigator<MainTabParamList>();
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function MainTabs() {
@@ -46,7 +66,7 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor:   colors.primary,
+        tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textTertiary,
         tabBarStyle: {
           borderTopColor: colors.border,
@@ -60,35 +80,60 @@ function MainTabs() {
     >
       <Tab.Screen
         name="Home"
-        options={{ title: 'Home', tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🏠</Text> }}
+        options={{
+          title: "Home",
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 20, color }}>🏠</Text>
+          ),
+        }}
       >
         {() => <Placeholder name="Home" />}
       </Tab.Screen>
 
       <Tab.Screen
         name="Activity"
-        options={{ title: 'Activity', tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>⚡</Text> }}
+        options={{
+          title: "Activity",
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 20, color }}>⚡</Text>
+          ),
+        }}
       >
         {() => <Placeholder name="Activity" />}
       </Tab.Screen>
 
       <Tab.Screen
         name="Dashboard"
-        options={{ title: 'Dashboard', tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📊</Text> }}
+        options={{
+          title: "Dashboard",
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 20, color }}>📊</Text>
+          ),
+        }}
       >
         {() => <DashboardScreen />}
       </Tab.Screen>
 
       <Tab.Screen
         name="Profile"
-        options={{ title: 'Profile', tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text> }}
+        options={{
+          title: "Profile",
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 20, color }}>👤</Text>
+          ),
+        }}
       >
         {() => <Placeholder name="Profile" />}
       </Tab.Screen>
 
       <Tab.Screen
         name="Settings"
-        options={{ title: 'Settings', tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>⚙️</Text> }}
+        options={{
+          title: "Settings",
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 20, color }}>⚙️</Text>
+          ),
+        }}
       >
         {() => <ThemeSettingsScreen />}
       </Tab.Screen>
@@ -99,36 +144,143 @@ function MainTabs() {
 export function AppNavigator() {
   const { isDark, colors } = useTheme();
 
-  // Wire react-navigation theme to our dark mode state
   const navTheme = isDark
-    ? { ...DarkTheme,    colors: { ...DarkTheme.colors,    background: colors.background, card: colors.surface, border: colors.border, text: colors.text, primary: colors.primary, notification: colors.error } }
-    : { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: colors.background, card: colors.surface, border: colors.border, text: colors.text, primary: colors.primary, notification: colors.error } };
+    ? {
+        ...DarkTheme,
+        colors: {
+          ...DarkTheme.colors,
+          background: colors.background,
+          card: colors.surface,
+          border: colors.border,
+          text: colors.text,
+          primary: colors.primary,
+          notification: colors.error,
+        },
+      }
+    : {
+        ...DefaultTheme,
+        colors: {
+          ...DefaultTheme.colors,
+          background: colors.background,
+          card: colors.surface,
+          border: colors.border,
+          text: colors.text,
+          primary: colors.primary,
+          notification: colors.error,
+        },
+      };
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer theme={navTheme} linking={LINKING_OPTIONS}>
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
           ...GestureConfig,
         }}
       >
+        {/* ── Core tabs ─────────────────────────────────────────────────── */}
         <Stack.Screen
           name="MainTabs"
           component={MainTabs}
           options={{ animation: ScreenTransitions.MainTabs }}
         />
+
         <Stack.Screen
           name="Dashboard"
           options={{ animation: ScreenTransitions.Dashboard }}
         >
           {() => <DashboardScreen />}
         </Stack.Screen>
+
         <Stack.Screen
           name="LanguageSettings"
           options={{ animation: ScreenTransitions.LanguageSettings }}
         >
           {({ navigation }) => (
             <ThemeSettingsScreen onBack={() => navigation.goBack()} />
+          )}
+        </Stack.Screen>
+
+        {/* ── Issue #542 — Creator Native Profile ───────────────────────── */}
+        <Stack.Screen
+          name="CreatorProfile"
+          options={{ animation: "slide_from_right" }}
+        >
+          {({ route, navigation }) => (
+            <CreatorProfileScreen
+              creatorId={(route.params as any)?.creatorId}
+              onBack={() => navigation.goBack()}
+              onMessage={(id) =>
+                navigation.navigate("Messaging", {
+                  conversationId: `conv-${id}`,
+                  recipientName: "Creator",
+                })
+              }
+            />
+          )}
+        </Stack.Screen>
+
+        {/* ── Issue #544 — Freelancer Directory ─────────────────────────── */}
+        <Stack.Screen
+          name="FreelancerDirectory"
+          options={{ animation: "slide_from_right" }}
+        >
+          {({ navigation }) => (
+            <FreelancerDirectoryScreen
+              onBack={() => navigation.goBack()}
+              onSelectFreelancer={(id) =>
+                navigation.navigate("FreelancerProfile", { creatorId: id })
+              }
+            />
+          )}
+        </Stack.Screen>
+
+        <Stack.Screen
+          name="FreelancerProfile"
+          options={{ animation: "slide_from_right" }}
+        >
+          {({ route, navigation }) => (
+            <CreatorProfileScreen
+              creatorId={(route.params as any)?.creatorId}
+              onBack={() => navigation.goBack()}
+              onMessage={(id) =>
+                navigation.navigate("Messaging", {
+                  conversationId: `conv-${id}`,
+                  recipientName: "Freelancer",
+                })
+              }
+            />
+          )}
+        </Stack.Screen>
+
+        {/* ── Issue #545 — Image Picker ──────────────────────────────────── */}
+        <Stack.Screen
+          name="ImagePicker"
+          options={{ animation: "slide_from_bottom" }}
+        >
+          {({ route, navigation }) => (
+            <ImagePickerScreen
+              maxImages={(route.params as any)?.maxImages ?? 10}
+              onBack={() => navigation.goBack()}
+              onUploadComplete={() => navigation.goBack()}
+            />
+          )}
+        </Stack.Screen>
+
+        {/* ── Messaging (used by deep-link + creator profile CTA) ───────── */}
+        <Stack.Screen
+          name="Messaging"
+          options={{ animation: "slide_from_right" }}
+        >
+          {({ route, navigation }) => (
+            <MessagingScreen
+              conversationId={
+                (route.params as any)?.conversationId ?? "default"
+              }
+              currentUserId="user-1"
+              recipientName={(route.params as any)?.recipientName ?? "User"}
+              onBack={() => navigation.goBack()}
+            />
           )}
         </Stack.Screen>
       </Stack.Navigator>
