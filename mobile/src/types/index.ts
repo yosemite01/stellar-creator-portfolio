@@ -68,6 +68,37 @@ export interface DashboardData {
   }>;
 }
 
+export interface PortfolioSummary {
+  id: string;
+  title: string;
+  subtitle: string;
+  creator: string;
+  value: string;
+  followers: number;
+  change: number;
+  tags: string[];
+}
+
+export type ProjectBountyKind = "project" | "bounty";
+export type ProjectBountyStatus = "Live" | "Closing" | "Awarded";
+
+export interface ProjectBountyItem {
+  id: string;
+  kind: ProjectBountyKind;
+  title: string;
+  subtitle: string;
+  reward: string;
+  due: string;
+  status: ProjectBountyStatus;
+  tags: string[];
+}
+
+export interface HomeData {
+  trendingPortfolios: PortfolioSummary[];
+  quickMetrics: MetricCard[];
+  projectBountyItems: ProjectBountyItem[];
+}
+
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
 export type RootStackParamList = {
@@ -83,6 +114,8 @@ export type RootStackParamList = {
   ImagePicker: { maxImages?: number };
   // Issue #543 — Deep-Linking (Messaging already existed)
   Messaging: { conversationId: string; recipientName?: string };
+  DetailsView: { itemId?: string };
+  BiometricAuth: undefined;
 };
 
 export type MainTabParamList = {

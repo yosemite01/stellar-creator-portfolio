@@ -33,6 +33,30 @@ import { CreatorProfileScreen } from "../screens/CreatorProfileScreen";
 import { FreelancerDirectoryScreen } from "../screens/FreelancerDirectoryScreen";
 import { ImagePickerScreen } from "../screens/ImagePickerScreen";
 import { MessagingScreen } from "../screens/MessagingScreen";
+import { DashboardScreen }      from '../screens/DashboardScreen';
+import { ProfileScreen }        from '../screens/ProfileScreen';
+import { DetailsView }          from '../screens/DetailsView';
+import { ThemeSettingsScreen }  from '../screens/ThemeSettingsScreen';
+import { OfflineScreen }        from '../screens/OfflineScreen';
+import { useTheme }             from '../theme/ThemeProvider';
+import { ScreenTransitions, GestureConfig } from './transitions';
+import { RootStackParamList, MainTabParamList } from '../types';
+import { FontSize, FontWeight } from '../theme/tokens';
+import React from "react";
+import { StyleSheet, Text, View } from "react-native";
+import {
+  NavigationContainer,
+  DefaultTheme,
+  DarkTheme,
+} from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+
+import { DashboardScreen } from "../screens/DashboardScreen";
+import { ThemeSettingsScreen } from "../screens/ThemeSettingsScreen";
+import { OfflineScreen } from "../screens/OfflineScreen";
+import { HomeScreen } from "../screens/HomeScreen";
+import { BiometricAuthScreen } from "../screens/BiometricAuthScreen";
 import { useTheme } from "../theme/ThemeProvider";
 import { ScreenTransitions, GestureConfig } from "./transitions";
 import { RootStackParamList, MainTabParamList } from "../types";
@@ -87,7 +111,7 @@ function MainTabs() {
           ),
         }}
       >
-        {() => <Placeholder name="Home" />}
+        {() => <HomeScreen />}
       </Tab.Screen>
 
       <Tab.Screen
@@ -123,7 +147,7 @@ function MainTabs() {
           ),
         }}
       >
-        {() => <Placeholder name="Profile" />}
+        {() => <ProfileScreen />}
       </Tab.Screen>
 
       <Tab.Screen
@@ -192,6 +216,14 @@ export function AppNavigator() {
           {() => <DashboardScreen />}
         </Stack.Screen>
 
+        <Stack.Screen
+          name="DetailsView"
+          options={{ animation: ScreenTransitions.Dashboard }}
+        >
+          {({ navigation }) => (
+            <DetailsView onBack={() => navigation.goBack()} />
+          )}
+        </Stack.Screen>
         <Stack.Screen
           name="LanguageSettings"
           options={{ animation: ScreenTransitions.LanguageSettings }}
@@ -283,6 +315,11 @@ export function AppNavigator() {
             />
           )}
         </Stack.Screen>
+        <Stack.Screen
+          name="BiometricAuth"
+          component={BiometricAuthScreen}
+          options={{ animation: ScreenTransitions.Dashboard }}
+        />
       </Stack.Navigator>
     </NavigationContainer>
   );
