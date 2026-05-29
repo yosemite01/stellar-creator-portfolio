@@ -22,6 +22,8 @@ import {
 import * as Haptics from "expo-haptics";
 import { useTheme } from "../theme/ThemeProvider";
 import { InfiniteScrollList } from "../components/InfiniteScrollList";
+import { ProposalModal, BountySummary } from "../components/ProposalModal";
+import { ProposalFields } from "../hooks/useProposalForm";
 import { FontSize, FontWeight, Radius, Spacing } from "../theme/tokens";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -260,6 +262,7 @@ export function BountyListScreen({
   const { colors, isDark } = useTheme();
   const [selectedDifficulty, setSelectedDifficulty] = useState<"All" | Difficulty>("All");
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [proposalBounty, setProposalBounty] = useState<BountySummary | null>(null);
 
   // Simulated async fetcher — replace with real API call
   const fetchBounties = useCallback(
@@ -290,15 +293,46 @@ export function BountyListScreen({
     setSelectedCategory(c);
   }, []);
 
+  // Open proposal modal instead of navigating away
+  const handleBountyPress = useCallback(
+    (id: string) => {
+      // Find the bounty from the generated data to build the summary
+      // In production this would come from the paginated data store
+      const idx = parseInt(id.replace("bounty-", ""), 10);
+      const bounties = generateBounties(1, idx);
+      if (bounties[0]) {
+        setProposalBounty({
+          id: bounties[0].id,
+          title: bounties[0].title,
+          budget: bounties[0].budget,
+          currency: bounties[0].currency,
+          difficulty: bounties[0].difficulty,
+          category: bounties[0].category,
+        });
+      }
+      onSelectBounty?.(id);
+    },
+    [onSelectBounty]
+  );
+
+  const handleProposalSubmit = useCallback(
+    async (bountyId: string, fields: ProposalFields) => {
+      // Replace with real API call: POST /api/bounties/:id/apply
+      await new Promise((r) => setTimeout(r, 800));
+      // Throw on error: throw new Error("Server error message")
+    },
+    []
+  );
+
   const renderItem = useCallback(
     (item: Bounty) => (
       <BountyCard
         item={item}
-        onPress={onSelectBounty ?? (() => {})}
+        onPress={handleBountyPress}
         colors={colors}
       />
     ),
-    [onSelectBounty, colors]
+    [handleBountyPress, colors]
   );
 
   const keyExtractor = useCallback(
@@ -436,6 +470,13 @@ export function BountyListScreen({
             </Text>
           </View>
         }
+      />
+
+      <ProposalModal
+        visible={proposalBounty !== null}
+        bounty={proposalBounty}
+        onClose={() => setProposalBounty(null)}
+        onSubmit={handleProposalSubmit}
       />
     </SafeAreaView>
   );
