@@ -13,6 +13,7 @@ pub enum BountyStatus {
     Completed = 2,
     Disputed = 3,
     Cancelled = 4,
+    PendingCompletion = 5, // #160: freelancer signalled work done, awaiting creator approval
 }
 
 /// Bounty Struct
@@ -171,6 +172,34 @@ impl BountyContract {
         true
     }
 
+    /// Called by the selected freelancer to signal work is done.
+    /// Transitions the bounty from InProgress → PendingCompletion. (#160)
+    /// The creator must then call complete_bounty to approve.
+    pub fn submit_completion(env: Env, bounty_id: u64, freelancer: Address) -> bool {
+        freelancer.require_auth();
+
+        let bounty_key = (Symbol::new(&env, "bounty"), bounty_id);
+        let mut bounty = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), Bounty>(&bounty_key)
+            .expect("Bounty not found");
+
+        assert!(
+            bounty.status == BountyStatus::InProgress,
+            "Bounty not in progress"
+        );
+        assert!(
+            bounty.selected_freelancer == Some(freelancer.clone()),
+            "Only the selected freelancer can submit completion"
+        );
+
+        bounty.status = BountyStatus::PendingCompletion;
+        env.storage().persistent().set(&bounty_key, &bounty);
+
+        true
+    }
+
     pub fn complete_bounty(env: Env, bounty_id: u64) -> bool {
         let bounty_key = (Symbol::new(&env, "bounty"), bounty_id);
         let mut bounty = env
@@ -180,7 +209,13 @@ impl BountyContract {
             .expect("Bounty not found");
 
         bounty.creator.require_auth();
-        assert!(bounty.status == BountyStatus::InProgress, "Bounty not in progress");
+        // #160: Creator can only approve completion after the freelancer has
+        // signalled work is done via submit_completion (PendingCompletion).
+        // Direct completion from InProgress is no longer allowed.
+        assert!(
+            bounty.status == BountyStatus::PendingCompletion,
+            "Freelancer must submit completion before creator can approve"
+        );
 
         bounty.status = BountyStatus::Completed;
         bounty.completed_at = Some(env.ledger().timestamp());

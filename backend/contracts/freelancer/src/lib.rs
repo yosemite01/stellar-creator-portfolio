@@ -128,10 +128,15 @@ impl FreelancerContract {
 
     /// Update the rating for a freelancer. Only the contract owner may call this
     /// to prevent self-rating abuse. (#312)
+    ///
+    /// `new_rating` must be in [0, 500] (0–5 stars × 100). (#183)
     pub fn update_rating(env: Env, freelancer: Address, new_rating: u32) -> bool {
         // #312: owner-only — ratings must come from the platform, not self
         let owner = Self::get_owner(&env);
         owner.require_auth();
+
+        // #183: Validate rating is within [0, 500] (0.0–5.0 stars × 100)
+        assert!(new_rating <= 500, "Rating must be between 0 and 500");
 
         let profile_key = (Symbol::new(&env, "profile"), freelancer);
         let mut profile = env
