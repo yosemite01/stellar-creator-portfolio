@@ -1,9 +1,11 @@
 [workspace]
 members = [
     "contracts/bounty",
+    "contracts/core",
     "contracts/escrow",
     "contracts/freelancer",
     "contracts/governance",
+    "contracts/identity",
     "contracts/stellar_insights",
     "services/api",
     "services/auth",
