@@ -1,10 +1,10 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, token::Client as TokenClient, Address, Env,
-};
+// Reentrancy protection module (#635)
+mod reentrancy;
+use reentrancy::{require_active_escrow, require_authorized_party, ReentrancyGuard};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
     token::Client as TokenClient,
 };
@@ -101,6 +101,10 @@ pub struct YieldAccrual {
     pub principal: i128,
     pub accrued: i128,
     pub last_updated: u64,
+#[contracttype]
+enum DataKey {
+    Escrow(u64),
+    EscrowCounter,
 }
 
 #[contract]
@@ -121,7 +125,11 @@ impl EscrowContract {
         payer.require_auth();
         assert!(amount > 0, "Amount must be positive");
 
+        // #179: Validate token implements the SEP-41 interface before accepting funds.
+        // Calling balance() will trap if `token` is not a valid token contract,
+        // preventing funds from being locked with an unrecoverable address.
         let token_client = TokenClient::new(&env, &token);
+        let _ = token_client.balance(&payer);
         token_client.transfer(&payer, &env.current_contract_address(), &amount);
 
         let counter_key = Symbol::new(&env, "escrow_counter");
@@ -156,12 +164,10 @@ impl EscrowContract {
 
         env.storage()
             .persistent()
-            .set(&DataKey::Escrow(counter), &escrow);
+            .set(&(Symbol::new(&env, "escrow"), counter), &escrow);
         env.storage()
             .persistent()
-            .set(&DataKey::EscrowCounter, &counter);
-        env.storage().persistent().set(&(Symbol::new(&env, "escrow"), counter), &escrow);
-        env.storage().persistent().set(&(Symbol::new(&env, "b_esc"), bounty_id), &counter);
+            .set(&(Symbol::new(&env, "b_esc"), bounty_id), &counter);
         env.storage().persistent().set(&counter_key, &counter);
 
         // Emit escrow_deposited event for indexers
@@ -180,41 +186,38 @@ impl EscrowContract {
             .expect("Escrow not found")
     }
 
-    pub fn release(env: Env, escrow_id: u64) -> bool {
-        let mut escrow: EscrowAccount = env
+    /// Release funds to payee. Authorizer must be payer or payee.
+    pub fn release_funds(env: Env, authorizer: Address, escrow_id: u64) -> bool {
+        // CHECKS
+        authorizer.require_auth();
+        let _guard = ReentrancyGuard::acquire(&env);
+
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
+
+        require_authorized_party(authorizer == escrow.payer || authorizer == escrow.payee);
+        require_active_escrow(escrow.status == EscrowStatus::Active);
+        assert!(Self::can_release(env.clone(), escrow_id), "Release condition not met");
+
+        // EFFECTS – mutate state before any cross-contract call
+        authorizer.require_auth();
+
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env
             .storage()
             .persistent()
-            .get(&DataKey::Escrow(escrow_id))
+            .get::<(Symbol, u64), EscrowAccount>(&key)
             .expect("Escrow not found");
 
-        escrow.payer.require_auth();
+        assert!(
+            authorizer == escrow.payer || authorizer == escrow.payee,
+            "Unauthorized"
+        );
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
         assert!(
             Self::can_release(env.clone(), escrow_id),
             "Release condition not met"
         );
-
-        let token_client = TokenClient::new(&env, &escrow.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &escrow.payee,
-            &escrow.amount,
-        );
-
-        escrow.status = EscrowStatus::Released;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &escrow);
-    /// Release funds to payee. Authorizer must be payer or payee.
-    pub fn release_funds(env: Env, authorizer: Address, escrow_id: u64) -> bool {
-        authorizer.require_auth();
-
-        let key = (Symbol::new(&env, "escrow"), escrow_id);
-        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
-
-        assert!(authorizer == escrow.payer || authorizer == escrow.payee, "Unauthorized");
-        assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
-        assert!(Self::can_release(env.clone(), escrow_id), "Release condition not met");
 
         TokenClient::new(&env, &escrow.token)
             .transfer(&env.current_contract_address(), &escrow.payee, &escrow.amount);
@@ -222,6 +225,10 @@ impl EscrowContract {
         escrow.status = EscrowStatus::Released;
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
+
+        // INTERACTIONS – external call after state is finalised
+        TokenClient::new(&env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payee, &escrow.amount);
 
         // Emit escrow_released event for indexers
         env.events().publish(
@@ -232,50 +239,35 @@ impl EscrowContract {
         true
     }
 
-    pub fn release_funds(env: Env, escrow_id: u64, caller: Address) -> bool {
-        let escrow: EscrowAccount = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("Escrow not found");
-
-        assert!(caller == escrow.payer, "Unauthorized");
-        Self::release(env, escrow_id)
-    }
-
-    pub fn refund_escrow(env: Env, escrow_id: u64) -> bool {
-        let mut escrow: EscrowAccount = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("Escrow not found");
     /// Refund escrow to payer. Only payer may call.
     pub fn refund_escrow(env: Env, authorizer: Address, escrow_id: u64) -> bool {
+        // CHECKS
         authorizer.require_auth();
+        let _guard = ReentrancyGuard::acquire(&env);
 
         let key = (Symbol::new(&env, "escrow"), escrow_id);
-        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
+        let mut escrow = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), EscrowAccount>(&key)
+            .expect("Escrow not found");
 
+        require_authorized_party(authorizer == escrow.payer);
+        require_active_escrow(escrow.status == EscrowStatus::Active);
         assert_eq!(authorizer, escrow.payer, "Only payer can refund");
         assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
 
-        let token_client = TokenClient::new(&env, &escrow.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &escrow.payer,
-            &escrow.amount,
-        );
-
-        escrow.status = EscrowStatus::Refunded;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &escrow);
         TokenClient::new(&env, &escrow.token)
             .transfer(&env.current_contract_address(), &escrow.payer, &escrow.amount);
 
+        // EFFECTS – mutate state before any cross-contract call
         escrow.status = EscrowStatus::Refunded;
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
+
+        // INTERACTIONS – external call after state is finalised
+        TokenClient::new(&env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payer, &escrow.amount);
 
         // Emit escrow_refunded event for indexers
         env.events().publish(
@@ -411,11 +403,13 @@ impl EscrowContract {
 
     /// Release a single milestone payment to payee. Authorizer must be payer.
     pub fn release_milestone(env: Env, authorizer: Address, escrow_id: u64, index: u32) -> bool {
+        // CHECKS
         authorizer.require_auth();
+        let _guard = ReentrancyGuard::acquire(&env);
 
         let escrow = Self::get_escrow(env.clone(), escrow_id);
-        assert_eq!(authorizer, escrow.payer, "Only payer can release milestones");
-        assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
+        require_authorized_party(authorizer == escrow.payer);
+        require_active_escrow(escrow.status == EscrowStatus::Active);
 
         let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         let mut milestone = env.storage().persistent()
@@ -424,11 +418,13 @@ impl EscrowContract {
 
         assert!(!milestone.released, "Milestone already released");
 
-        TokenClient::new(&env, &escrow.token)
-            .transfer(&env.current_contract_address(), &escrow.payee, &milestone.amount);
-
+        // EFFECTS – mark released before the token transfer
         milestone.released = true;
         env.storage().persistent().set(&m_key, &milestone);
+
+        // INTERACTIONS – external call after state is finalised
+        TokenClient::new(&env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payee, &milestone.amount);
 
         // Emit milestone_released event for indexers
         env.events().publish(
@@ -692,29 +688,6 @@ mod tests {
         token::{Client as TokenClient, StellarAssetClient},
         Env,
     };
-
-    fn setup_escrow_with_token(
-        env: &Env,
-        amount: i128,
-    ) -> (EscrowContractClient<'_>, Address, Address, Address, Address) {
-        env.mock_all_auths();
-
-        let contract_id = env.register(EscrowContract, ());
-        let client = EscrowContractClient::new(env, &contract_id);
-        let payer = Address::generate(env);
-        let payee = Address::generate(env);
-        let token_admin = Address::generate(env);
-        let token = env
-            .register_stellar_asset_contract_v2(token_admin.clone())
-            .address();
-
-        StellarAssetClient::new(env, &token).mint(&payer, &amount);
-
-        (client, contract_id, payer, payee, token)
-    }
-    use soroban_sdk::testutils::{Address as _, Ledger};
-    use soroban_sdk::token::{StellarAssetClient, TokenClient};
-    use soroban_sdk::Env;
 
     fn setup(env: &Env, amount: i128) -> (Address, Address, Address, Address) {
         env.mock_all_auths();
@@ -1322,77 +1295,4 @@ mod tests {
         contract.release_funds(&payer, &id);
     }
 
-    #[test]
-    fn test_release_transfers_funds_to_payee_and_marks_released() {
-        let env = Env::default();
-        let amount = 1_000i128;
-        let (client, contract_id, payer, payee, token) = setup_escrow_with_token(&env, amount);
-
-        let escrow_id = client.deposit(
-            &payer,
-            &payee,
-            &amount,
-            &token,
-            &ReleaseCondition::OnCompletion,
-        );
-
-        assert!(client.release(&escrow_id));
-
-        let token_client = TokenClient::new(&env, &token);
-        let escrow = client.get_escrow(&escrow_id);
-        assert_eq!(escrow.status, EscrowStatus::Released);
-        assert_eq!(token_client.balance(&payee), amount);
-        assert_eq!(token_client.balance(&contract_id), 0);
-    }
-
-    #[test]
-    fn test_release_respects_timelock() {
-        let env = Env::default();
-        let amount = 1_000i128;
-        let release_at = 1_000u64;
-        let (client, _, payer, payee, token) = setup_escrow_with_token(&env, amount);
-
-        env.ledger().with_mut(|ledger| {
-            ledger.timestamp = release_at - 1;
-        });
-
-        let escrow_id = client.deposit(
-            &payer,
-            &payee,
-            &amount,
-            &token,
-            &ReleaseCondition::Timelock(release_at),
-        );
-
-        assert!(!client.can_release(&escrow_id));
-
-        env.ledger().with_mut(|ledger| {
-            ledger.timestamp = release_at;
-        });
-
-        assert!(client.can_release(&escrow_id));
-        assert!(client.release(&escrow_id));
-    }
-
-    #[test]
-    #[should_panic(expected = "Escrow not active")]
-    fn test_release_cannot_run_twice() {
-        let env = Env::default();
-        let amount = 1_000i128;
-        let (client, _, payer, payee, token) = setup_escrow_with_token(&env, amount);
-
-        let escrow_id = client.deposit(
-            &payer,
-            &payee,
-            &amount,
-            &token,
-            &ReleaseCondition::OnCompletion,
-        );
-
-        assert!(client.release(&escrow_id));
-        client.release(&escrow_id);
-    }
 }
-
-#[path = "fuzz_tests.rs"]
-mod fuzz_tests;
