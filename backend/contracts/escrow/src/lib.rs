@@ -92,7 +92,11 @@ impl EscrowContract {
         payer.require_auth();
         assert!(amount > 0, "Amount must be positive");
 
+        // #179: Validate token implements the SEP-41 interface before accepting funds.
+        // Calling balance() will trap if `token` is not a valid token contract,
+        // preventing funds from being locked with an unrecoverable address.
         let token_client = TokenClient::new(&env, &token);
+        let _ = token_client.balance(&payer);
         token_client.transfer(&payer, &env.current_contract_address(), &amount);
 
         let counter_key = Symbol::new(&env, "escrow_counter");
@@ -127,12 +131,10 @@ impl EscrowContract {
 
         env.storage()
             .persistent()
-            .set(&DataKey::Escrow(counter), &escrow);
+            .set(&(Symbol::new(&env, "escrow"), counter), &escrow);
         env.storage()
             .persistent()
-            .set(&DataKey::EscrowCounter, &counter);
-        env.storage().persistent().set(&(Symbol::new(&env, "escrow"), counter), &escrow);
-        env.storage().persistent().set(&(Symbol::new(&env, "b_esc"), bounty_id), &counter);
+            .set(&(Symbol::new(&env, "b_esc"), bounty_id), &counter);
         env.storage().persistent().set(&counter_key, &counter);
 
         // Emit escrow_deposited event for indexers
@@ -165,6 +167,28 @@ impl EscrowContract {
         assert!(Self::can_release(env.clone(), escrow_id), "Release condition not met");
 
         // EFFECTS – mutate state before any cross-contract call
+        authorizer.require_auth();
+
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), EscrowAccount>(&key)
+            .expect("Escrow not found");
+
+        assert!(
+            authorizer == escrow.payer || authorizer == escrow.payee,
+            "Unauthorized"
+        );
+        assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
+        assert!(
+            Self::can_release(env.clone(), escrow_id),
+            "Release condition not met"
+        );
+
+        TokenClient::new(&env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payee, &escrow.amount);
+
         escrow.status = EscrowStatus::Released;
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
@@ -189,10 +213,19 @@ impl EscrowContract {
         let _guard = ReentrancyGuard::acquire(&env);
 
         let key = (Symbol::new(&env, "escrow"), escrow_id);
-        let mut escrow = env.storage().persistent().get::<(Symbol, u64), EscrowAccount>(&key).expect("Escrow not found");
+        let mut escrow = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), EscrowAccount>(&key)
+            .expect("Escrow not found");
 
         require_authorized_party(authorizer == escrow.payer);
         require_active_escrow(escrow.status == EscrowStatus::Active);
+        assert_eq!(authorizer, escrow.payer, "Only payer can refund");
+        assert!(escrow.status == EscrowStatus::Active, "Escrow not active");
+
+        TokenClient::new(&env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payer, &escrow.amount);
 
         // EFFECTS – mutate state before any cross-contract call
         escrow.status = EscrowStatus::Refunded;
