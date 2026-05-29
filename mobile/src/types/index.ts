@@ -117,6 +117,9 @@ export type RootStackParamList = {
   Messaging: { conversationId: string; recipientName?: string };
   DetailsView: { itemId?: string };
   BiometricAuth: undefined;
+  // Infinite scroll screens
+  BountyList: undefined;
+  CreatorDirectory: undefined;
 };
 
 export type MainTabParamList = {
