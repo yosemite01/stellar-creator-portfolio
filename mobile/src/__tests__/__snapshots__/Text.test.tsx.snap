@@ -1,0 +1,45 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Text matches the snapshot in light and dark mode: headingLarge-dark 1`] = `
+<Text
+  style={
+    [
+      [
+        {
+          "fontSize": 24,
+          "fontWeight": "600",
+          "lineHeight": 32,
+        },
+        {
+          "color": "#f8fafc",
+        },
+      ],
+      undefined,
+    ]
+  }
+>
+  Title
+</Text>
+`;
+
+exports[`Text matches the snapshot in light and dark mode: headingLarge-light 1`] = `
+<Text
+  style={
+    [
+      [
+        {
+          "fontSize": 24,
+          "fontWeight": "600",
+          "lineHeight": 32,
+        },
+        {
+          "color": "#0f172a",
+        },
+      ],
+      undefined,
+    ]
+  }
+>
+  Title
+</Text>
+`;
