@@ -40,7 +40,10 @@ export default function AnalyticsClient({ plausibleDomain: _ }: Props) {
       trackJourneyStep(previousPath.current, fullPath);
     }
 
-    trackPageview(fullPath, typeof document !== "undefined" ? document.referrer : undefined);
+    trackPageview(
+      fullPath,
+      typeof document !== "undefined" ? document.referrer : undefined,
+    );
     maybeTrackDetailViews(pathname);
     previousPath.current = fullPath;
 
@@ -53,11 +56,11 @@ export default function AnalyticsClient({ plausibleDomain: _ }: Props) {
       if (!pathname) return;
       const target = event.target as HTMLElement | null;
 
-      if (shouldTrackHeatmap(pathname)) {
+      if (shouldTrackHeatmap(pathname) && typeof window !== "undefined") {
         trackHeatmapClick(
           pathname,
           event.clientX / window.innerWidth,
-          event.clientY / window.innerHeight
+          event.clientY / window.innerHeight,
         );
       }
 
@@ -78,8 +81,11 @@ export default function AnalyticsClient({ plausibleDomain: _ }: Props) {
       }
     };
 
-    document.addEventListener("click", handleClick, { capture: true });
-    return () => document.removeEventListener("click", handleClick, { capture: true });
+    if (typeof document !== "undefined") {
+      document.addEventListener("click", handleClick, { capture: true });
+      return () =>
+        document.removeEventListener("click", handleClick, { capture: true });
+    }
   }, [pathname]);
 
   useEffect(() => {
@@ -88,7 +94,7 @@ export default function AnalyticsClient({ plausibleDomain: _ }: Props) {
       if (!form) return;
 
       const searchInput = form.querySelector<HTMLInputElement>(
-        'input[type="search"], input[name*="search"], input[data-analytics="search"]'
+        'input[type="search"], input[name*="search"], input[data-analytics="search"]',
       );
 
       if (searchInput?.value) {
@@ -103,22 +109,31 @@ export default function AnalyticsClient({ plausibleDomain: _ }: Props) {
 
       if (element.dataset?.filterName) {
         const value = (element as HTMLInputElement).value ?? "selected";
-        trackFilterUsage(element.dataset.filterName, value, pathname || "unknown");
+        trackFilterUsage(
+          element.dataset.filterName,
+          value,
+          pathname || "unknown",
+        );
       }
     };
 
-    document.addEventListener("submit", handleSubmit, true);
-    document.addEventListener("change", handleChange, true);
-    return () => {
-      document.removeEventListener("submit", handleSubmit, true);
-      document.removeEventListener("change", handleChange, true);
-    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("submit", handleSubmit, true);
+      document.addEventListener("change", handleChange, true);
+      return () => {
+        document.removeEventListener("submit", handleSubmit, true);
+        document.removeEventListener("change", handleChange, true);
+      };
+    }
   }, [pathname]);
 
   useEffect(() => {
     const handleScroll = () => {
       if (!pathname) return;
-      const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+      if (typeof window === "undefined" || typeof document === "undefined")
+        return;
+      const scrollHeight =
+        document.documentElement.scrollHeight - window.innerHeight;
       if (scrollHeight <= 0) return;
       const position = window.scrollY;
       const depth = Math.round((position / scrollHeight) * 100);
@@ -130,15 +145,19 @@ export default function AnalyticsClient({ plausibleDomain: _ }: Props) {
       });
     };
 
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
+    if (typeof window !== "undefined") {
+      window.addEventListener("scroll", handleScroll, { passive: true });
+      return () => window.removeEventListener("scroll", handleScroll);
+    }
   }, [pathname]);
 
   return null;
 }
 
 const shouldTrackHeatmap = (path: string) => {
-  return ["/", "/creators", "/bounties", "/search"].some((p) => path.startsWith(p));
+  return ["/", "/creators", "/bounties", "/search"].some((p) =>
+    path.startsWith(p),
+  );
 };
 
 const maybeTrackDetailViews = (path: string) => {
