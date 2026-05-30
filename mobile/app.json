@@ -64,10 +64,12 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
     },
     "scheme": "stellar",
     "plugins": [
+      "expo-router",
       "expo-localization",
       "@react-native-async-storage/async-storage",
       "expo-network",
