@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     await Promise.all(
       creatorIds.map(async (creatorId) => {
         try {
-          const { reviews, total } = getReviewsForCreator(creatorId, {
+          const { reviews, total } = await getReviewsForCreator(creatorId, {
             limit: 10,
             page: 1,
           });

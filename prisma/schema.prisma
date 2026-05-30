@@ -339,3 +339,127 @@ model MatchNotification {
 
   @@index([userId, createdAt])
 }
+
+// ── Escrow Deadlock Prevention ───────────────────────────────────────────
+
+model Escrow {
+  id              String   @id @default(cuid())
+  creatorId       String
+  clientId        String
+  amount          Int
+  status          String   @default("active")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  releasedAt      DateTime?
+  refundedAt      DateTime?
+  disputedAt      DateTime?
+  disputeReason   String?
+  version         Int      @default(1)
+
+  @@index([creatorId])
+  @@index([clientId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([creatorId, status])
+  @@index([clientId, status])
+}
+
+model Balance {
+  id        String   @id @default(cuid())
+  userId    String
+  available Int      @default(0)
+  locked    Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Transaction {
+  id        String   @id @default(cuid())
+  userId    String
+  escrowId  String?
+  type      String
+  amount    Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([escrowId])
+  @@index([type])
+}
+
+model Dispute {
+  id        String   @id @default(cuid())
+  escrowId  String
+  creatorId String
+  clientId  String
+  status    String   @default("open")
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([escrowId])
+  @@index([creatorId])
+  @@index([clientId])
+  @@index([status])
+}
+
+// ── Soroban Sequence Management ──────────────────────────────────────────
+
+model SequenceLock {
+  accountId  String   @id
+  lockedBy   String   @default("")
+  lockedAt   DateTime @default(now())
+  expiresAt  DateTime
+  sequence   BigInt   @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model TransactionQueue {
+  id          String   @id @default(cuid())
+  accountId   String
+  contractId  String
+  method      String
+  args        Json
+  status      String   @default("pending")
+  sequence    BigInt?
+  txHash      String?
+  error       String?
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(3)
+  createdAt   DateTime @default(now())
+  submittedAt DateTime?
+  confirmedAt DateTime?
+  updatedAt   DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([accountId, status])
+}
+
+model SorobanTransaction {
+  id        String   @id @default(cuid())
+  accountId String
+  contractId String
+  method    String
+  sequence  BigInt
+  txHash    String   @unique
+  status    String   @default("pending")
+  gasUsed   BigInt?
+  result    Json?
+  error     String?
+  submittedAt DateTime
+  confirmedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([txHash])
+  @@index([status])
+  @@unique([accountId, sequence])
+}
