@@ -1,6 +1,7 @@
 /**
- * MessagingScreen — Issue #558
+ * MessagingScreen — Issue #558 + #617
  * "Develop specific distinct interactive Direct Messaging layout architectures"
+ * + Real-Time Multi-Language Translation in Chat
  *
  * Features:
  *  - Real-time message display with optimized FlatList
@@ -13,6 +14,9 @@
  *  - Full dark mode support
  *  - Zero frame drops with optimized rendering
  *  - Accessibility support
+ *  - [#617] Inline per-message translation toggle
+ *  - [#617] Dynamic locale switcher for translation target
+ *  - [#617] Low-latency translation with in-memory cache
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,10 +24,12 @@ import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   RefreshControl,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -33,6 +39,8 @@ import {
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../theme/ThemeProvider';
 import { FontSize, FontWeight, Radius, Spacing } from '../theme/tokens';
+import i18n, { AppLocale, LOCALE_INFO, SUPPORTED_LOCALES } from '../i18n';
+import { useChatTranslation } from '../hooks/useChatTranslation';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,7 +65,7 @@ interface MessagingScreenProps {
 const MOCK_MESSAGES: Message[] = [
   {
     id: '1',
-    text: 'Hey! I saw your portfolio and I\'m really impressed with your design work.',
+    text: "Hey! I saw your portfolio and I'm really impressed with your design work.",
     senderId: 'user-2',
     senderName: 'Alice Johnson',
     timestamp: new Date(Date.now() - 3600000),
@@ -65,7 +73,7 @@ const MOCK_MESSAGES: Message[] = [
   },
   {
     id: '2',
-    text: 'Thank you! I appreciate that. What kind of project are you working on?',
+    text: "Thank you! I appreciate that. What kind of project are you working on?",
     senderId: 'user-1',
     senderName: 'You',
     timestamp: new Date(Date.now() - 3500000),
@@ -73,7 +81,7 @@ const MOCK_MESSAGES: Message[] = [
   },
   {
     id: '3',
-    text: 'We\'re building a new fintech app and need help with the UI/UX design. Would you be interested in discussing a potential collaboration?',
+    text: "We're building a new fintech app and need help with the UI/UX design. Would you be interested in discussing a potential collaboration?",
     senderId: 'user-2',
     senderName: 'Alice Johnson',
     timestamp: new Date(Date.now() - 3400000),
@@ -81,7 +89,7 @@ const MOCK_MESSAGES: Message[] = [
   },
   {
     id: '4',
-    text: 'Absolutely! That sounds exciting. I\'d love to learn more about the project scope and timeline.',
+    text: "Absolutely! That sounds exciting. I'd love to learn more about the project scope and timeline.",
     senderId: 'user-1',
     senderName: 'You',
     timestamp: new Date(Date.now() - 3300000),
@@ -89,7 +97,7 @@ const MOCK_MESSAGES: Message[] = [
   },
   {
     id: '5',
-    text: 'Perfect! Let me send you the project brief. We\'re looking to start in the next 2 weeks.',
+    text: "Perfect! Let me send you the project brief. We're looking to start in the next 2 weeks.",
     senderId: 'user-2',
     senderName: 'Alice Johnson',
     timestamp: new Date(Date.now() - 300000),
@@ -110,6 +118,12 @@ export function MessagingScreen({
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  // ── Translation state ──────────────────────────────────────────────────────
+  const [translationLocale, setTranslationLocale] = useState<AppLocale>(i18n.locale);
+  const [showLocalePicker, setShowLocalePicker] = useState(false);
+  const { translations, toggleTranslation, clearTranslations } = useChatTranslation(translationLocale);
+
   const flatListRef = useRef<FlatList<Message>>(null);
 
   // Simulate typing indicator
@@ -119,6 +133,11 @@ export function MessagingScreen({
     }, 3000);
     return () => clearTimeout(timer);
   }, [messages]);
+
+  // Clear cached translations when locale changes
+  useEffect(() => {
+    clearTranslations();
+  }, [translationLocale, clearTranslations]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -139,7 +158,6 @@ export function MessagingScreen({
     setMessages((prev) => [...prev, newMessage]);
     setInputText('');
 
-    // Simulate message sent
     setTimeout(() => {
       setMessages((prev) =>
         prev.map((msg) =>
@@ -148,7 +166,6 @@ export function MessagingScreen({
       );
     }, 500);
 
-    // Scroll to bottom
     setTimeout(() => {
       flatListRef.current?.scrollToEnd({ animated: true });
     }, 100);
@@ -156,25 +173,19 @@ export function MessagingScreen({
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Simulate loading older messages
     await new Promise((resolve) => setTimeout(resolve, 1000));
     setRefreshing(false);
+  }, []);
+
+  const handleLocaleChange = useCallback((locale: AppLocale) => {
+    setTranslationLocale(locale);
+    setShowLocalePicker(false);
   }, []);
 
   // ── Format Time ───────────────────────────────────────────────────────────
 
   const formatTime = useCallback((date: Date) => {
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (minutes < 1) return 'Just now';
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
-    return date.toLocaleDateString();
+    return i18n.formatRelativeTime(date);
   }, []);
 
   // ── Render Message ────────────────────────────────────────────────────────
@@ -182,6 +193,8 @@ export function MessagingScreen({
   const renderMessage = useCallback(
     ({ item }: { item: Message }) => {
       const isCurrentUser = item.senderId === currentUserId;
+      const translation = translations[item.id];
+      const isTranslated = translation?.isVisible && !translation.isLoading && !translation.error;
 
       return (
         <View
@@ -198,14 +211,51 @@ export function MessagingScreen({
                 : { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 },
             ]}
           >
+            {/* Original or translated text */}
             <Text
               style={[
                 styles.messageText,
                 { color: isCurrentUser ? '#ffffff' : colors.text },
               ]}
             >
-              {item.text}
+              {isTranslated ? translation.translatedText : item.text}
             </Text>
+
+            {/* Inline translated label */}
+            {isTranslated && (
+              <Text
+                style={[
+                  styles.translatedLabel,
+                  { color: isCurrentUser ? 'rgba(255,255,255,0.6)' : colors.textTertiary },
+                ]}
+              >
+                {LOCALE_INFO[translationLocale].nativeLabel}
+              </Text>
+            )}
+
+            {/* Translation loading */}
+            {translation?.isLoading && (
+              <View style={styles.translatingRow}>
+                <ActivityIndicator
+                  size="small"
+                  color={isCurrentUser ? 'rgba(255,255,255,0.7)' : colors.primary}
+                />
+                <Text
+                  style={[
+                    styles.translatingText,
+                    { color: isCurrentUser ? 'rgba(255,255,255,0.7)' : colors.textTertiary },
+                  ]}
+                >
+                  {i18n.t('chat.translating')}
+                </Text>
+              </View>
+            )}
+
+            {/* Translation error */}
+            {translation?.error && translation.isVisible && (
+              <Text style={styles.translationError}>{i18n.t('chat.translationFailed')}</Text>
+            )}
+
             <View style={styles.messageFooter}>
               <Text
                 style={[
@@ -217,19 +267,42 @@ export function MessagingScreen({
               </Text>
               {isCurrentUser && (
                 <Text style={styles.messageStatus}>
-                  {item.status === 'sending' && '⏱️'}
-                  {item.status === 'sent' && '✓'}
-                  {item.status === 'delivered' && '✓✓'}
-                  {item.status === 'read' && '✓✓'}
-                  {item.status === 'failed' && '❌'}
+                  {item.status === 'sending' && i18n.t('chat.messageSending')}
+                  {item.status === 'sent' && i18n.t('chat.messageSent')}
+                  {item.status === 'delivered' && i18n.t('chat.messageDelivered')}
+                  {item.status === 'read' && i18n.t('chat.messageRead')}
+                  {item.status === 'failed' && i18n.t('chat.messageFailed')}
                 </Text>
               )}
             </View>
           </View>
+
+          {/* Translate toggle button */}
+          {translationLocale !== 'en' && (
+            <Pressable
+              onPress={() => toggleTranslation(item.id, item.text)}
+              style={[
+                styles.translateButton,
+                isCurrentUser ? styles.translateButtonRight : styles.translateButtonLeft,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={
+                translation?.isVisible
+                  ? i18n.t('chat.showOriginal')
+                  : `${i18n.t('chat.translate')} ${LOCALE_INFO[translationLocale].nativeLabel}`
+              }
+            >
+              <Text style={[styles.translateButtonText, { color: colors.primary }]}>
+                {translation?.isVisible
+                  ? i18n.t('chat.showOriginal')
+                  : i18n.t('chat.translate')}
+              </Text>
+            </Pressable>
+          )}
         </View>
       );
     },
-    [currentUserId, colors, formatTime]
+    [currentUserId, colors, formatTime, translations, translationLocale, toggleTranslation]
   );
 
   // ── Render Typing Indicator ──────────────────────────────────────────────
@@ -256,6 +329,62 @@ export function MessagingScreen({
     );
   }, [isTyping, colors]);
 
+  // ── Locale Picker Modal ───────────────────────────────────────────────────
+
+  const renderLocalePicker = () => (
+    <Modal
+      visible={showLocalePicker}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowLocalePicker(false)}
+    >
+      <Pressable
+        style={styles.modalOverlay}
+        onPress={() => setShowLocalePicker(false)}
+      >
+        <View
+          style={[
+            styles.modalSheet,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.modalTitle, { color: colors.text }]}>
+            {i18n.t('chat.translateTo')}
+          </Text>
+          <ScrollView>
+            {SUPPORTED_LOCALES.map((locale) => {
+              const info = LOCALE_INFO[locale];
+              const isSelected = locale === translationLocale;
+              return (
+                <Pressable
+                  key={locale}
+                  onPress={() => handleLocaleChange(locale)}
+                  style={[
+                    styles.localeRow,
+                    { borderBottomColor: colors.border },
+                    isSelected && { backgroundColor: colors.primary + '20' },
+                  ]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: isSelected }}
+                >
+                  <Text style={[styles.localeLabel, { color: colors.text }]}>
+                    {info.nativeLabel}
+                  </Text>
+                  <Text style={[styles.localeSubLabel, { color: colors.textSecondary }]}>
+                    {info.label}
+                  </Text>
+                  {isSelected && (
+                    <Text style={[styles.localeCheck, { color: colors.primary }]}>✓</Text>
+                  )}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
@@ -267,7 +396,7 @@ export function MessagingScreen({
             onPress={onBack}
             style={styles.backButton}
             accessibilityRole="button"
-            accessibilityLabel="Go back"
+            accessibilityLabel={i18n.t('common.back')}
           >
             <Text style={[styles.backIcon, { color: colors.primary }]}>←</Text>
           </Pressable>
@@ -275,9 +404,21 @@ export function MessagingScreen({
         <View style={styles.headerInfo}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>{recipientName}</Text>
           <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-            {isTyping ? 'typing...' : 'Active now'}
+            {isTyping ? i18n.t('chat.typing') : i18n.t('chat.activeNow')}
           </Text>
         </View>
+
+        {/* Translation locale selector */}
+        <Pressable
+          onPress={() => setShowLocalePicker(true)}
+          style={[styles.translateLocaleButton, { borderColor: colors.border, backgroundColor: colors.surface }]}
+          accessibilityRole="button"
+          accessibilityLabel={i18n.t('chat.translationLanguage')}
+        >
+          <Text style={[styles.translateLocaleText, { color: colors.primary }]}>
+            🌐 {LOCALE_INFO[translationLocale].code.toUpperCase()}
+          </Text>
+        </Pressable>
       </View>
 
       {/* Messages List */}
@@ -293,7 +434,6 @@ export function MessagingScreen({
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.messagesList}
           showsVerticalScrollIndicator={false}
-          inverted={false}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
           refreshControl={
             <RefreshControl
@@ -319,11 +459,11 @@ export function MessagingScreen({
             ]}
             value={inputText}
             onChangeText={setInputText}
-            placeholder="Type a message..."
+            placeholder={i18n.t('chat.typeMessage')}
             placeholderTextColor={colors.textTertiary}
             multiline
             maxLength={1000}
-            accessibilityLabel="Message input"
+            accessibilityLabel={i18n.t('chat.typeMessage')}
           />
           <Pressable
             style={[
@@ -335,12 +475,14 @@ export function MessagingScreen({
             onPress={handleSend}
             disabled={inputText.trim().length === 0}
             accessibilityRole="button"
-            accessibilityLabel="Send message"
+            accessibilityLabel={i18n.t('chat.send')}
           >
             <Text style={styles.sendIcon}>➤</Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      {renderLocalePicker()}
     </SafeAreaView>
   );
 }
@@ -378,6 +520,17 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     marginTop: 2,
   },
+  translateLocaleButton: {
+    borderWidth: 1,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    marginLeft: Spacing.sm,
+  },
+  translateLocaleText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+  },
   messagesList: {
     padding: Spacing.base,
     gap: Spacing.sm,
@@ -401,6 +554,26 @@ const styles = StyleSheet.create({
     fontSize: FontSize.base,
     lineHeight: 20,
   },
+  translatedLabel: {
+    fontSize: 10,
+    marginTop: 2,
+    fontStyle: 'italic',
+  },
+  translatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  translatingText: {
+    fontSize: FontSize.xs,
+    fontStyle: 'italic',
+  },
+  translationError: {
+    fontSize: FontSize.xs,
+    color: '#ef4444',
+    marginTop: 2,
+  },
   messageFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -412,6 +585,20 @@ const styles = StyleSheet.create({
   },
   messageStatus: {
     fontSize: 10,
+  },
+  translateButton: {
+    marginTop: 2,
+    paddingVertical: 2,
+  },
+  translateButtonLeft: {
+    alignSelf: 'flex-start',
+  },
+  translateButtonRight: {
+    alignSelf: 'flex-end',
+  },
+  translateButtonText: {
+    fontSize: 11,
+    textDecorationLine: 'underline',
   },
   typingBubble: {
     paddingHorizontal: Spacing.base,
@@ -453,5 +640,44 @@ const styles = StyleSheet.create({
   sendIcon: {
     fontSize: 18,
     color: '#ffffff',
+  },
+  // Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    borderWidth: 1,
+    maxHeight: '60%',
+    paddingTop: Spacing.base,
+  },
+  modalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    paddingHorizontal: Spacing.base,
+    paddingBottom: Spacing.sm,
+  },
+  localeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: Spacing.sm,
+  },
+  localeLabel: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+    flex: 1,
+  },
+  localeSubLabel: {
+    fontSize: FontSize.sm,
+  },
+  localeCheck: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
   },
 });

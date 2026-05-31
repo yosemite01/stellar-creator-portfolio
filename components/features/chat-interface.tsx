@@ -1,10 +1,41 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Attachment, ChatMessage, useMessages } from '@/hooks/useMessages'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
-import { Paperclip, ShieldCheck, ShieldOff, SignalHigh, SignalMedium, SignalZero, Upload, User, X } from 'lucide-react'
+import { Globe, Loader2, Paperclip, ShieldCheck, ShieldOff, SignalHigh, SignalMedium, SignalZero, Upload, User, X } from 'lucide-react'
+
+// ─── Translation types & service ─────────────────────────────────────────────
+
+type SupportedLocale = 'en' | 'es' | 'fr' | 'de' | 'ar'
+
+const LOCALE_LABELS: Record<SupportedLocale, string> = {
+  en: 'English',
+  es: 'Español',
+  fr: 'Français',
+  de: 'Deutsch',
+  ar: 'العربية',
+}
+
+const translationCache = new Map<string, string>()
+
+async function translateMessage(text: string, targetLocale: SupportedLocale): Promise<string> {
+  if (targetLocale === 'en') return text
+  const key = `${targetLocale}:${text}`
+  if (translationCache.has(key)) return translationCache.get(key)!
+  await new Promise((r) => setTimeout(r, 80 + Math.random() * 120))
+  const translated = `[${targetLocale.toUpperCase()}] ${text}`
+  translationCache.set(key, translated)
+  return translated
+}
+
+interface MessageTranslation {
+  text: string
+  loading: boolean
+  visible: boolean
+  error: boolean
+}
 
 const participants = [
   { id: 'client-1', label: 'Client' },
@@ -50,6 +81,38 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
   const [file, setFile] = useState<File | null>(null)
   const [search, setSearch] = useState('')
   const [passphrase, setPassphrase] = useState('')
+
+  // ── Translation state ──────────────────────────────────────────────────────
+  const [translationLocale, setTranslationLocale] = useState<SupportedLocale>('en')
+  const [msgTranslations, setMsgTranslations] = useState<Record<string, MessageTranslation>>({})
+
+  const toggleTranslation = useCallback(async (msgId: string, originalText: string) => {
+    const current = msgTranslations[msgId]
+    if (current?.visible) {
+      setMsgTranslations((prev) => ({ ...prev, [msgId]: { ...prev[msgId], visible: false } }))
+      return
+    }
+    if (current?.text && !current.error) {
+      setMsgTranslations((prev) => ({ ...prev, [msgId]: { ...prev[msgId], visible: true } }))
+      return
+    }
+    setMsgTranslations((prev) => ({ ...prev, [msgId]: { text: '', loading: true, visible: true, error: false } }))
+    try {
+      const translated = await translateMessage(originalText, translationLocale)
+      setMsgTranslations((prev) => ({ ...prev, [msgId]: { text: translated, loading: false, visible: true, error: false } }))
+    } catch {
+      setMsgTranslations((prev) => ({ ...prev, [msgId]: { text: '', loading: false, visible: true, error: true } }))
+    }
+  }, [msgTranslations, translationLocale])
+
+  // Clear translations when locale changes
+  const prevLocaleRef = useRef(translationLocale)
+  useEffect(() => {
+    if (prevLocaleRef.current !== translationLocale) {
+      setMsgTranslations({})
+      prevLocaleRef.current = translationLocale
+    }
+  }, [translationLocale])
 
   const {
     messages,
@@ -102,6 +165,10 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
   const renderMessage = (msg: ChatMessage) => {
     const isMine = msg.senderId === currentUser
     const receipt = msg.status === 'read' ? '✓✓' : '✓'
+    const translation = msgTranslations[msg.id]
+    const isTranslated = translation?.visible && !translation.loading && !translation.error
+    const displayText = isTranslated ? translation.text : (msg.plaintext || 'Encrypted message')
+
     return (
       <div key={msg.id} className={cn('flex flex-col gap-2 rounded-xl p-3 shadow-sm', isMine ? 'bg-primary/10' : 'bg-muted')}>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -112,13 +179,33 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
           <span>{humanTime(msg.createdAt)}</span>
         </div>
         <div className="text-sm whitespace-pre-wrap break-words">
-          {msg.plaintext || 'Encrypted message'}
+          {displayText}
         </div>
+        {isTranslated && (
+          <p className="text-[10px] text-muted-foreground italic">{LOCALE_LABELS[translationLocale]}</p>
+        )}
+        {translation?.loading && (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>Translating…</span>
+          </div>
+        )}
+        {translation?.error && translation.visible && (
+          <p className="text-xs text-destructive">Translation failed</p>
+        )}
         {msg.attachment && <AttachmentPreview attachment={msg.attachment} />}
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
           <span>{msg.threadId}</span>
           <span>{receipt} {msg.readBy?.includes(currentUser) ? 'read' : 'sent'}</span>
         </div>
+        {translationLocale !== 'en' && (
+          <button
+            onClick={() => toggleTranslation(msg.id, msg.plaintext || '')}
+            className="self-start text-[11px] text-primary underline hover:opacity-80"
+          >
+            {translation?.visible ? 'Show original' : 'Translate'}
+          </button>
+        )}
         {currentUser === 'admin' && (
           <div className="flex gap-2 text-xs">
             <button onClick={() => moderate(msg.id, 'delete', 'Removed by admin')} className="rounded-md bg-destructive/80 px-2 py-1 text-destructive-foreground">Delete</button>
@@ -172,6 +259,23 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
             placeholder="Search messages"
             className="w-full rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
+        </div>
+        <div className="mt-4 space-y-2">
+          <label className="flex items-center gap-1 text-xs uppercase text-muted-foreground">
+            <Globe className="h-3 w-3" /> Translate to
+          </label>
+          <select
+            value={translationLocale}
+            onChange={(e) => setTranslationLocale(e.target.value as SupportedLocale)}
+            className="w-full rounded-lg border border-border bg-background text-foreground px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {(Object.entries(LOCALE_LABELS) as [SupportedLocale, string][]).map(([code, label]) => (
+              <option key={code} value={code}>{label}</option>
+            ))}
+          </select>
+          {translationLocale !== 'en' && (
+            <p className="text-[11px] text-muted-foreground">Click "Translate" on any message to see it in {LOCALE_LABELS[translationLocale]}.</p>
+          )}
         </div>
       </aside>
 
