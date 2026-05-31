@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { colors } from '../theme/colors';
 import { typography, type TypographyVariant } from '../theme/typography';
+import { useFontScale } from '../utils/accessibility';
 
 /** `TextStyle` with the scale-owned keys removed so they can't be overridden. */
 export type RestrictedTextStyle = Omit<
@@ -51,11 +52,18 @@ function TextComponent({
   const colorScheme = useColorScheme();
   const palette = colors[colorScheme === 'dark' ? 'dark' : 'light'];
   const resolvedColor = color ?? palette.textPrimary;
+  const fontScale = useFontScale();
 
-  const baseStyle = useMemo<StyleProp<TextStyle>>(
-    () => [typography[variant], { color: resolvedColor }],
-    [variant, resolvedColor],
-  );
+  const baseStyle = useMemo<StyleProp<TextStyle>>(() => {
+    const base = typography[variant];
+    // Scale fontSize and lineHeight by the font scale
+    const scaledStyle: TextStyle = {
+      ...base,
+      fontSize: base.fontSize * fontScale,
+      lineHeight: base.lineHeight * fontScale,
+    };
+    return [scaledStyle, { color: resolvedColor }];
+  }, [variant, resolvedColor, fontScale]);
 
   return <RNText style={[baseStyle, style]} {...rest} />;
 }
