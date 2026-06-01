@@ -1,0 +1,33 @@
+# #640 — stellar-collab Helm values
+replicaCount: 2
+
+image:
+  repository: ghcr.io/dev-adetutu/stellar-collab
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  type: ClusterIP
+  port: 1234
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 60
+  targetNetworkMbps: 20
+
+env:
+  WS_PORT: "1234"
+  WS_HOST: "0.0.0.0"
+  WS_HEARTBEAT_INTERVAL_MS: "30000"
+  WS_PONG_DEADLINE_MS: "10000"
+  WS_IDLE_TIMEOUT_MS: "300000"

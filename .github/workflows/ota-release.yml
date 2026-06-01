@@ -1,0 +1,158 @@
+name: OTA Release
+
+# #603 — Build, diff, encrypt, and publish an OTA patch on every merge to main.
+# Consumers pull the manifest from OTA_MANIFEST_URL and apply the patch
+# on-device without going through App Store review.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/ota-release.yml'
+
+concurrency:
+  group: ota-release
+  cancel-in-progress: false   # never cancel a release mid-flight
+
+jobs:
+  build-and-publish:
+    name: Build → Diff → Encrypt → Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      OTA_BUCKET: ${{ secrets.OTA_S3_BUCKET }}
+      OTA_AES_KEY: ${{ secrets.OTA_AES_KEY }}   # 64-char hex (32 bytes)
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # need HEAD and HEAD~1 for diffing
+
+      # ── Node / pnpm ─────────────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: mobile
+
+      # ── Export JS bundle ────────────────────────────────────────────────────
+      - name: Export Expo bundle
+        run: npx expo export --platform all --output-dir dist
+        working-directory: mobile
+        env:
+          EXPO_PUBLIC_OTA_MANIFEST_URL: ${{ secrets.OTA_MANIFEST_URL }}
+          EXPO_PUBLIC_OTA_AES_KEY: ${{ secrets.OTA_AES_KEY }}
+
+      # ── Download previous bundle for diffing ────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download previous bundle
+        id: prev
+        run: |
+          aws s3 cp "s3://${OTA_BUCKET}/bundles/current.bundle" prev.bundle || echo "no-prev=true" >> "$GITHUB_OUTPUT"
+
+      # ── Generate bsdiff patch ────────────────────────────────────────────────
+      - name: Install bsdiff
+        run: sudo apt-get install -y bsdiff
+
+      - name: Generate differential patch
+        run: |
+          BUNDLE_PATH=$(find mobile/dist -name '*.bundle' | head -1)
+          echo "BUNDLE_PATH=$BUNDLE_PATH" >> "$GITHUB_ENV"
+          if [ -f prev.bundle ]; then
+            bsdiff prev.bundle "$BUNDLE_PATH" patch.bin
+          else
+            # First release: patch IS the full bundle
+            cp "$BUNDLE_PATH" patch.bin
+          fi
+
+      # ── Encrypt patch with AES-256-GCM ──────────────────────────────────────
+      - name: Encrypt patch
+        id: encrypt
+        run: |
+          IV=$(openssl rand -hex 12)
+          TAG_FILE=tag.bin
+
+          # Encrypt and capture the 16-byte auth tag
+          openssl enc -aes-256-gcm \
+            -K "$OTA_AES_KEY" \
+            -iv "$IV" \
+            -in patch.bin \
+            -out patch.enc \
+            -nosalt
+
+          # openssl writes tag to stderr with -aes-256-gcm; extract via EVP API
+          # For CI simplicity we use a Node helper to get the tag properly
+          node -e "
+            const crypto = require('crypto');
+            const fs = require('fs');
+            const key = Buffer.from(process.env.OTA_AES_KEY, 'hex');
+            const iv = Buffer.from('$IV', 'hex');
+            const plain = fs.readFileSync('patch.bin');
+            const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+            const enc = Buffer.concat([cipher.update(plain), cipher.final()]);
+            const tag = cipher.getAuthTag();
+            fs.writeFileSync('patch.enc', enc);
+            fs.writeFileSync('$TAG_FILE', tag.toString('hex'));
+          "
+
+          TAG=$(cat $TAG_FILE)
+          SHA256=$(sha256sum "$BUNDLE_PATH" | awk '{print $1}')
+          VERSION=$(node -p "require('./mobile/package.json').version")
+          PATCH_SIZE=$(wc -c < patch.enc)
+
+          echo "iv=$IV"           >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256"   >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "patch_size=$PATCH_SIZE" >> "$GITHUB_OUTPUT"
+
+      # ── Upload patch and manifest ────────────────────────────────────────────
+      - name: Upload encrypted patch
+        run: |
+          aws s3 cp patch.enc \
+            "s3://${OTA_BUCKET}/patches/${{ steps.encrypt.outputs.version }}.enc" \
+            --content-type application/octet-stream
+
+      - name: Write and upload manifest
+        run: |
+          cat > manifest.json <<EOF
+          {
+            "version": "${{ steps.encrypt.outputs.version }}",
+            "patchUrl": "https://${OTA_BUCKET}.s3.${AWS_REGION}.amazonaws.com/patches/${{ steps.encrypt.outputs.version }}.enc",
+            "sha256": "${{ steps.encrypt.outputs.sha256 }}",
+            "iv": "${{ steps.encrypt.outputs.iv }}",
+            "tag": "${{ steps.encrypt.outputs.tag }}",
+            "patchSize": ${{ steps.encrypt.outputs.patch_size }},
+            "minBaseVersion": "1.0.0"
+          }
+          EOF
+          aws s3 cp manifest.json \
+            "s3://${OTA_BUCKET}/manifest.json" \
+            --content-type application/json \
+            --cache-control "no-cache, no-store"
+
+      # ── Promote current bundle for next diff ─────────────────────────────────
+      - name: Promote bundle to current
+        run: |
+          aws s3 cp "$BUNDLE_PATH" \
+            "s3://${OTA_BUCKET}/bundles/current.bundle"
+
+      - name: Summary
+        run: |
+          echo "### OTA Release ${{ steps.encrypt.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Patch size: ${{ steps.encrypt.outputs.patch_size }} bytes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SHA-256: \`${{ steps.encrypt.outputs.sha256 }}\`" >> "$GITHUB_STEP_SUMMARY"

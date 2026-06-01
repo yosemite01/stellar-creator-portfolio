@@ -1,0 +1,24 @@
+# #640 — PostgreSQL StatefulSet values
+image:
+  repository: postgres
+  tag: "16.3-alpine"
+  pullPolicy: IfNotPresent
+
+storage:
+  storageClassName: standard
+  size: 20Gi
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+
+service:
+  port: 5432
+
+# Credentials injected via sealed secret named stellar-postgres-secret
+# Expected keys: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+secretName: stellar-postgres-secret

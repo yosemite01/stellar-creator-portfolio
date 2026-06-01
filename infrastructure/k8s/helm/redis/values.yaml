@@ -1,0 +1,23 @@
+# #640 — Redis StatefulSet values
+image:
+  repository: redis
+  tag: "7.2-alpine"
+  pullPolicy: IfNotPresent
+
+storage:
+  storageClassName: standard
+  size: 5Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+service:
+  port: 6379
+
+# Optional: set to name of a secret containing REDIS_PASSWORD
+secretName: ""

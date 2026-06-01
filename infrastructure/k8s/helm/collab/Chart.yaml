@@ -1,0 +1,6 @@
+apiVersion: v2
+name: stellar-collab
+description: Stellar Platform – Yjs WebSocket collaboration server
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

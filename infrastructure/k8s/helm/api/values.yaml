@@ -1,0 +1,50 @@
+# #640 — stellar-api Helm values
+replicaCount: 2
+
+image:
+  repository: ghcr.io/dev-adetutu/stellar-api
+  pullPolicy: IfNotPresent
+  tag: ""   # overridden by CI with the image digest
+
+service:
+  type: ClusterIP
+  port: 3001
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  # Scale up when average CPU across pods exceeds 60 %
+  targetCPUUtilizationPercentage: 60
+  # Scale up when average network Rx+Tx exceeds 50 Mbps (custom metric)
+  targetNetworkMbps: 50
+
+env:
+  DATABASE_URL: ""        # injected via sealed secret
+  REDIS_URL: ""
+  RUST_LOG: "info"
+  WS_HEARTBEAT_SECS: "30"
+  WS_PONG_DEADLINE_SECS: "10"
+  WS_IDLE_TIMEOUT_SECS: "300"
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3001
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 3001
+  initialDelaySeconds: 5
+  periodSeconds: 10

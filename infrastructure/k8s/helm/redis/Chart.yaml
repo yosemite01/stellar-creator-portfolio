@@ -1,0 +1,6 @@
+apiVersion: v2
+name: stellar-redis
+description: Stellar Platform – Redis StatefulSet
+type: application
+version: 0.1.0
+appVersion: "7.2"
