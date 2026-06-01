@@ -1,0 +1,70 @@
+name: Snyk Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run every Monday at 08:30 UTC
+    - cron: "30 8 * * 1"
+
+jobs:
+  snyk:
+    name: Snyk — Code & Dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Snyk — test root dependencies for vulnerabilities
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.Drips }}
+        with:
+          args: --severity-threshold=high --sarif-file-output=snyk-deps.sarif
+
+      - name: Snyk — static code analysis (SAST)
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.Drips }}
+        with:
+          command: code test
+          args: --severity-threshold=high --sarif-file-output=snyk-code.sarif
+
+      - name: Upload Snyk dependency results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: snyk-deps.sarif
+          category: snyk-dependencies
+
+      - name: Upload Snyk code results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: snyk-code.sarif
+          category: snyk-code
+
+      - name: Snyk — monitor project (track on snyk.io dashboard)
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.Drips }}
+        with:
+          command: monitor
+          args: --org=yosemite01
