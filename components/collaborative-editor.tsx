@@ -69,16 +69,16 @@ export function CollaborativeEditor({
     [],
   )
 
-  // Yjs document & provider – created once per docId
+  // Yjs document & provider – both scoped to docId so they are fully
+  // destroyed and recreated whenever the document changes, preventing leaks.
   const ydocRef = useRef<Y.Doc | null>(null)
   const providerRef = useRef<WebsocketProvider | null>(null)
 
-  if (!ydocRef.current) {
-    ydocRef.current = new Y.Doc()
-  }
-
   useEffect(() => {
-    const ydoc = ydocRef.current!
+    // Create a fresh Y.Doc for this docId
+    const ydoc = new Y.Doc()
+    ydocRef.current = ydoc
+
     const provider = new WebsocketProvider(serverUrl, docId, ydoc)
     providerRef.current = provider
 
@@ -86,8 +86,13 @@ export function CollaborativeEditor({
     provider.awareness.setLocalStateField('user', user)
 
     return () => {
+      // Destroy provider first (closes WS + clears awareness)
       provider.destroy()
       providerRef.current = null
+
+      // Destroy the Y.Doc to release all CRDT state and event listeners
+      ydoc.destroy()
+      ydocRef.current = null
     }
     // Re-connect only when docId or server changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
