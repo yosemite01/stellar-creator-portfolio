@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 8
       - uses: actions/setup-node@v6
@@ -59,7 +59,7 @@ jobs:
       - name: Build & verify hashes
         run: ./scripts/verify.sh
       - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soroban-contracts-${{ github.sha }}
           path: artifacts/
