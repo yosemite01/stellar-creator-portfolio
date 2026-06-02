@@ -69,6 +69,7 @@ model User {
   emailUnsubscribeToken  String? @unique
   matchFeedback       MatchFeedback[]
   matchNotifications  MatchNotification[]
+  auditLogs           AuditLog[]
 
   @@index([email])
 }
@@ -403,6 +404,69 @@ model Dispute {
   @@index([creatorId])
   @@index([clientId])
   @@index([status])
+}
+
+// ── Audit Logging & Telemetry ────────────────────────────────────────────
+
+/// Immutable audit trail for all mutating operations.
+/// Records who did what, when, and from where — used for security tracing and compliance.
+model AuditLog {
+  id            String    @id @default(cuid())
+
+  /// The authenticated user that triggered the mutation (null for unauthenticated attempts).
+  userId        String?
+  user          User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// High-level category: e.g. "bounty", "application", "escrow", "profile"
+  resource      String
+
+  /// The specific action performed: e.g. "create", "update", "delete", "accept"
+  action        String
+
+  /// Primary key of the affected record (if applicable).
+  resourceId    String?
+
+  /// Sanitised snapshot of the mutation payload (no secrets, no PII beyond IDs).
+  payload       Json?
+
+  /// HTTP method of the originating request.
+  httpMethod    String?
+
+  /// Request path / route that triggered the mutation.
+  requestPath   String?
+
+  /// Outcome of the operation.
+  status        AuditStatus @default(SUCCESS)
+
+  /// Optional error message captured on failure.
+  errorMessage  String?     @db.Text
+
+  /// W3C Trace-Context traceId for distributed tracing correlation.
+  traceId       String?
+
+  /// Hashed source IP — stored as a one-way hash to avoid storing raw PII.
+  ipHash        String?
+
+  /// Raw User-Agent header (no PII, useful for bot/abuse detection).
+  userAgent     String?
+
+  /// ISO-3166-1 country code inferred from IP geo-lookup (optional).
+  geoCountry    String?
+
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([resource, action])
+  @@index([resourceId])
+  @@index([traceId])
+  @@index([createdAt])
+  @@index([status, createdAt])
+}
+
+enum AuditStatus {
+  SUCCESS
+  FAILURE
+  DENIED
 }
 
 // ── Soroban Sequence Management ──────────────────────────────────────────
