@@ -1,0 +1,32 @@
+{
+  "_comment": "Add this structure to ios/<AppName>/Info.plist to register alternate icons. Image assets must be placed in ios/<AppName>/Images.xcassets or as loose PNG files alongside Info.plist.",
+  "CFBundleIcons": {
+    "CFBundlePrimaryIcon": {
+      "CFBundleIconFiles": ["AppIcon"],
+      "UIPrerenderedIcon": false
+    },
+    "CFBundleAlternateIcons": {
+      "DarkIcon": {
+        "CFBundleIconFiles": ["DarkIcon"],
+        "UIPrerenderedIcon": false
+      },
+      "HalloweenIcon": {
+        "CFBundleIconFiles": ["HalloweenIcon"],
+        "UIPrerenderedIcon": false
+      },
+      "AuroraIcon": {
+        "CFBundleIconFiles": ["AuroraIcon"],
+        "UIPrerenderedIcon": false
+      },
+      "MidnightIcon": {
+        "CFBundleIconFiles": ["MidnightIcon"],
+        "UIPrerenderedIcon": false
+      },
+      "ForestIcon": {
+        "CFBundleIconFiles": ["ForestIcon"],
+        "UIPrerenderedIcon": false
+      }
+    }
+  },
+  "_android_note": "Android dynamic icon switching requires activity-aliases in AndroidManifest.xml and mipmaps in res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/. See https://developer.android.com/guide/topics/manifest/activity-element#alias"
+}
