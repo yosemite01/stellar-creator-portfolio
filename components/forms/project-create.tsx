@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { RichTextEditor } from '@/components/ui/rich-text';
 import { Button } from '@/components/ui/button';
+import { TemplatePicker } from '@/components/forms/template-picker';
+import type { BountyTemplate } from '@/lib/bounty-templates';
 import { trpc } from '@/lib/trpc-client';
 
 interface ProjectFormData {
@@ -20,12 +22,25 @@ interface ProjectCreateFormProps {
 }
 
 export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps) {
+  const [showTemplatePicker, setShowTemplatePicker] = useState(true);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('');
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
   const [year, setYear] = useState(new Date().getFullYear());
   const [link, setLink] = useState('');
+
+  const handleTemplateSelect = (template: BountyTemplate) => {
+    setTitle(template.title);
+    setCategory(template.category);
+    setDescription(template.description);
+    setTags(template.tags.join(', '));
+    setShowTemplatePicker(false);
+  };
+
+  const handleSkipTemplate = () => {
+    setShowTemplatePicker(false);
+  };
 
   // Use tRPC mutation for project creation
   const createProjectMutation = trpc.projects.create.useMutation({
@@ -93,6 +108,12 @@ export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5" aria-label="Create project">
+      {showTemplatePicker && (
+        <TemplatePicker onSelect={handleTemplateSelect} onSkip={handleSkipTemplate} />
+      )}
+
+      {!showTemplatePicker && (
+        <>
       {field('Project Title', true,
         <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Brand Identity Redesign" className={inputCls} required />
       )}
@@ -132,6 +153,8 @@ export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps
           {submitting ? 'Creating...' : 'Create Project'}
         </Button>
       </div>
+        </>
+      )}
     </form>
   );
 }
