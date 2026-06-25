@@ -5,7 +5,7 @@
 //! `prometheus` counters/histograms for business-level observability.
 
 use actix_web_prom::PrometheusMetricsBuilder;
-use prometheus::{opts, IntCounter, IntCounterVec, Registry};
+use prometheus::{opts, Histogram, HistogramOpts, IntCounter, IntCounterVec, Registry};
 
 /// Custom business metrics registered alongside the HTTP middleware metrics.
 #[derive(Clone)]
@@ -14,6 +14,10 @@ pub struct BusinessMetrics {
     pub applications_submitted: IntCounter,
     pub freelancers_registered: IntCounter,
     pub escrows_released: IntCounter,
+    pub escrows_deposits: IntCounterVec,
+    pub dispute_resolution_seconds: Histogram,
+    pub stellar_rpc_calls: IntCounterVec,
+    pub db_query_duration_seconds: Histogram,
     pub api_errors: IntCounterVec,
 }
 
@@ -43,6 +47,36 @@ impl BusinessMetrics {
         ))
         .expect("metric can be created");
 
+        let escrows_deposits = IntCounterVec::new(
+            opts!(
+                "stellar_escrows_deposits_total",
+                "Total escrow deposits by token"
+            ),
+            &["token"],
+        )
+        .expect("metric can be created");
+
+        let dispute_resolution_seconds = Histogram::with_opts(HistogramOpts::new(
+            "stellar_dispute_resolution_seconds",
+            "Time taken to resolve disputes"
+        ))
+        .expect("metric can be created");
+
+        let stellar_rpc_calls = IntCounterVec::new(
+            opts!(
+                "stellar_rpc_calls_total",
+                "Total number of Stellar RPC calls by method and status"
+            ),
+            &["method", "status"],
+        )
+        .expect("metric can be created");
+
+        let db_query_duration_seconds = Histogram::with_opts(HistogramOpts::new(
+            "db_query_duration_seconds",
+            "Database query duration by query type"
+        ))
+        .expect("metric can be created");
+
         let api_errors = IntCounterVec::new(
             opts!(
                 "stellar_api_errors_total",
@@ -56,6 +90,10 @@ impl BusinessMetrics {
         registry.register(Box::new(applications_submitted.clone())).ok();
         registry.register(Box::new(freelancers_registered.clone())).ok();
         registry.register(Box::new(escrows_released.clone())).ok();
+        registry.register(Box::new(escrows_deposits.clone())).ok();
+        registry.register(Box::new(dispute_resolution_seconds.clone())).ok();
+        registry.register(Box::new(stellar_rpc_calls.clone())).ok();
+        registry.register(Box::new(db_query_duration_seconds.clone())).ok();
         registry.register(Box::new(api_errors.clone())).ok();
 
         Self {
@@ -63,6 +101,10 @@ impl BusinessMetrics {
             applications_submitted,
             freelancers_registered,
             escrows_released,
+            escrows_deposits,
+            dispute_resolution_seconds,
+            stellar_rpc_calls,
+            db_query_duration_seconds,
             api_errors,
         }
     }

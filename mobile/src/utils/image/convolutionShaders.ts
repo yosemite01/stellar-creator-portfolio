@@ -1,4 +1,4 @@
-export type FilterPreset = 'none' | 'sharpen' | 'blur' | 'edge' | 'emboss' | 'sepia';
+export type FilterPreset = 'none' | 'sharpen' | 'blur' | 'edge' | 'emboss' | 'sepia' | 'grayscale' | 'vintage';
 
 /** 3×3 convolution kernels for GPU fragment shaders. */
 export const CONVOLUTION_KERNELS: Record<Exclude<FilterPreset, 'none'>, { matrix: number[]; divisor: number; offset: number }> = {
@@ -26,6 +26,16 @@ export const CONVOLUTION_KERNELS: Record<Exclude<FilterPreset, 'none'>, { matrix
     matrix: [0.393, 0.769, 0.189, 0.349, 0.686, 0.168, 0.272, 0.534, 0.131],
     divisor: 1,
     offset: 0,
+  },
+  grayscale: {
+    matrix: [0.299, 0.587, 0.114, 0.299, 0.587, 0.114, 0.299, 0.587, 0.114],
+    divisor: 1,
+    offset: 0,
+  },
+  vintage: {
+    matrix: [0.272, 0.534, 0.131, 0.349, 0.686, 0.168, 0.393, 0.769, 0.189],
+    divisor: 1,
+    offset: 20,
   },
 };
 

@@ -1,5 +1,5 @@
 [package]
-name = "stellar-identity-contract"
+name = "stellar-referral-contract"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,13 @@ crate-type = ["cdylib"]
 
 [dependencies]
 soroban-sdk.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
+codegen-units = 1

@@ -2,10 +2,13 @@
 
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
-use crate::{IdentityContract, IdentityContractClient};
+use crate::{IdentityContract, IdentityContractClient, KycLevel};
 
-fn deploy(env: &Env) -> IdentityContractClient {
-    IdentityContractClient::new(env, &env.register(IdentityContract, ()))
+fn deploy(env: &Env) -> (IdentityContractClient, Address) {
+    let admin = Address::generate(env);
+    let client = IdentityContractClient::new(env, &env.register(IdentityContract, ()));
+    client.initialize(&admin);
+    (client, admin)
 }
 
 fn domain_hash(env: &Env, seed: u8) -> BytesN<32> {
@@ -23,7 +26,7 @@ fn sign(env: &Env, msg: &BytesN<32>) -> (BytesN<32>, BytesN<64>) {
 fn test_submit_proof_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     let owner = Address::generate(&env);
     let hash = domain_hash(&env, 1);
     let (pk, sig) = sign(&env, &hash);
@@ -37,7 +40,7 @@ fn test_submit_proof_succeeds() {
 fn test_has_proof_returns_true_after_submit() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     let owner = Address::generate(&env);
     let hash = domain_hash(&env, 2);
     let (pk, sig) = sign(&env, &hash);
@@ -50,7 +53,7 @@ fn test_has_proof_returns_true_after_submit() {
 fn test_proof_count_increments() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     let owner = Address::generate(&env);
     for seed in [3u8, 4] {
         let hash = domain_hash(&env, seed);
@@ -65,7 +68,7 @@ fn test_proof_count_increments() {
 fn test_duplicate_proof_panics() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     let owner = Address::generate(&env);
     let hash = domain_hash(&env, 5);
     let (pk, sig) = sign(&env, &hash);
@@ -78,7 +81,7 @@ fn test_duplicate_proof_panics() {
 fn test_invalid_signature_panics() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     let owner = Address::generate(&env);
     let hash = domain_hash(&env, 6);
     let (pk, bad_sig) = sign(&env, &domain_hash(&env, 99));
@@ -90,7 +93,7 @@ fn test_invalid_signature_panics() {
 fn test_wrong_public_key_panics() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     let owner = Address::generate(&env);
     let hash = domain_hash(&env, 7);
     let (_, sig) = sign(&env, &hash);
@@ -102,7 +105,7 @@ fn test_wrong_public_key_panics() {
 #[should_panic(expected = "Proof not found")]
 fn test_get_nonexistent_proof_panics() {
     let env = Env::default();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     client.get_proof(&Address::generate(&env), &domain_hash(&env, 8));
 }
 
@@ -110,7 +113,7 @@ fn test_get_nonexistent_proof_panics() {
 fn test_revoke_removes_proof_and_decrements_count() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     let owner = Address::generate(&env);
     let hash = domain_hash(&env, 9);
     let (pk, sig) = sign(&env, &hash);
@@ -126,7 +129,7 @@ fn test_revoke_removes_proof_and_decrements_count() {
 fn test_revoke_nonexistent_panics() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     client.revoke_proof(&Address::generate(&env), &domain_hash(&env, 10));
 }
 
@@ -134,7 +137,7 @@ fn test_revoke_nonexistent_panics() {
 fn test_different_owners_same_hash_are_independent() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (client, _admin) = deploy(&env);
     let hash = domain_hash(&env, 11);
     let owner_a = Address::generate(&env);
     let owner_b = Address::generate(&env);
@@ -145,4 +148,28 @@ fn test_different_owners_same_hash_are_independent() {
     client.revoke_proof(&owner_a, &hash);
     assert!(!client.has_proof(&owner_a, &hash));
     assert!(client.has_proof(&owner_b, &hash));
+}
+
+#[test]
+fn test_attest_kyc_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = deploy(&env);
+    let user = Address::generate(&env);
+    client.attest_kyc(&admin, &user, &KycLevel::Basic);
+    let attestation = client.get_kyc_attestation(&user).unwrap();
+    assert_eq!(attestation.user, user);
+    assert_eq!(attestation.level, KycLevel::Basic);
+}
+
+#[test]
+fn test_check_kyc_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = deploy(&env);
+    let user = Address::generate(&env);
+    client.attest_kyc(&admin, &user, &KycLevel::Enhanced);
+    assert!(client.check_kyc(&user, &KycLevel::Basic));
+    assert!(client.check_kyc(&user, &KycLevel::Enhanced));
+    assert!(!client.check_kyc(&user, &KycLevel::Institutional));
 }
