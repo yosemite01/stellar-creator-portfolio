@@ -4,6 +4,14 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
 };
 
+// Re-export ReleaseCondition from escrow contract for cross-contract calls
+#[derive(Clone, Debug)]
+#[contracttype]
+pub enum ReleaseCondition {
+    OnCompletion,
+    Timelock(u64),
+}
+
 /// Bounty Error Codes
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -11,6 +19,14 @@ use soroban_sdk::{
 pub enum BountyError {
     DeadlineNotPassed = 1,
     AlreadyProcessed = 2,
+    InsufficientBalance = 3,
+}
+
+/// DataKey for typed storage lookups
+#[derive(Clone)]
+#[contracttype]
+pub enum DataKey {
+    EscrowContract,
 }
 
 /// Escrow Contract Client Interface
@@ -65,6 +81,21 @@ pub struct BountyContract;
 
 #[contractimpl]
 impl BountyContract {
+    pub fn set_escrow_contract(env: Env, admin: Address, escrow: Address) -> bool {
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::EscrowContract, &escrow);
+        true
+    }
+
+    fn get_escrow_contract(env: &Env) -> Address {
+        env.storage()
+            .persistent()
+            .get::<DataKey, Address>(&DataKey::EscrowContract)
+            .expect("Escrow contract not set")
+    }
+
     pub fn create_bounty(
         env: Env,
         creator: Address,
@@ -104,6 +135,50 @@ impl BountyContract {
         env.storage()
             .persistent()
             .set(&bounty_counter_key, &counter);
+
+        bounty_id
+    }
+
+    pub fn create_and_fund_bounty(
+        env: Env,
+        creator: Address,
+        title: String,
+        description: String,
+        budget: i128,
+        token: Address,
+        deadline: u64,
+    ) -> u64 {
+        creator.require_auth();
+
+        let bounty_id = Self::create_bounty(
+            env.clone(),
+            creator.clone(),
+            title,
+            description,
+            budget,
+            deadline,
+        );
+
+        let escrow_contract = Self::get_escrow_contract(&env);
+        let escrow_client = EscrowContractClient::new(&env, &escrow_contract);
+
+        let escrow_id = escrow_client.deposit(
+            &bounty_id,
+            &creator,
+            &creator,
+            &budget,
+            &token,
+            &ReleaseCondition::OnCompletion,
+        );
+
+        let bounty_key = (Symbol::new(&env, "bounty"), bounty_id);
+        let mut bounty = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), Bounty>(&bounty_key)
+            .expect("Bounty not found");
+        bounty.escrow_id = escrow_id;
+        env.storage().persistent().set(&bounty_key, &bounty);
 
         bounty_id
     }
@@ -431,5 +506,29 @@ mod tests {
 
         let application = contract.get_application(&app_id);
         assert_eq!(application.freelancer, freelancer);
+    }
+
+    #[test]
+    fn test_create_and_fund_bounty() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register_contract(None, BountyContract));
+
+        let creator = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let bounty_id = contract.create_bounty(
+            &creator,
+            &String::from_str(&env, "Funded Bounty"),
+            &String::from_str(&env, "With Escrow"),
+            &5000i128,
+            &100u64,
+        );
+
+        assert_eq!(bounty_id, 1);
+
+        let bounty = contract.get_bounty(&bounty_id);
+        assert_eq!(bounty.creator, creator);
+        assert_eq!(bounty.budget, 5000i128);
     }
 }
