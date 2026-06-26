@@ -1,0 +1,22 @@
+apiVersion: v2
+name: stellar
+description: Stellar Creator Portfolio — production umbrella chart
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+dependencies:
+  - name: api
+    version: 0.1.0
+    repository: "file://charts/api"
+  - name: auth
+    version: 0.1.0
+    repository: "file://charts/auth"
+  - name: notifications
+    version: 0.1.0
+    repository: "file://charts/notifications"
+  - name: indexer
+    version: 0.1.0
+    repository: "file://charts/indexer"
+  - name: next-app
+    version: 0.1.0
+    repository: "file://charts/next-app"

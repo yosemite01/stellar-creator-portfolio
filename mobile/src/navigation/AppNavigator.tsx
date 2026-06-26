@@ -26,6 +26,7 @@ import {
 import { createNativeStackNavigator, NativeStackScreenProps } from "@react-navigation/native-stack";
 import { createBottomTabNavigator, BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 
+import { MiniPlayer } from "../components/MiniPlayer";
 import { DashboardScreen } from "../screens/DashboardScreen";
 import { ThemeSettingsScreen } from "../screens/ThemeSettingsScreen";
 import { PortfolioUploadScreen } from "../screens/PortfolioUploadScreen";
@@ -45,6 +46,10 @@ import { ScreenTransitions, GestureConfig } from "./transitions";
 import { RootStackParamList, MainTabParamList } from "../types";
 import { FontSize, FontWeight } from "../theme/tokens";
 import { LINKING_OPTIONS } from "../config/DeepLinkConfig";
+import { StreamHostScreen } from "../components/streaming/StreamHostScreen";
+import { StreamViewerScreen } from "../components/streaming/StreamViewerScreen";
+
+const DEFAULT_SIGNALING_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000";
 
 // ─── Placeholder ──────────────────────────────────────────────────────────────
 
@@ -70,21 +75,22 @@ function MainTabs() {
   const { colors } = useTheme();
 
   return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textTertiary,
-        tabBarStyle: {
-          borderTopColor: colors.border,
-          backgroundColor: colors.background,
-        },
-        tabBarLabelStyle: {
-          fontSize: FontSize.xs,
-          fontWeight: FontWeight.medium,
-        },
-      }}
-    >
+    <View style={{ flex: 1 }}>
+      <Tab.Navigator
+        screenOptions={{
+          headerShown: false,
+          tabBarActiveTintColor: colors.primary,
+          tabBarInactiveTintColor: colors.textTertiary,
+          tabBarStyle: {
+            borderTopColor: colors.border,
+            backgroundColor: colors.background,
+          },
+          tabBarLabelStyle: {
+            fontSize: FontSize.xs,
+            fontWeight: FontWeight.medium,
+          },
+        }}
+      >
       <Tab.Screen
         name="Home"
         options={{
@@ -144,7 +150,9 @@ function MainTabs() {
       >
         {() => <ThemeSettingsScreen />}
       </Tab.Screen>
-    </Tab.Navigator>
+      </Tab.Navigator>
+      <MiniPlayer />
+    </View>
   );
 }
 
@@ -326,6 +334,34 @@ export function AppNavigator() {
           component={BiometricAuthScreen}
           options={{ animation: ScreenTransitions.Dashboard }}
         />
+
+        {/* ── Issue #777 — Live streaming host/viewer ───────────────────── */}
+        <Stack.Screen
+          name="StreamHost"
+          options={{ animation: "slide_from_bottom" }}
+        >
+          {({ route, navigation }: NativeStackScreenProps<RootStackParamList, 'StreamHost'>) => (
+            <StreamHostScreen
+              roomId={route.params.roomId}
+              signalingServerUrl={route.params.signalingServerUrl ?? DEFAULT_SIGNALING_URL}
+              onStreamEnded={() => navigation.goBack()}
+            />
+          )}
+        </Stack.Screen>
+
+        <Stack.Screen
+          name="StreamViewer"
+          options={{ animation: "slide_from_right" }}
+        >
+          {({ route, navigation }: NativeStackScreenProps<RootStackParamList, 'StreamViewer'>) => (
+            <StreamViewerScreen
+              roomId={route.params.roomId}
+              creatorName={route.params.creatorName ?? "Creator"}
+              signalingServerUrl={route.params.signalingServerUrl ?? DEFAULT_SIGNALING_URL}
+              onStreamEnded={() => navigation.goBack()}
+            />
+          )}
+        </Stack.Screen>
       </Stack.Navigator>
     </NavigationContainer>
   );

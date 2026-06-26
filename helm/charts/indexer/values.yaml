@@ -1,0 +1,45 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/tukura11/stellar-indexer
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  type: ClusterIP
+  port: 3004
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+
+config:
+  RUST_LOG: "info"
+  STELLAR_NETWORK: "mainnet"
+
+secrets:
+  awsSecretName: stellar/indexer
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3004
+  initialDelaySeconds: 15
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 3004
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+pdb:
+  minAvailable: 1

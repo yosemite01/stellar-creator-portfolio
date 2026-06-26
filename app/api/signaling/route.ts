@@ -25,10 +25,17 @@ const TURN_CREDENTIAL_TTL = parseInt(process.env.TURN_CREDENTIAL_TTL ?? '86400',
 
 // In-memory relay store for HTTP signaling fallback
 // In production this should be replaced with Redis for multi-instance support
-const signalingStore = new Map<
-  string,
-  { type: string; sdp?: string; candidate?: RTCIceCandidateInit; peerId: string; ts: number }[]
->();
+interface SignalingEntry {
+  type: string;
+  sdp?: string;
+  candidate?: RTCIceCandidateInit;
+  peerId: string;
+  ts: number;
+  amount?: string;
+  asset?: string;
+}
+
+const signalingStore = new Map<string, SignalingEntry[]>();
 
 // Prune entries older than 5 minutes
 const STORE_TTL_MS = 5 * 60 * 1000;
@@ -65,11 +72,26 @@ function generateIceServers(peerId: string) {
 /**
  * GET /api/signaling?peerId=<id>
  * Returns ICE server configuration including STUN and time-limited TURN credentials.
+ *
+ * GET /api/signaling?roomId=<id>&peerId=<id>&since=<ts>
+ * Polls for inbound signaling messages (HTTP fallback for mobile clients).
  */
 export async function GET(req: NextRequest) {
+  const roomId = req.nextUrl.searchParams.get('roomId');
+  const sinceParam = req.nextUrl.searchParams.get('since');
+  const peerIdParam = req.nextUrl.searchParams.get('peerId');
+
+  if (roomId && peerIdParam) {
+    const since = sinceParam ? Number(sinceParam) : 0;
+    const key = `${roomId}:${peerIdParam}`;
+    const entries = signalingStore.get(key) ?? [];
+    const messages = entries.filter((entry) => entry.ts > since && entry.peerId !== peerIdParam);
+
+    return NextResponse.json({ messages });
+  }
+
   const peerId =
-    req.nextUrl.searchParams.get('peerId') ??
-    `web-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    peerIdParam ?? `web-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   return NextResponse.json({
     iceServers: generateIceServers(peerId),
@@ -95,7 +117,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { roomId, peerId, type, sdp, candidate, to } = body;
+    const { roomId, peerId, type, sdp, candidate, to, amount, asset } = body;
 
     if (!roomId || !peerId || !type) {
       return NextResponse.json(
@@ -106,7 +128,7 @@ export async function POST(req: NextRequest) {
 
     const key = to ? `${roomId}:${to}` : roomId;
     const existing = signalingStore.get(key) ?? [];
-    existing.push({ type, sdp, candidate, peerId, ts: Date.now() });
+    existing.push({ type, sdp, candidate, peerId, ts: Date.now(), amount, asset });
     signalingStore.set(key, existing);
 
     return NextResponse.json({ ok: true });

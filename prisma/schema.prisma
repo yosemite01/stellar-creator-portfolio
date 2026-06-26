@@ -42,15 +42,16 @@ model Session {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  password      String?
-  image         String?
-  role          Role      @default(USER)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  name                String?
+  email               String?   @unique
+  emailVerified       DateTime?
+  password            String?
+  image               String?
+  role                Role      @default(USER)
+  onboardingComplete  Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
   
   // Relations
   accounts      Account[]
@@ -67,6 +68,7 @@ model User {
   inAppNotifications     InAppNotification[]
   emailDeliveryLogs      EmailDeliveryLog[]
   emailUnsubscribeToken  String? @unique
+  emailBounced           Boolean @default(false)
   matchFeedback       MatchFeedback[]
   matchNotifications  MatchNotification[]
   auditLogs           AuditLog[]
@@ -158,6 +160,8 @@ model ClientProfile {
   userId      String   @unique
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   companyName String?
+  projectType String?
+  budgetRange String?
   bio         String?
   avatar      String?
   verified    Boolean  @default(false)
@@ -169,6 +173,23 @@ model ClientProfile {
   updatedAt   DateTime @updatedAt
 
   @@index([userId])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  keyHash    String    @unique
+  name       String
+  scopes     String[]
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([keyHash])
 }
 
 model Bounty {
@@ -633,71 +654,13 @@ model BountyTemplate {
   @@index([createdByUserId])
 }
 
-// ── API Keys for Third-Party Integrations — Issue #790 ───────────────────────
+// ── Zero-Knowledge Proofs — Issue #806 ───────────────────────────────────
 
-/// API keys for GraphQL and external integrations
-model ApiKey {
-  id              String   @id @default(cuid())
-  key             String   @unique // sk_<32 hex>
-  secretHash      String   // SHA-256 hashed secret
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name            String?  // optional friendly name
-  active          Boolean  @default(true)
-  expiresAt       DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@index([userId])
-  @@index([active, expiresAt])
-}
-
-/// Rate limit tracking for API keys (per-minute sliding window)
-model ApiKeyUsage {
+/// Nullifier registry for replay-protection in ZK proof verification
+model ZKNullifier {
   id        String   @id @default(cuid())
-  apiKeyId  String
-  timestamp DateTime @default(now())
-  queryPath String   // GraphQL operation name or tRPC path
-
-  @@index([apiKeyId, timestamp])
-}
-
-// ── Creator Availability Calendar — Issue #792 ──────────────────────────────
-
-/// Creator availability schedule for booking system
-model Availability {
-  id        String   @id @default(cuid())
-  creatorId String
-  creator   CreatorProfile @relation(fields: [creatorId], references: [id], onDelete: Cascade)
-  date      DateTime // Date in YYYY-MM-DD format (time is ignored)
-  status    AvailabilityStatus @default(AVAILABLE)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([creatorId, date])
-  @@index([creatorId, date])
-  @@index([creatorId, status])
-}
-
-enum AvailabilityStatus {
-  AVAILABLE
-  BUSY
-  UNAVAILABLE
-}
-
-// ── Skill Endorsements — Issue #793 ────────────────────────────────────────
-
-/// Skill endorsements from other users
-model Endorsement {
-  id        String   @id @default(cuid())
-  endorserId String
-  endorser  User     @relation(name: "endorsements_given", fields: [endorserId], references: [id], onDelete: Cascade)
-  creatorId String
-  creator   CreatorProfile @relation(fields: [creatorId], references: [id], onDelete: Cascade)
-  skill     String   // Skill name being endorsed
+  nullifier String   @unique
   createdAt DateTime @default(now())
 
-  @@unique([endorserId, creatorId, skill])
-  @@index([creatorId, skill])
-  @@index([creatorId, createdAt])
+  @@index([nullifier])
 }

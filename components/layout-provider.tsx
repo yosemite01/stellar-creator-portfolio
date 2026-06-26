@@ -1,6 +1,9 @@
 'use client'
 
 import * as React from 'react'
+import { ComparisonProvider } from '@/components/ComparisonContext'
+import { ComparisonBar } from '@/components/ComparisonBar'
+import { OnboardingTour } from '@/components/OnboardingTour'
 
 // ── Loading event bus ─────────────────────────────────────────────────────────
 
@@ -78,8 +81,12 @@ export function LayoutProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <LoadingContext.Provider value={loading}>
-      <ProgressBar active={loading} />
-      {children}
+      <ComparisonProvider>
+        <ProgressBar active={loading} />
+        {children}
+        <ComparisonBar />
+        <OnboardingTour />
+      </ComparisonProvider>
     </LoadingContext.Provider>
   )
 }

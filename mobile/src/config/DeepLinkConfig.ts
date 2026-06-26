@@ -61,6 +61,8 @@ export const DEEP_LINK_CONFIG: LinkingOptions<RootStackParamList>["config"] = {
     FreelancerProfile: "freelancers/:creatorId",
     Messaging: "messages/:conversationId",
     ImagePicker: "upload",
+    StreamHost: "stream/:roomId/host",
+    StreamViewer: "stream/:roomId",
   } as any, // cast needed until extended param list is added
 };
 
@@ -109,6 +111,8 @@ export type DeepLinkRoute =
   | { screen: "FreelancerProfile"; params: { creatorId: string } }
   | { screen: "Messaging"; params: { conversationId: string } }
   | { screen: "ImagePicker" }
+  | { screen: "StreamHost"; params: { roomId: string } }
+  | { screen: "StreamViewer"; params: { roomId: string } }
   | { screen: "LanguageSettings" }
   | { screen: "Unknown"; url: string };
 
@@ -170,6 +174,13 @@ export function parseDeepLink(url: string): DeepLinkRoute {
 
     case "upload":
       return { screen: "ImagePicker" };
+
+    case "stream":
+      if (!second) return { screen: "Unknown", url };
+      if (segments[2] === "host") {
+        return { screen: "StreamHost", params: { roomId: second } };
+      }
+      return { screen: "StreamViewer", params: { roomId: second } };
 
     case "settings":
       if (second === "language") return { screen: "LanguageSettings" };

@@ -1,4 +1,5 @@
-import { Audio, PlaybackStatus } from 'expo-av';
+import { Audio, PlaybackStatus, AVPlaybackStatusToSet } from 'expo-av';
+import { useUIStore } from '../store';
 
 const DEFAULT_AUDIO_MODE = {
   allowsRecordingIOS: false,
@@ -13,6 +14,7 @@ const DEFAULT_AUDIO_MODE = {
 let sound: Audio.Sound | null = null;
 let statusListener: ((status: PlaybackStatus) => void) | null = null;
 let hasInitialized = false;
+let currentMetadata: { title: string; creator: string; artworkUrl?: string } | null = null;
 
 async function ensureAudioMode(): Promise<void> {
   if (!hasInitialized) {
@@ -48,21 +50,27 @@ export async function playAudioAsync(): Promise<PlaybackStatus | null> {
   if (!sound) {
     return null;
   }
-  return sound.playAsync();
+  const status = await sound.playAsync();
+  useUIStore.setState({ isAudioPlaying: true });
+  return status;
 }
 
 export async function pauseAudioAsync(): Promise<PlaybackStatus | null> {
   if (!sound) {
     return null;
   }
-  return sound.pauseAsync();
+  const status = await sound.pauseAsync();
+  useUIStore.setState({ isAudioPlaying: false });
+  return status;
 }
 
 export async function stopAudioAsync(): Promise<PlaybackStatus | null> {
   if (!sound) {
     return null;
   }
-  return sound.stopAsync();
+  const status = await sound.stopAsync();
+  useUIStore.setState({ isAudioPlaying: false });
+  return status;
 }
 
 export async function seekAudioAsync(positionMillis: number): Promise<PlaybackStatus | null> {
@@ -84,4 +92,61 @@ export async function unloadAudioAsync(): Promise<void> {
     await sound.unloadAsync();
     sound = null;
   }
+  currentMetadata = null;
+  useUIStore.setState({ currentTrack: null });
+}
+
+export async function loadAndPlayAsync(
+  uri: string,
+  metadata: { title: string; creator: string; artworkUrl?: string }
+): Promise<PlaybackStatus | null> {
+  await initializeAudioPlayerAsync();
+  if (!sound) {
+    return null;
+  }
+
+  currentMetadata = metadata;
+  useUIStore.setState({ currentTrack: metadata });
+
+  await sound.unloadAsync();
+  const status = await sound.loadAsync({ uri }, {
+    shouldPlay: true,
+    staysActiveInBackground: true,
+  });
+
+  if (statusListener) {
+    sound.setOnPlaybackStatusUpdate(statusListener);
+  }
+
+  setupNowPlayingInfo(metadata);
+  setupRemoteControls();
+
+  return status;
+}
+
+function setupNowPlayingInfo(metadata: { title: string; creator: string; artworkUrl?: string }): void {
+  if (sound) {
+    const metadata_value: AVPlaybackStatusToSet = {
+      rate: 1.0,
+      shouldPlay: true,
+      isMuted: false,
+    };
+    sound.setStatusAsync(metadata_value).catch(() => {});
+  }
+}
+
+function setupRemoteControls(): void {
+  if (!sound) return;
+
+  Audio.setIsEnabledAsync(true).catch(() => {});
+
+  const handleRemoteControlEvent = (status: PlaybackStatus) => {
+    if ('isBuffering' in status && !status.isBuffering) {
+      if ('isPlaying' in status) {
+        useUIStore.setState({ isAudioPlaying: status.isPlaying });
+      }
+    }
+  };
+
+  sound.setOnPlaybackStatusUpdate(handleRemoteControlEvent);
 }

@@ -265,6 +265,27 @@ export const getDisciplineColor = (discipline: string): string => {
   return colors[discipline] || 'from-gray-500 to-slate-500';
 };
 
+// Milestone types (from escrow milestone struct)
+export type MilestoneStatus = 'pending' | 'in-review' | 'accepted' | 'released' | 'rejected';
+
+export interface MilestoneComment {
+  id: string;
+  author: 'freelancer' | 'client';
+  text: string;
+  createdAt: string;
+}
+
+export interface Milestone {
+  id: string;
+  title: string;
+  description: string;
+  /** Amount in the bounty's currency */
+  amount: number;
+  status: MilestoneStatus;
+  dueDate?: string;
+  comments: MilestoneComment[];
+}
+
 // Bounty Platform Types
 export interface Bounty {
   id: string;
@@ -277,16 +298,22 @@ export interface Bounty {
   category: string;
   tags: string[];
   applicants: number;
-  status: 'open' | 'in-progress' | 'completed' | 'cancelled';
+  status: 'open' | 'in-progress' | 'completed' | 'cancelled' | 'disputed';
   paymentStatus: 'unfunded' | 'funded' | 'released' | 'refunded';
   escrowId?: string;
-  status: 'open' | 'in-progress' | 'completed' | 'cancelled' | 'disputed';
   postedBy: string;
   creatorAddress?: string;
-  escrowId?: string;
   postedDate: Date;
   requiredSkills: string[];
   deliverables: string;
+  milestones?: Milestone[];
+  milestones?: Array<{
+    index: number;
+    description: string;
+    amount: number;
+    released: boolean;
+  }>;
+  escrowStatus?: 'active' | 'complete' | 'released';
 }
 
 export interface BountyApplication {
@@ -321,6 +348,12 @@ export const bounties: Bounty[] = [
     postedDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
     requiredSkills: ['Brand Design', 'Logo Design', 'Typography', 'Figma'],
     deliverables: 'Logo files, brand guide PDF, color palette, typography system',
+    escrowStatus: 'active',
+    milestones: [
+      { index: 0, description: 'Discovery & mood boards', amount: 900, released: true },
+      { index: 1, description: 'Logo & visual identity', amount: 1200, released: false },
+      { index: 2, description: 'Brand guidelines delivery', amount: 900, released: false },
+    ],
   },
   {
     id: 'bounty-2',
@@ -333,9 +366,7 @@ export const bounties: Bounty[] = [
     category: 'Technical Writing',
     tags: ['API Docs', 'Technical Writing', 'Documentation'],
     applicants: 8,
-    status: 'open',
     paymentStatus: 'funded',
-    escrowId: 'escrow-2',
     status: 'in-progress',
     postedBy: 'company-2',
     creatorAddress: 'GCREATOR456...',
@@ -343,6 +374,40 @@ export const bounties: Bounty[] = [
     postedDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
     requiredSkills: ['Technical Writing', 'API Knowledge', 'Markdown'],
     deliverables: 'Complete API documentation, guides, and examples',
+    milestones: [
+      {
+        id: 'ms-1',
+        title: 'API Overview & Auth Docs',
+        description: 'Document the API overview, authentication flow, and error codes.',
+        amount: 500,
+        status: 'accepted',
+        dueDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        comments: [
+          { id: 'c1', author: 'freelancer', text: 'Auth section complete. Includes OAuth2 flow and API key examples.', createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() },
+          { id: 'c2', author: 'client', text: 'Looks great! Accepted.', createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() },
+        ],
+      },
+      {
+        id: 'ms-2',
+        title: 'Endpoint Reference',
+        description: 'Document all REST endpoints with request/response examples.',
+        amount: 600,
+        status: 'in-review',
+        dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+        comments: [
+          { id: 'c3', author: 'freelancer', text: 'Submitted full endpoint reference. 47 endpoints documented with curl examples.', createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString() },
+        ],
+      },
+      {
+        id: 'ms-3',
+        title: 'SDK Examples & Guides',
+        description: 'Write getting-started guides and code samples for JS, Python, and Go.',
+        amount: 400,
+        status: 'pending',
+        dueDate: new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString(),
+        comments: [],
+      },
+    ],
   },
   {
     id: 'bounty-3',
@@ -355,9 +420,8 @@ export const bounties: Bounty[] = [
     category: 'Content Creation',
     tags: ['Social Media', 'Content', 'Video', 'Graphics'],
     applicants: 15,
-    status: 'open',
-    paymentStatus: 'unfunded',
     status: 'completed',
+    paymentStatus: 'unfunded',
     postedBy: 'company-3',
     creatorAddress: 'GCREATOR789...',
     escrowId: 'esc_92',
@@ -376,10 +440,8 @@ export const bounties: Bounty[] = [
     category: 'UX Research',
     tags: ['UX Research', 'User Testing', 'Mobile App', 'Analytics'],
     applicants: 6,
-    status: 'completed',
-    paymentStatus: 'funded',
-    escrowId: 'escrow-4',
     status: 'disputed',
+    paymentStatus: 'funded',
     postedBy: 'company-4',
     creatorAddress: 'GCREATOR000...',
     escrowId: 'esc_105',
