@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReviewsForCreator } from "@/lib/services/review-service";
+import { prisma } from "@/lib/prisma";
 
 /**
  * POST /api/creators/reputation/batch
@@ -25,43 +25,64 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const reviews = await prisma.review.findMany({
+      where: {
+        creatorId: { in: creatorIds },
+        status: "APPROVED",
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        creatorId: true,
+        reviewerId: true,
+        reviewerName: true,
+        rating: true,
+        title: true,
+        body: true,
+        isVerifiedPurchase: true,
+        helpfulCount: true,
+        notHelpfulCount: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    const reviewsByCreator = new Map<string, typeof reviews>();
+    for (const review of reviews) {
+      const creatorReviews = reviewsByCreator.get(review.creatorId) ?? [];
+      creatorReviews.push(review);
+      reviewsByCreator.set(review.creatorId, creatorReviews);
+    }
+
     const results: Record<string, any> = {};
+    for (const creatorId of creatorIds) {
+      const creatorReviews = reviewsByCreator.get(creatorId) ?? [];
+      const ratingDistribution = {
+        5: creatorReviews.filter((review) => review.rating === 5).length,
+        4: creatorReviews.filter((review) => review.rating === 4).length,
+        3: creatorReviews.filter((review) => review.rating === 3).length,
+        2: creatorReviews.filter((review) => review.rating === 2).length,
+        1: creatorReviews.filter((review) => review.rating === 1).length,
+      };
+      const avgRating =
+        creatorReviews.length > 0
+          ? creatorReviews.reduce((sum, review) => sum + review.rating, 0) /
+            creatorReviews.length
+          : 0;
 
-    await Promise.all(
-      creatorIds.map(async (creatorId) => {
-        try {
-          const { reviews, total } = await getReviewsForCreator(creatorId);
-
-          // Calculate aggregated stats
-          const avgRating =
-            reviews.length > 0
-              ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
-              : 0;
-
-          const ratingDistribution = {
-            5: reviews.filter((r) => r.rating === 5).length,
-            4: reviews.filter((r) => r.rating === 4).length,
-            3: reviews.filter((r) => r.rating === 3).length,
-            2: reviews.filter((r) => r.rating === 2).length,
-            1: reviews.filter((r) => r.rating === 1).length,
-          };
-
-          results[creatorId] = {
-            totalReviews: total,
-            averageRating: Math.round(avgRating * 10) / 10,
-            ratingDistribution,
-            recentReviews: reviews.slice(0, 3),
-          };
-        } catch (error) {
-          results[creatorId] = {
-            totalReviews: 0,
-            averageRating: 0,
-            ratingDistribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
-            error: String(error),
-          };
-        }
-      }),
-    );
+      results[creatorId] = {
+        totalReviews: creatorReviews.length,
+        averageRating: Math.round(avgRating * 10) / 10,
+        ratingDistribution,
+        recentReviews: creatorReviews.slice(0, 3).map((review) => ({
+          ...review,
+          status: review.status.toLowerCase(),
+          createdAt: review.createdAt.toISOString(),
+          updatedAt: review.updatedAt.toISOString(),
+        })),
+      };
+    }
 
     return NextResponse.json(results);
   } catch (error) {
