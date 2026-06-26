@@ -1,6 +1,7 @@
 import { fetchCreatorCore, fetchCreatorSocial } from '@/lib/streaming/chunk-data';
 import { notFound } from 'next/navigation';
 import Image from 'next/image';
+import { HireMeDialog } from '@/components/creators/hire-me-dialog';
 
 export async function CreatorHeroSection({ id }: { id: string }) {
   const [creator, social] = await Promise.all([fetchCreatorCore(id), fetchCreatorSocial(id)]);
@@ -27,7 +28,7 @@ export async function CreatorHeroSection({ id }: { id: string }) {
             <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{social.name}</h1>
             <p className="text-muted-foreground">{social.title} · {social.discipline}</p>
           </div>
-          <div className="sm:ml-auto flex gap-3 pb-1">
+          <div className="sm:ml-auto flex flex-wrap items-center gap-3 pb-1">
             <a href={social.linkedIn} target="_blank" rel="noopener noreferrer"
               className="text-sm px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors">
               LinkedIn
@@ -36,6 +37,7 @@ export async function CreatorHeroSection({ id }: { id: string }) {
               className="text-sm px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors">
               Twitter
             </a>
+            <HireMeDialog creatorId={id} creatorName={social.name} skills={creator.skills} />
           </div>
         </div>
       </div>
