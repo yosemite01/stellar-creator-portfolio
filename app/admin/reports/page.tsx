@@ -93,6 +93,15 @@ export default function AdminReportsPage() {
     | { type: 'remove'; reportId: string }
     | null
   >(null);
+  const [startDate, setStartDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30); // Default: 30 days ago
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState<string>(() => {
+    return new Date().toISOString().split('T')[0];
+  });
+  const [exporting, setExporting] = useState<string | null>(null);
 
   function notify(msg: string) {
     setToast(msg);
@@ -155,6 +164,33 @@ export default function AdminReportsPage() {
     removed: reports.filter((r) => r.status === 'removed').length,
   };
 
+  const handleExport = async (reportType: string, format: 'csv' | 'json') => {
+    try {
+      setExporting(`${reportType}-${format}`);
+      const params = new URLSearchParams({
+        startDate,
+        endDate,
+        format,
+      });
+      const url = `/api/admin/reports/${reportType}?${params.toString()}`;
+
+      // Trigger download
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${reportType}-report.${format === 'csv' ? 'csv' : 'json'}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      notify(`${reportType} report exported as ${format.toUpperCase()}`);
+    } catch (error) {
+      console.error('Export failed:', error);
+      notify(`Failed to export ${reportType} report`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div>
@@ -210,6 +246,67 @@ export default function AdminReportsPage() {
             )}
           </button>
         ))}
+      </div>
+
+      {/* Date range filter and export section */}
+      <div className="space-y-4">
+        <div className="flex flex-wrap gap-4 items-end">
+          <div>
+            <label htmlFor="start-date" className="block text-sm font-medium mb-1">
+              Start Date
+            </label>
+            <input
+              id="start-date"
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          <div>
+            <label htmlFor="end-date" className="block text-sm font-medium mb-1">
+              End Date
+            </label>
+            <input
+              id="end-date"
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        </div>
+
+        {/* Export buttons */}
+        <div className="space-y-2">
+          <p className="text-sm font-medium">Export Reports</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {['users', 'bounties', 'disputes', 'revenue'].map((reportType) => (
+              <div key={reportType} className="flex gap-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 text-xs"
+                  onClick={() => handleExport(reportType, 'csv')}
+                  disabled={!!exporting}
+                  aria-label={`Export ${reportType} as CSV`}
+                >
+                  {exporting === `${reportType}-csv` ? 'Exporting...' : `${reportType} CSV`}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 text-xs"
+                  onClick={() => handleExport(reportType, 'json')}
+                  disabled={!!exporting}
+                  aria-label={`Export ${reportType} as JSON`}
+                >
+                  {exporting === `${reportType}-json` ? 'Exporting...' : `${reportType} JSON`}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Report cards */}
