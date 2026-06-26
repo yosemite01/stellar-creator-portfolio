@@ -3,8 +3,12 @@ import {
   RTCSessionDescription,
   RTCIceCandidate,
   mediaDevices,
-  RTCView,
 } from 'react-native-webrtc';
+import {
+  SignalingClient,
+  fetchSignalingConfig,
+  SignalingServerMessage,
+} from './SignalingClient';
 
 export type StreamRole = 'host' | 'viewer';
 export type StreamState = 'idle' | 'connecting' | 'connected' | 'error' | 'ended';
@@ -16,251 +20,277 @@ export interface StreamSession {
   error?: string;
   participantCount: number;
   peerConnection: RTCPeerConnection | null;
+  localStream?: MediaStream | null;
 }
 
-export interface SignalingMessage {
-  type: 'offer' | 'answer' | 'ice-candidate';
-  data: any;
+export interface StreamCallbacks {
+  onStateChange?: (state: StreamState) => void;
+  onParticipantCount?: (count: number) => void;
+  onLocalStream?: (stream: MediaStream) => void;
+  onRemoteStream?: (stream: MediaStream) => void;
+  onTip?: (tip: { from: string; amount: string; asset: string }) => void;
+  onStreamEnded?: () => void;
+  onError?: (message: string) => void;
 }
 
 /**
- * WebRTC streaming service for creator classes
- * Implements SDP/ICE signaling flow for peer-to-peer video
- * Supports both host (streaming) and viewer (receiving) modes
+ * WebRTC streaming service connected to app/api/signaling and server/signaling.ts.
+ * Host creates offer; viewer sends answer. Supports reconnect and live tips.
  */
 export class WebRTCStreamingService {
-  private peerConnections: Map<string, RTCPeerConnection> = new Map();
-  private signalingServerUrl: string;
-  private accessToken: string;
-  private roomId: string;
+  private peerConnection: RTCPeerConnection | null = null;
+  private localStream: MediaStream | null = null;
+  private signaling: SignalingClient | null = null;
+  private peerId = '';
+  private remotePeerId: string | null = null;
+  private participantCount = 0;
+  private state: StreamState = 'idle';
+  private role: StreamRole;
+  private callbacks: StreamCallbacks;
+  private wsUrl = '';
+  private makingOffer = false;
 
-  constructor(signalingServerUrl: string, accessToken: string, roomId: string) {
-    this.signalingServerUrl = signalingServerUrl;
-    this.accessToken = accessToken;
-    this.roomId = roomId;
+  constructor(
+    private readonly signalingServerUrl: string,
+    private readonly roomId: string,
+    role: StreamRole,
+    callbacks: StreamCallbacks = {},
+  ) {
+    this.role = role;
+    this.callbacks = callbacks;
   }
 
-  /**
-   * Initialize streaming session for host (creator)
-   * Sets up local video preview and listens for viewer connections
-   */
-  async initializeHost(): Promise<StreamSession> {
-    try {
-      // Get local media stream from device camera
-      const stream = await mediaDevices.getUserMedia({
-        audio: true,
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 },
-        },
-      });
-
-      // Create peer connection for accepting viewer connections
-      const peerConnection = new RTCPeerConnection({
-        iceServers: [
-          { urls: ['stun:stun.l.google.com:19302'] },
-          { urls: ['stun:stun1.l.google.com:19302'] },
-        ],
-      });
-
-      // Add local stream tracks to connection
-      stream.getTracks().forEach((track) => {
-        peerConnection.addTrack(track, stream);
-      });
-
-      // Listen for ICE candidates
-      peerConnection.onicecandidate = async (event) => {
-        if (event.candidate) {
-          await this.sendSignalingMessage({
-            type: 'ice-candidate',
-            data: event.candidate,
-          });
-        }
-      };
-
-      // Listen for new peer connections
-      peerConnection.onconnectionstatechange = () => {
-        console.log(`Host peer connection state: ${peerConnection.connectionState}`);
-      };
-
-      // Signal to server that host is ready
-      await this.sendSignalingMessage({
-        type: 'host-ready',
-        data: { role: 'host' },
-      });
-
-      return {
-        roomId: this.roomId,
-        role: 'host',
-        state: 'connecting',
-        participantCount: 0,
-        peerConnection,
-      };
-    } catch (error) {
-      console.error('Failed to initialize host:', error);
-      throw error;
-    }
+  private setState(next: StreamState): void {
+    this.state = next;
+    this.callbacks.onStateChange?.(next);
   }
 
-  /**
-   * Initialize streaming session for viewer
-   * Creates offer and establishes connection to host
-   */
-  async initializeViewer(): Promise<StreamSession> {
-    try {
-      // Create peer connection for receiving remote stream
-      const peerConnection = new RTCPeerConnection({
-        iceServers: [
-          { urls: ['stun:stun.l.google.com:19302'] },
-          { urls: ['stun:stun1.l.google.com:19302'] },
-        ],
-      });
-
-      // Listen for remote stream
-      peerConnection.ontrack = (event) => {
-        console.log('Received remote track:', event.track.kind);
-      };
-
-      // Listen for ICE candidates
-      peerConnection.onicecandidate = async (event) => {
-        if (event.candidate) {
-          await this.sendSignalingMessage({
-            type: 'ice-candidate',
-            data: event.candidate,
-          });
-        }
-      };
-
-      // Create and send offer
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-
-      await this.sendSignalingMessage({
-        type: 'offer',
-        data: offer,
-      });
-
-      return {
-        roomId: this.roomId,
-        role: 'viewer',
-        state: 'connecting',
-        participantCount: 1,
-        peerConnection,
-      };
-    } catch (error) {
-      console.error('Failed to initialize viewer:', error);
-      throw error;
-    }
+  private setParticipantCount(count: number): void {
+    this.participantCount = count;
+    this.callbacks.onParticipantCount?.(count);
   }
 
-  /**
-   * Handle incoming signaling message from peer
-   * Processes offer, answer, and ICE candidates
-   */
-  async handleSignalingMessage(message: SignalingMessage): Promise<void> {
+  async start(): Promise<StreamSession> {
     try {
-      if (!this.peerConnections.size) {
-        console.warn('No peer connections available');
-        return;
+      this.setState('connecting');
+
+      const config = await fetchSignalingConfig(this.signalingServerUrl);
+      this.peerId = config.peerId;
+      this.wsUrl = config.signalingWsUrl;
+
+      this.peerConnection = new RTCPeerConnection({ iceServers: config.iceServers as RTCConfiguration['iceServers'] });
+      this.registerPeerConnectionHandlers();
+
+      if (this.role === 'host') {
+        this.localStream = await mediaDevices.getUserMedia({
+          audio: true,
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 },
+          },
+        });
+        this.localStream.getTracks().forEach((track) => {
+          this.peerConnection!.addTrack(track, this.localStream!);
+        });
+        this.callbacks.onLocalStream?.(this.localStream);
+      } else {
+        this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+        this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });
       }
 
-      const peerConnection = Array.from(this.peerConnections.values())[0];
-
-      switch (message.type) {
-        case 'offer': {
-          // Viewer received offer from host
-          await peerConnection.setRemoteDescription(
-            new RTCSessionDescription(message.data),
-          );
-
-          // Create and send answer
-          const answer = await peerConnection.createAnswer();
-          await peerConnection.setLocalDescription(answer);
-
-          await this.sendSignalingMessage({
-            type: 'answer',
-            data: answer,
-          });
-          break;
-        }
-
-        case 'answer': {
-          // Host received answer from viewer
-          await peerConnection.setRemoteDescription(
-            new RTCSessionDescription(message.data),
-          );
-          break;
-        }
-
-        case 'ice-candidate': {
-          // Received ICE candidate from peer
-          if (message.data) {
-            try {
-              await peerConnection.addIceCandidate(
-                new RTCIceCandidate(message.data),
-              );
-            } catch (error) {
-              console.warn('Failed to add ICE candidate:', error);
-            }
+      this.signaling = new SignalingClient(
+        this.signalingServerUrl,
+        this.roomId,
+        this.peerId,
+        (msg) => void this.handleSignalingMessage(msg),
+        (connected) => {
+          if (!connected && this.state !== 'ended') {
+            this.setState('connecting');
           }
-          break;
-        }
-
-        default:
-          console.warn('Unknown signaling message type:', message.type);
-      }
-    } catch (error) {
-      console.error('Error handling signaling message:', error);
-    }
-  }
-
-  /**
-   * Stop streaming and clean up resources
-   */
-  async stopStreaming(): Promise<void> {
-    // Stop all tracks
-    for (const [, peerConnection] of this.peerConnections) {
-      peerConnection.getSenders().forEach((sender) => {
-        sender.track?.stop();
-      });
-      peerConnection.close();
-    }
-
-    this.peerConnections.clear();
-  }
-
-  /**
-   * Send signaling message to peer through server
-   */
-  private async sendSignalingMessage(message: SignalingMessage): Promise<void> {
-    try {
-      const response = await fetch(`${this.signalingServerUrl}/api/signaling`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.accessToken}`,
         },
-        body: JSON.stringify({
-          roomId: this.roomId,
-          message,
-        }),
-      });
+      );
 
-      if (!response.ok) {
-        throw new Error(`Signaling failed: ${response.statusText}`);
-      }
+      await this.signaling.connect(this.wsUrl);
+      this.signaling.startHttpPolling();
+
+      return this.getSession();
     } catch (error) {
-      console.error('Failed to send signaling message:', error);
+      const message = error instanceof Error ? error.message : 'Failed to start stream';
+      this.setState('error');
+      this.callbacks.onError?.(message);
+      throw error;
     }
   }
 
-  /**
-   * Check if WebRTC is supported on device
-   */
+  private registerPeerConnectionHandlers(): void {
+    if (!this.peerConnection) return;
+
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate && this.remotePeerId && this.signaling) {
+        this.signaling.send({
+          type: 'ice',
+          to: this.remotePeerId,
+          candidate: event.candidate.toJSON(),
+        });
+      }
+    };
+
+    this.peerConnection.ontrack = (event) => {
+      if (event.streams[0]) {
+        this.callbacks.onRemoteStream?.(event.streams[0]);
+        this.setState('connected');
+      }
+    };
+
+    this.peerConnection.onconnectionstatechange = () => {
+      const pcState = this.peerConnection?.connectionState;
+      if (pcState === 'connected') {
+        this.setState('connected');
+      } else if (pcState === 'failed' || pcState === 'disconnected') {
+        void this.attemptReconnect();
+      }
+    };
+  }
+
+  private async handleSignalingMessage(message: SignalingServerMessage): Promise<void> {
+    switch (message.type) {
+      case 'joined': {
+        this.setParticipantCount(message.peers.length);
+        if (this.role === 'host') {
+          for (const peer of message.peers) {
+            await this.createAndSendOffer(peer);
+          }
+        }
+        break;
+      }
+      case 'peer-joined': {
+        this.setParticipantCount(this.participantCount + 1);
+        if (this.role === 'host') {
+          await this.createAndSendOffer(message.peerId);
+        }
+        break;
+      }
+      case 'peer-left': {
+        this.setParticipantCount(Math.max(0, this.participantCount - 1));
+        if (this.role === 'viewer') {
+          this.setState('ended');
+          this.callbacks.onStreamEnded?.();
+        }
+        break;
+      }
+      case 'offer': {
+        if (this.role !== 'viewer' || !this.peerConnection) return;
+        this.remotePeerId = message.from;
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(message.sdp));
+        const answer = await this.peerConnection.createAnswer();
+        await this.peerConnection.setLocalDescription(answer);
+        this.signaling?.send({ type: 'answer', to: message.from, sdp: answer });
+        break;
+      }
+      case 'answer': {
+        if (this.role !== 'host' || !this.peerConnection) return;
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(message.sdp));
+        break;
+      }
+      case 'ice': {
+        if (!this.peerConnection || !message.candidate) return;
+        try {
+          await this.peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+        } catch {
+          // ICE candidates can arrive before remote description is set
+        }
+        break;
+      }
+      case 'tip': {
+        if (this.role === 'host') {
+          this.callbacks.onTip?.({
+            from: message.from,
+            amount: message.amount,
+            asset: message.asset,
+          });
+        }
+        break;
+      }
+      case 'error': {
+        this.callbacks.onError?.(message.message);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  private async createAndSendOffer(peerId: string): Promise<void> {
+    if (!this.peerConnection || this.makingOffer) return;
+    this.makingOffer = true;
+    this.remotePeerId = peerId;
+
+    try {
+      const offer = await this.peerConnection.createOffer();
+      await this.peerConnection.setLocalDescription(offer);
+      this.signaling?.send({ type: 'offer', to: peerId, sdp: offer });
+    } finally {
+      this.makingOffer = false;
+    }
+  }
+
+  sendTipNotification(toPeerId: string, amount: string, asset: string): void {
+    this.signaling?.send({ type: 'tip', to: toPeerId, amount, asset });
+  }
+
+  private async attemptReconnect(): Promise<void> {
+    if (this.state === 'ended' || !this.signaling) return;
+
+    this.setState('connecting');
+    this.peerConnection?.close();
+    this.peerConnection = new RTCPeerConnection({
+      iceServers: (await fetchSignalingConfig(this.signalingServerUrl, this.peerId)).iceServers as RTCConfiguration['iceServers'],
+    });
+    this.registerPeerConnectionHandlers();
+
+    if (this.role === 'host' && this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        this.peerConnection!.addTrack(track, this.localStream!);
+      });
+    } else if (this.role === 'viewer') {
+      this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+      this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+    }
+
+    try {
+      await this.signaling.connect(this.wsUrl);
+    } catch {
+      this.callbacks.onError?.('Reconnection failed');
+    }
+  }
+
+  async stopStreaming(): Promise<void> {
+    this.setState('ended');
+    this.signaling?.disconnect();
+    this.signaling = null;
+
+    this.localStream?.getTracks().forEach((track) => track.stop());
+    this.localStream = null;
+
+    this.peerConnection?.getSenders().forEach((sender) => sender.track?.stop());
+    this.peerConnection?.close();
+    this.peerConnection = null;
+  }
+
+  getSession(): StreamSession {
+    return {
+      roomId: this.roomId,
+      role: this.role,
+      state: this.state,
+      participantCount: this.participantCount,
+      peerConnection: this.peerConnection,
+      localStream: this.localStream,
+    };
+  }
+
   static isWebRTCAvailable(): boolean {
     try {
-      // Check if RTCPeerConnection is available
       return RTCPeerConnection !== undefined && mediaDevices !== undefined;
     } catch {
       return false;

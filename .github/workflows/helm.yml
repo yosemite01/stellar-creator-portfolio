@@ -1,0 +1,41 @@
+name: Helm Chart Validation
+
+on:
+  pull_request:
+    paths:
+      - 'helm/**'
+  push:
+    branches: [main, dev]
+    paths:
+      - 'helm/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Lint subcharts
+        run: |
+          for chart in helm/charts/*/; do
+            echo "Linting $chart"
+            helm lint "$chart"
+          done
+
+      - name: Build dependencies
+        run: helm dependency build helm/
+
+      - name: Lint umbrella chart
+        run: helm lint helm/
+
+      - name: Template render (dry-run)
+        run: helm template stellar helm/ --debug > /dev/null
+
+      - name: Validate rendered manifests
+        run: |
+          helm template stellar helm/ | kubectl apply --dry-run=client -f -

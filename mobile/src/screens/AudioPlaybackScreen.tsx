@@ -11,6 +11,7 @@ import {
 import { useTheme } from '../theme/ThemeProvider';
 import {
   loadAudioAsync,
+  loadAndPlayAsync,
   initializeAudioPlayerAsync,
   pauseAudioAsync,
   playAudioAsync,

@@ -42,20 +42,17 @@ model Session {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  password      String?
-  image         String?
-  role          Role      @default(USER)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  // Suspension/Ban tracking
-  suspendedAt   DateTime?
-  suspensionReason String?
-
+  id                  String    @id @default(cuid())
+  name                String?
+  email               String?   @unique
+  emailVerified       DateTime?
+  password            String?
+  image               String?
+  role                Role      @default(USER)
+  onboardingComplete  Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
   // Relations
   accounts      Account[]
   sessions      Session[]
@@ -71,10 +68,13 @@ model User {
   inAppNotifications     InAppNotification[]
   emailDeliveryLogs      EmailDeliveryLog[]
   emailUnsubscribeToken  String? @unique
+  emailBounced           Boolean @default(false)
   matchFeedback       MatchFeedback[]
   matchNotifications  MatchNotification[]
   auditLogs           AuditLog[]
   bountyTemplates     BountyTemplate[]
+  apiKeys             ApiKey[]
+  endorsementsGiven   Endorsement[] @relation(name: "endorsements_given")
 
   @@index([email])
 }
@@ -131,7 +131,9 @@ model CreatorProfile {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  tierHistory TierHistory[]
+  tierHistory    TierHistory[]
+  availabilities Availability[]
+  endorsements   Endorsement[]
 
   @@index([userId])
   @@index([discipline])
@@ -158,6 +160,8 @@ model ClientProfile {
   userId      String   @unique
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   companyName String?
+  projectType String?
+  budgetRange String?
   bio         String?
   avatar      String?
   verified    Boolean  @default(false)
@@ -169,6 +173,23 @@ model ClientProfile {
   updatedAt   DateTime @updatedAt
 
   @@index([userId])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  keyHash    String    @unique
+  name       String
+  scopes     String[]
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([keyHash])
 }
 
 model Bounty {
@@ -631,4 +652,15 @@ model BountyTemplate {
 
   @@index([category])
   @@index([createdByUserId])
+}
+
+// ── Zero-Knowledge Proofs — Issue #806 ───────────────────────────────────
+
+/// Nullifier registry for replay-protection in ZK proof verification
+model ZKNullifier {
+  id        String   @id @default(cuid())
+  nullifier String   @unique
+  createdAt DateTime @default(now())
+
+  @@index([nullifier])
 }

@@ -1,0 +1,36 @@
+# CODEOWNERS — enforces required reviews on critical paths.
+# Add team members as: /path/ @handle1 @handle2
+# Requires branch protection "Require review from Code Owners" enabled on main.
+
+# Core infrastructure and dependencies
+/prisma/                    @yosemite01
+/app/api/                   @yosemite01
+/backend/                   @yosemite01
+/backend/services/indexer/  @yosemite01
+
+# Authentication and security
+/lib/auth/                  @yosemite01
+/middleware.ts              @yosemite01
+/app/api/admin/             @yosemite01
+
+# Database migrations
+/prisma/migrations/         @yosemite01
+
+# Contracts and blockchain integration
+/contracts/                 @yosemite01
+
+# Configuration and CI/CD
+/.github/workflows/         @yosemite01
+/next.config.mjs            @yosemite01
+/tsconfig.json              @yosemite01
+/package.json               @yosemite01
+/pnpm-lock.yaml             @yosemite01
+Dockerfile                  @yosemite01
+Makefile                    @yosemite01
+
+# Environment and secrets
+.env.example                @yosemite01
+
+# Mobile app core
+/mobile/src/database/       @yosemite01
+/mobile/src/navigation/     @yosemite01

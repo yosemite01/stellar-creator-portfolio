@@ -64,3 +64,19 @@ jobs:
           name: soroban-contracts-${{ github.sha }}
           path: artifacts/
           if-no-files-found: error
+
+  docker-app:
+    name: Build Production Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build Docker image
+        run: docker build -f Dockerfile.app -t stellar-creator-portfolio:${{ github.sha }} .
+      - name: Verify image size under 300MB
+        run: |
+          SIZE=$(docker image inspect stellar-creator-portfolio:${{ github.sha }} --format='{{.Size}}')
+          echo "Image size: $SIZE bytes"
+          if [ "$SIZE" -gt 314572800 ]; then
+            echo "Image exceeds 300MB limit"
+            exit 1
+          fi

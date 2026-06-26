@@ -1,0 +1,49 @@
+# #804 — stellar-api production values
+replicaCount: 3
+
+image:
+  repository: ghcr.io/tukura11/stellar-api
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  type: ClusterIP
+  port: 3001
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+config:
+  RUST_LOG: "info"
+  API_PORT: "3001"
+
+secrets:
+  awsSecretName: stellar/api
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3001
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 3001
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+pdb:
+  minAvailable: 1

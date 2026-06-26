@@ -399,6 +399,17 @@ async fn health(
         }))
 }
 
+/// Readiness probe — returns 200 when the database is reachable.
+async fn ready(pool: web::Data<PgPool>) -> HttpResponse {
+    match pool.acquire().await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "status": "ready" })),
+        Err(e) => {
+            tracing::error!("Readiness check failed: {}", e);
+            HttpResponse::ServiceUnavailable().json(serde_json::json!({ "status": "not_ready" }))
+        }
+    }
+}
+
 /// Create a new bounty
 async fn create_bounty(body: web::Json<database::BountyRequest>) -> HttpResponse {
     tracing::info!("Creating bounty: {:?}", body.title);
@@ -1346,6 +1357,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::NormalizePath::trim())
             .wrap(ApiVersionHeader)
             .route("/health", web::get().to(health))
+            .route("/ready", web::get().to(ready))
             .route("/api/versions", web::get().to(api_versions))
             .route("/ws", web::get().to(websocket::ws_handler))
             .route("/api/v1/ws/metrics", web::get().to(websocket::websocket_metrics))

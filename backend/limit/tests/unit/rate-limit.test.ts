@@ -7,14 +7,69 @@ import {
   RateLimiter,
   AdaptiveRateLimiter,
   RequestQueue,
+  ENDPOINT_RATE_LIMITS,
+  createPerEndpointRateLimiter,
 } from "../../middleware/rate-limit";
 import { Request } from "express";
 
 export class RateLimiterTests {
   /**
+   * Test: Admin role bypasses rate limits
+   */
+  static async testAdminBypass(): Promise<boolean> {
+    const limiter = new RateLimiter({ windowMs: 1000, maxRequests: 1 });
+    const adminReq = {
+      ip: "127.0.0.1",
+      method: "GET",
+      path: "/api/test",
+      user: { id: "user123", role: "admin" },
+    } as any as Request;
+
+    // Exceed limit
+    await limiter.isLimited(adminReq);
+    await limiter.isLimited(adminReq);
+
+    // Admin should bypass and get through
+    const status = await limiter.isLimited(adminReq);
+    if (status.limited) return false;
+
+    return true;
+  }
+
+  /**
+   * Test: Per-endpoint rate limits use named constants
+   */
+  static testPerEndpointConstants(): boolean {
+    // Verify that all 5 required endpoints are defined
+    const requiredEndpoints = [
+      "POST /api/messages",
+      "POST /api/bounties",
+      "GET /api/search",
+      "POST /api/relay/sponsor",
+      "POST /api/ipfs/pin",
+    ];
+
+    for (const endpoint of requiredEndpoints) {
+      if (!(endpoint in ENDPOINT_RATE_LIMITS)) {
+        return false;
+      }
+    }
+
+    // Verify specific limits
+    if (ENDPOINT_RATE_LIMITS["POST /api/messages"].limit !== 30) return false;
+    if (ENDPOINT_RATE_LIMITS["POST /api/messages"].windowMs !== 60 * 1000) return false;
+
+    if (ENDPOINT_RATE_LIMITS["POST /api/bounties"].limit !== 5) return false;
+    if (ENDPOINT_RATE_LIMITS["POST /api/bounties"].windowMs !== 60 * 60 * 1000)
+      return false;
+
+    return true;
+  }
+
+  /**
    * Test: Basic rate limiting
    */
-  static testBasicRateLimiting(): boolean {
+  static async testBasicRateLimiting(): Promise<boolean> {
     const limiter = new RateLimiter({ windowMs: 1000, maxRequests: 3 });
     const mockReq = {
       ip: "127.0.0.1",
@@ -24,12 +79,12 @@ export class RateLimiterTests {
 
     // First 3 requests should pass
     for (let i = 0; i < 3; i++) {
-      const status = limiter.isLimited(mockReq);
+      const status = await limiter.isLimited(mockReq);
       if (status.limited) return false;
     }
 
     // 4th request should be limited
-    const status = limiter.isLimited(mockReq);
+    const status = await limiter.isLimited(mockReq);
     if (!status.limited) return false;
 
     return true;
@@ -38,7 +93,7 @@ export class RateLimiterTests {
   /**
    * Test: Sliding window reset
    */
-  static testSlidingWindowReset(): boolean {
+  static async testSlidingWindowReset(): Promise<boolean> {
     const limiter = new RateLimiter({ windowMs: 100, maxRequests: 1 });
     const mockReq = {
       ip: "127.0.0.1",
@@ -47,11 +102,11 @@ export class RateLimiterTests {
     } as Request;
 
     // First request passes
-    let status = limiter.isLimited(mockReq);
+    let status = await limiter.isLimited(mockReq);
     if (status.limited) return false;
 
     // Second request fails
-    status = limiter.isLimited(mockReq);
+    status = await limiter.isLimited(mockReq);
     if (!status.limited) return false;
 
     // Wait for window to reset
@@ -62,16 +117,16 @@ export class RateLimiterTests {
     }
 
     // Request should pass now
-    status = limiter.isLimited(mockReq);
+    status = await limiter.isLimited(mockReq);
     if (status.limited) return false;
 
     return true;
   }
 
   /**
-   * Test: Per-IP rate limiting
+   * Test: Per-IP rate limiting (separate buckets)
    */
-  static testPerIpRateLimiting(): boolean {
+  static async testPerIpRateLimiting(): Promise<boolean> {
     const limiter = new RateLimiter({ windowMs: 1000, maxRequests: 2 });
     const req1 = {
       ip: "192.168.1.1",
@@ -86,14 +141,14 @@ export class RateLimiterTests {
 
     // IP1: 2 requests pass
     for (let i = 0; i < 2; i++) {
-      if (limiter.isLimited(req1).limited) return false;
+      if ((await limiter.isLimited(req1)).limited) return false;
     }
 
     // IP1: 3rd request fails
-    if (!limiter.isLimited(req1).limited) return false;
+    if (!(await limiter.isLimited(req1)).limited) return false;
 
     // IP2: Should still have requests
-    if (limiter.isLimited(req2).limited) return false;
+    if ((await limiter.isLimited(req2)).limited) return false;
 
     return true;
   }
@@ -101,7 +156,7 @@ export class RateLimiterTests {
   /**
    * Test: DDoS protection (blocking)
    */
-  static testDdosProtection(): boolean {
+  static async testDdosProtection(): Promise<boolean> {
     const limiter = new RateLimiter({
       windowMs: 1000,
       maxRequests: 2,
@@ -115,11 +170,11 @@ export class RateLimiterTests {
 
     // Make 3 requests to exceed limit
     for (let i = 0; i < 3; i++) {
-      limiter.isLimited(mockReq);
+      await limiter.isLimited(mockReq);
     }
 
     // Should be blocked now
-    let status = limiter.isLimited(mockReq);
+    let status = await limiter.isLimited(mockReq);
     if (!status.limited) return false;
 
     // BlockedUntil should be set
@@ -131,7 +186,7 @@ export class RateLimiterTests {
   /**
    * Test: Request remaining count
    */
-  static testRemainingCount(): boolean {
+  static async testRemainingCount(): Promise<boolean> {
     const limiter = new RateLimiter({ windowMs: 1000, maxRequests: 5 });
     const mockReq = {
       ip: "127.0.0.1",
@@ -139,10 +194,10 @@ export class RateLimiterTests {
       path: "/api/test",
     } as Request;
 
-    let status = limiter.isLimited(mockReq);
+    let status = await limiter.isLimited(mockReq);
     if (status.remaining !== 4) return false; // 5 - 1
 
-    status = limiter.isLimited(mockReq);
+    status = await limiter.isLimited(mockReq);
     if (status.remaining !== 3) return false; // 5 - 2
 
     return true;
@@ -151,7 +206,7 @@ export class RateLimiterTests {
   /**
    * Test: Adaptive rate limiting
    */
-  static testAdaptiveRateLimiting(): boolean {
+  static async testAdaptiveRateLimiting(): Promise<boolean> {
     const limiter = new AdaptiveRateLimiter({
       windowMs: 1000,
       maxRequests: 100,
@@ -165,16 +220,16 @@ export class RateLimiterTests {
     } as Request;
 
     // Should work even if limits are adjusted based on memory
-    const status = limiter.isLimited(mockReq);
+    const status = await limiter.isLimited(mockReq);
     if (status.limited) return false;
 
     return true;
   }
 
   /**
-   * Test: Custom key generator
+   * Test: Custom key generator (endpoint-specific)
    */
-  static testCustomKeyGenerator(): boolean {
+  static async testCustomKeyGenerator(): Promise<boolean> {
     const limiter = new RateLimiter({
       windowMs: 1000,
       maxRequests: 2,
@@ -193,12 +248,12 @@ export class RateLimiterTests {
     } as Request;
 
     // Different methods should have separate limits
-    limiter.isLimited(req1);
-    limiter.isLimited(req1);
-    if (!limiter.isLimited(req1).limited) return false;
+    await limiter.isLimited(req1);
+    await limiter.isLimited(req1);
+    if (!(await limiter.isLimited(req1)).limited) return false;
 
     // Different method should pass
-    if (limiter.isLimited(req2).limited) return false;
+    if ((await limiter.isLimited(req2)).limited) return false;
 
     return true;
   }

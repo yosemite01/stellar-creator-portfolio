@@ -1,0 +1,11 @@
+# Umbrella values — override per subchart
+api:
+  enabled: true
+auth:
+  enabled: true
+notifications:
+  enabled: true
+indexer:
+  enabled: true
+next-app:
+  enabled: true
