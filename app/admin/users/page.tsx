@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,71 +9,113 @@ import {
   Search, UserCheck, UserX, Trash2, ShieldCheck, ChevronDown,
 } from 'lucide-react';
 import {
-  mockUsers, mockAuditLogs, addAuditLog,
-  type AdminUser, type UserRole, type UserStatus, type AuditLog,
-} from '@/lib/services/admin-service';
+  changeUserRole,
+  suspendUser,
+  unsuspendUser,
+  deleteUser,
+  getUsersSummary,
+} from '@/app/admin/actions';
+import { Role } from '@prisma/client';
 
-const ROLES: UserRole[] = ['ADMIN', 'CLIENT', 'CREATOR', 'USER'];
-const STATUS_COLORS: Record<UserStatus, string> = {
+const ROLES: Role[] = ['ADMIN', 'CLIENT', 'CREATOR', 'USER'];
+const STATUS_COLORS: Record<string, string> = {
   active: 'bg-green-500/10 text-green-600 border-green-500/20',
   suspended: 'bg-red-500/10 text-red-600 border-red-500/20',
   pending: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
 };
 
+interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  status: string;
+  joinedAt: string;
+  bounties: number;
+}
+
 export default function AdminUsersPage() {
-  const [users, setUsers] = useState<AdminUser[]>(mockUsers);
-  const [logs, setLogs] = useState<AuditLog[]>(mockAuditLogs);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadUsers();
+  }, [search, roleFilter, statusFilter]);
+
+  async function loadUsers() {
+    try {
+      setLoading(true);
+      const data = await getUsersSummary(
+        search || undefined,
+        roleFilter,
+        statusFilter,
+      );
+      setUsers(data as AdminUser[]);
+    } catch (error) {
+      console.error('Failed to load users:', error);
+      notify('Failed to load users');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   function notify(msg: string) {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
   }
 
-  function log(action: Parameters<typeof addAuditLog>[1], user: AdminUser, note?: string) {
-    setLogs((prev) => addAuditLog(prev, action, user.id, user.name, note));
+  const filtered = useMemo(() => users, [users]);
+
+  async function handleSuspendUser(user: AdminUser) {
+    try {
+      const reason = prompt('Enter suspension reason:');
+      if (!reason) return;
+      await suspendUser(user.id, reason);
+      notify(`${user.name} suspended.`);
+      await loadUsers();
+    } catch (error) {
+      notify(`Error: ${error instanceof Error ? error.message : 'Failed to suspend user'}`);
+    }
   }
 
-  const filtered = useMemo(() => {
-    return users.filter((u) => {
-      const matchSearch = u.name.toLowerCase().includes(search.toLowerCase()) ||
-        u.email.toLowerCase().includes(search.toLowerCase());
-      const matchRole = roleFilter === 'All' || u.role === roleFilter;
-      const matchStatus = statusFilter === 'All' || u.status === statusFilter;
-      return matchSearch && matchRole && matchStatus;
-    });
-  }, [users, search, roleFilter, statusFilter]);
-
-  function updateUser(id: string, patch: Partial<AdminUser>) {
-    setUsers((prev) => prev.map((u) => u.id === id ? { ...u, ...patch } : u));
+  async function handleUnsuspendUser(user: AdminUser) {
+    try {
+      await unsuspendUser(user.id);
+      notify(`${user.name} activated.`);
+      await loadUsers();
+    } catch (error) {
+      notify(`Error: ${error instanceof Error ? error.message : 'Failed to activate user'}`);
+    }
   }
 
-  function suspendUser(user: AdminUser) {
-    updateUser(user.id, { status: 'suspended' });
-    log('user.suspend', user);
-    notify(`${user.name} suspended.`);
+  async function handleDeleteUser(user: AdminUser) {
+    if (!confirm(`Delete ${user.name}? This cannot be undone.`)) return;
+    try {
+      await deleteUser(user.id);
+      notify(`${user.name} deleted.`);
+      await loadUsers();
+    } catch (error) {
+      notify(`Error: ${error instanceof Error ? error.message : 'Failed to delete user'}`);
+    }
   }
 
-  function activateUser(user: AdminUser) {
-    updateUser(user.id, { status: 'active' });
-    log('user.activate', user);
-    notify(`${user.name} activated.`);
-  }
-
-  function deleteUser(user: AdminUser) {
-    setUsers((prev) => prev.filter((u) => u.id !== user.id));
-    log('user.delete', user);
-    notify(`${user.name} deleted.`);
-  }
-
-  function changeRole(user: AdminUser, role: UserRole) {
-    updateUser(user.id, { role });
-    log('user.role_change', user, `Changed to ${role}`);
-    notify(`${user.name} role updated to ${role}.`);
+  async function handleChangeRole(user: AdminUser, role: Role) {
+    try {
+      if (role === 'ADMIN') {
+        const confirm_msg = `Promote ${user.name} to ADMIN? This requires careful consideration.`;
+        if (!confirm(confirm_msg)) return;
+      }
+      await changeUserRole(user.id, role);
+      notify(`${user.name} role updated to ${role}.`);
+      await loadUsers();
+    } catch (error) {
+      notify(`Error: ${error instanceof Error ? error.message : 'Failed to change role'}`);
+    }
   }
 
   function toggleSelect(id: string) {
@@ -84,19 +126,37 @@ export default function AdminUsersPage() {
     });
   }
 
-  function bulkSuspend() {
-    const targets = users.filter((u) => selected.has(u.id));
-    targets.forEach((u) => { updateUser(u.id, { status: 'suspended' }); log('user.suspend', u, 'Bulk action'); });
-    setSelected(new Set());
-    notify(`${targets.length} users suspended.`);
+  async function bulkSuspend() {
+    const reason = prompt('Enter suspension reason for all selected users:');
+    if (!reason) return;
+
+    try {
+      const targets = users.filter((u) => selected.has(u.id));
+      for (const user of targets) {
+        await suspendUser(user.id, reason);
+      }
+      setSelected(new Set());
+      notify(`${targets.length} users suspended.`);
+      await loadUsers();
+    } catch (error) {
+      notify(`Error: ${error instanceof Error ? error.message : 'Bulk suspend failed'}`);
+    }
   }
 
-  function bulkDelete() {
-    const targets = users.filter((u) => selected.has(u.id));
-    targets.forEach((u) => log('user.delete', u, 'Bulk action'));
-    setUsers((prev) => prev.filter((u) => !selected.has(u.id)));
-    setSelected(new Set());
-    notify(`${targets.length} users deleted.`);
+  async function bulkDelete() {
+    if (!confirm(`Delete ${selected.size} users? This cannot be undone.`)) return;
+
+    try {
+      const targets = users.filter((u) => selected.has(u.id));
+      for (const user of targets) {
+        await deleteUser(user.id);
+      }
+      setSelected(new Set());
+      notify(`${targets.length} users deleted.`);
+      await loadUsers();
+    } catch (error) {
+      notify(`Error: ${error instanceof Error ? error.message : 'Bulk delete failed'}`);
+    }
   }
 
   return (
@@ -132,7 +192,6 @@ export default function AdminUsersPage() {
           <option value="All">All Status</option>
           <option value="active">Active</option>
           <option value="suspended">Suspended</option>
-          <option value="pending">Pending</option>
         </select>
       </div>
 
@@ -165,7 +224,11 @@ export default function AdminUsersPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((user) => (
+                {loading ? (
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">Loading...</td></tr>
+                ) : filtered.length === 0 ? (
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">No users found</td></tr>
+                ) : filtered.map((user) => (
                   <tr key={user.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
                       <input type="checkbox" checked={selected.has(user.id)} onChange={() => toggleSelect(user.id)} />
@@ -178,7 +241,7 @@ export default function AdminUsersPage() {
                       <select
                         className="text-xs bg-transparent border border-border rounded px-1.5 py-0.5"
                         value={user.role}
-                        onChange={(e) => changeRole(user, e.target.value as UserRole)}
+                        onChange={(e) => handleChangeRole(user, e.target.value as Role)}
                       >
                         {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                       </select>
@@ -193,24 +256,21 @@ export default function AdminUsersPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
                         {user.status === 'suspended' ? (
-                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => activateUser(user)}>
+                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => handleUnsuspendUser(user)}>
                             <UserCheck size={12} /> Activate
                           </Button>
                         ) : (
-                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => suspendUser(user)}>
+                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => handleSuspendUser(user)}>
                             <UserX size={12} /> Suspend
                           </Button>
                         )}
-                        <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive hover:text-destructive" onClick={() => deleteUser(user)}>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive hover:text-destructive" onClick={() => handleDeleteUser(user)}>
                           <Trash2 size={12} />
                         </Button>
                       </div>
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && (
-                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">No users found</td></tr>
-                )}
               </tbody>
             </table>
           </div>

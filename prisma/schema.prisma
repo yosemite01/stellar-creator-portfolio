@@ -57,7 +57,7 @@ model User {
   accounts      Account[]
   sessions      Session[]
   verificationTokens VerificationToken[]
-  
+
   // Platform specific relations
   creatorProfile CreatorProfile?
   clientProfile  ClientProfile?
