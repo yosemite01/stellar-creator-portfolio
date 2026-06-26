@@ -320,6 +320,7 @@ function handleMessage(ws: WebSocket, rawData: string): void {
     case 'offer':
     case 'answer':
     case 'ice':
+    case 'tip':
       handleRelay(ws, state, msg);
       break;
 

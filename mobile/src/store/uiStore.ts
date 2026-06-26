@@ -15,7 +15,11 @@ import type { UIState } from './types';
 export const useUIStore = create<UIState>((set) => ({
   isLoading: false,
   toastMessage: null,
+  currentTrack: null,
+  isAudioPlaying: false,
   setLoading: (value) => set({ isLoading: value }),
   showToast: (message) => set({ toastMessage: message }),
   clearToast: () => set({ toastMessage: null }),
+  setCurrentTrack: (track) => set({ currentTrack: track }),
+  setAudioPlaying: (isPlaying) => set({ isAudioPlaying: isPlaying }),
 }));

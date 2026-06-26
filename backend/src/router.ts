@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { protectedProcedure, publicProcedure, router } from './trpc-setup';
 import { prisma } from '@/lib/prisma';
+import jwt from 'jsonwebtoken';
 
 // Root router with Prisma-backed queries
 export const appRouter = router({
@@ -320,7 +321,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         // Get user's analytics data
         const user = ctx.user!;
-        
+
         // This would calculate real metrics from bounties, applications, etc.
         return {
           earnings: {
@@ -338,6 +339,60 @@ export const appRouter = router({
             completed: 28,
             pending: 5,
           },
+        };
+      }),
+  }),
+
+  // Identity/ZK endpoints
+  identity: router({
+    verifyZk: publicProcedure
+      .input(
+        z.object({
+          proof: z.record(z.unknown()),
+          publicInputs: z.record(z.unknown()),
+          nullifier: z.string(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        // Check if nullifier has already been used (replay protection)
+        const existingNullifier = await prisma.zkNullifier.findUnique({
+          where: { nullifier: input.nullifier },
+        });
+
+        if (existingNullifier) {
+          throw new Error('Proof already used');
+        }
+
+        // Verify the proof (simplified: in production, call the Stellar contract or off-chain verifier)
+        // For now, accept any proof with non-empty public inputs
+        const publicInputs = input.publicInputs;
+        if (!publicInputs || Object.keys(publicInputs).length === 0) {
+          throw new Error('Invalid proof');
+        }
+
+        // Store the nullifier to prevent replay
+        await prisma.zkNullifier.create({
+          data: {
+            nullifier: input.nullifier,
+            createdAt: new Date(),
+          },
+        });
+
+        // Issue a short-lived JWT with ZK verification claim
+        const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
+        const token = jwt.sign(
+          {
+            zk_verified: true,
+            claim: 'age_18+',
+            iat: Math.floor(Date.now() / 1000),
+            exp: Math.floor(Date.now() / 1000) + 86400, // 24 hours
+          },
+          JWT_SECRET
+        );
+
+        return {
+          token,
+          expiresIn: 86400,
         };
       }),
   }),

@@ -14,6 +14,8 @@ export type RootStackParamList = {
   ImageEditor: { imageUri: string; imageWidth?: number; imageHeight?: number; fileSize?: number; mode?: string };
   Messaging: { conversationId?: string; recipientName?: string };
   BiometricAuth: undefined;
+  StreamHost: { roomId: string; signalingServerUrl?: string };
+  StreamViewer: { roomId: string; creatorName?: string; signalingServerUrl?: string };
 };
 
 export type MainTabParamList = {

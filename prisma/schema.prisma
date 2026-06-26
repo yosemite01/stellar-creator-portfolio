@@ -42,15 +42,16 @@ model Session {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  password      String?
-  image         String?
-  role          Role      @default(USER)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  name                String?
+  email               String?   @unique
+  emailVerified       DateTime?
+  password            String?
+  image               String?
+  role                Role      @default(USER)
+  onboardingComplete  Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
   
   // Relations
   accounts      Account[]
@@ -67,10 +68,7 @@ model User {
   inAppNotifications     InAppNotification[]
   emailDeliveryLogs      EmailDeliveryLog[]
   emailUnsubscribeToken  String? @unique
-  onboardingStep        Int       @default(0)
-  onboardingCompletedAt DateTime?
-  onboardingData        Json?
-  apiKeys               ApiKey[]
+  emailBounced           Boolean @default(false)
   matchFeedback       MatchFeedback[]
   matchNotifications  MatchNotification[]
   auditLogs           AuditLog[]
@@ -650,4 +648,15 @@ model BountyTemplate {
 
   @@index([category])
   @@index([createdByUserId])
+}
+
+// ── Zero-Knowledge Proofs — Issue #806 ───────────────────────────────────
+
+/// Nullifier registry for replay-protection in ZK proof verification
+model ZKNullifier {
+  id        String   @id @default(cuid())
+  nullifier String   @unique
+  createdAt DateTime @default(now())
+
+  @@index([nullifier])
 }

@@ -1,0 +1,35 @@
+[build]
+verbose = false
+max_target_size = 10485760
+
+[allowlist]
+description = "Allowlist for known patterns that are not secrets"
+paths = [
+  "(?i)node_modules/",
+  "(?i)\\.pnpm-store/",
+  "(?i)\\.next/",
+  "(?i)dist/",
+  "(?i)build/",
+  "(?i)coverage/",
+  "(?i)\\.env\\.example$",
+  "(?i)package-lock\\.json$",
+  "(?i)pnpm-lock\\.yaml$",
+]
+
+regexes = [
+  "\\$\\{[A-Z_]+\\}",
+  "\\$\\([A-Z_]+\\)",
+  "<[A-Z_]+>",
+]
+
+# Allowlist specific false positives
+[[rules]]
+description = "Allow template strings with placeholders"
+id = "generic-api-key"
+pattern = "(?i)(api[_-]?key|password|secret|token)\\s*[=:]{1,2}\\s*['\\\"]?\\$\\{[^}]+\\}['\\\"]?"
+allowlist = { paths = [
+  "\\.env\\.example",
+  "docs/",
+  "README\\.md",
+  "\\.md$",
+] }

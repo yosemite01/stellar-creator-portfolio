@@ -130,6 +130,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "^4.1.8",
     "eslint-config-next": "^16.2.4",
+    "gitleaks": "^8.20.0",
     "husky": "^9.1.7",
     "jsdom": "^29.0.2",
     "postcss": "^8.5",

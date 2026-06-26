@@ -4097,7 +4097,14 @@ name = "stellar-identity-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk 21.7.7",
- "soroban-sdk 23.5.3",
+]
+
+[[package]]
+name = "stellar-referral-contract"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk 21.7.7",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
