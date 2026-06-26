@@ -4,6 +4,7 @@ import { Header } from '@/components/header'
 import { Footer } from '@/components/footer'
 import { BountyMetaRow } from './bounty-meta-client'
 import { BountyScopeEditor } from './bounty-scope-editor'
+import { BountyMilestoneProgress } from './bounty-milestone-progress'
 import { Badge } from '@/components/ui/badge'
 
 interface Props {
@@ -45,6 +46,14 @@ export default async function BountyDetailPage({ params }: Props) {
           deadlineMs={bounty.deadline.getTime()}
           status={bounty.status}
         />
+
+        {bounty.milestones && bounty.milestones.length > 0 && (
+          <BountyMilestoneProgress
+            milestones={bounty.milestones}
+            currency={bounty.currency}
+            escrowStatus={bounty.escrowStatus}
+          />
+        )}
 
         {/* Required skills */}
         <div className="mb-8">

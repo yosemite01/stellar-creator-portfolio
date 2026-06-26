@@ -17,6 +17,7 @@ pub enum EscrowStatus {
     Released = 1,
     Refunded = 2,
     Disputed = 3,
+    Complete = 4,
 }
 
 /// Release Condition
@@ -75,6 +76,10 @@ pub enum DataKey {
     EscrowCounter,
     Yield(u64),
     YieldCfg,
+    MilestoneCount(u64),
+    MilestoneTotal(u64),
+    MilestoneReleasedCount(u64),
+    MilestoneReleasedAmount(u64),
 }
 
 // ── Issue #631: Yield Farming for Unwithdrawn Escrow Funds ───────────────────
@@ -422,6 +427,18 @@ impl EscrowContract {
         assert!(amount > 0, "Milestone amount must be positive");
         assert!(amount <= escrow.amount, "Milestone amount exceeds escrow");
 
+        let total_key = DataKey::MilestoneTotal(escrow_id);
+        let current_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
+        assert!(
+            current_total + amount <= escrow.amount,
+            "Milestone amounts exceed escrow total"
+        );
+        env.storage().persistent().set(&total_key, &(current_total + amount));
+
+        let count_key = DataKey::MilestoneCount(escrow_id);
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        env.storage().persistent().set(&count_key, &(count + 1));
+
         let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         assert!(
             env.storage().persistent().get::<(Symbol, u64, u32), Milestone>(&m_key).is_none(),
@@ -440,7 +457,6 @@ impl EscrowContract {
 
         let escrow = Self::get_escrow(env.clone(), escrow_id);
         require_authorized_party(authorizer == escrow.payer);
-        require_active_escrow(escrow.status == EscrowStatus::Active);
 
         let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         let mut milestone = env.storage().persistent()
@@ -448,6 +464,7 @@ impl EscrowContract {
             .expect("Milestone not found");
 
         assert!(!milestone.released, "Milestone already released");
+        require_active_escrow(escrow.status == EscrowStatus::Active);
 
         // EFFECTS – mark released before the token transfer
         milestone.released = true;
@@ -463,7 +480,65 @@ impl EscrowContract {
             (escrow_id, index, escrow.payee.clone(), milestone.amount),
         );
 
+        let released_key = DataKey::MilestoneReleasedCount(escrow_id);
+        let released_count: u32 = env.storage().persistent().get(&released_key).unwrap_or(0) + 1;
+        env.storage().persistent().set(&released_key, &released_count);
+
+        let released_amt_key = DataKey::MilestoneReleasedAmount(escrow_id);
+        let released_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&released_amt_key)
+            .unwrap_or(0)
+            + milestone.amount;
+        env.storage().persistent().set(&released_amt_key, &released_amount);
+
+        let milestone_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneCount(escrow_id))
+            .unwrap_or(0);
+
+        if milestone_count > 0 && released_count >= milestone_count {
+            let mut updated_escrow = Self::get_escrow(env.clone(), escrow_id);
+            updated_escrow.status = EscrowStatus::Complete;
+            updated_escrow.released_at = Some(env.ledger().timestamp());
+            let key = (Symbol::new(&env, "escrow"), escrow_id);
+            env.storage().persistent().set(&key, &updated_escrow);
+
+            env.events().publish(
+                (symbol_short!("escrow"), symbol_short!("complete")),
+                (escrow_id, updated_escrow.bounty_id),
+            );
+        }
+
         true
+    }
+
+    /// Returns milestone progress for an escrow: (released_count, milestone_count, released_amount, total_amount).
+    pub fn get_milestone_progress(env: Env, escrow_id: u64) -> (u32, u32, i128, i128) {
+        let released_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneReleasedCount(escrow_id))
+            .unwrap_or(0);
+        let milestone_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneCount(escrow_id))
+            .unwrap_or(0);
+        let total_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneTotal(escrow_id))
+            .unwrap_or(0);
+        let released_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneReleasedAmount(escrow_id))
+            .unwrap_or(0);
+
+        (released_count, milestone_count, released_amount, total_amount)
     }
 
     pub fn get_milestone(env: Env, escrow_id: u64, index: u32) -> Milestone {
@@ -1110,7 +1185,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only payer can release milestones")]
+    #[should_panic(expected = "Caller is not an authorized party")]
     fn payee_cannot_release_milestone() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1241,6 +1316,33 @@ mod tests {
         let token_client = TokenClient::new(&env, &token);
         assert_eq!(token_client.balance(&payee), 0i128);
         assert_eq!(token_client.balance(&contract_id), 1000i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Milestone amounts exceed escrow total")]
+    fn cumulative_milestone_sum_exceeding_escrow_is_rejected() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+        let id = contract.deposit(&1u64, &payer, &payee, &975, &token, &ReleaseCondition::OnCompletion);
+        contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
+        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &600);
+    }
+
+    #[test]
+    fn releasing_all_milestones_marks_escrow_complete() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
+        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &375);
+
+        contract.release_milestone(&payer, &id, &0);
+        assert!(contract.get_escrow(&id).status == EscrowStatus::Active);
+
+        contract.release_milestone(&payer, &id, &1);
+        assert!(contract.get_escrow(&id).status == EscrowStatus::Complete);
     }
 
     /// Two milestones whose combined amount equals the escrow can both be released
