@@ -120,11 +120,15 @@ pub struct Claims {
 #[derive(Clone, Debug)]
 pub struct RefreshEntry {
     pub subject: String,
+    pub family_id: String,
     pub expires_at: u64,
 }
 
 /// In-memory refresh token store: token → entry.
 pub type RefreshStore = Arc<Mutex<HashMap<String, RefreshEntry>>>;
+
+/// Tracks consumed tokens for reuse detection.
+pub type UsedTokenStore = Arc<Mutex<HashMap<String, String>>>;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct RefreshRequest {
@@ -135,6 +139,13 @@ pub struct RefreshRequest {
 pub struct RefreshResponse {
     pub access_token: String,
     pub refresh_token: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct LogoutRequest {
+    pub refresh_token: Option<String>,
+    pub revoke_all: Option<bool>,
+    pub subject: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -301,6 +312,7 @@ async fn verify_auth_signature(
 
 async fn refresh_token(
     store: web::Data<RefreshStore>,
+    used_store: web::Data<UsedTokenStore>,
     body: web::Json<RefreshRequest>,
 ) -> HttpResponse {
     if body.refresh_token.trim().is_empty() {
@@ -308,8 +320,8 @@ async fn refresh_token(
             .json(ApiResponse::<RefreshResponse>::err("refresh_token is required".to_string()));
     }
 
-    match consume_refresh_token(&store, &body.refresh_token) {
-        Some(subject) => match create_jwt(&subject) {
+    match consume_refresh_token(&store, &used_store, &body.refresh_token) {
+        Ok(subject) => match create_jwt(&subject) {
             Ok(access_token) => {
                 let new_refresh = issue_refresh_token(&store, &subject);
                 HttpResponse::Ok().json(ApiResponse::ok(RefreshResponse {
@@ -323,9 +335,45 @@ async fn refresh_token(
                     .json(ApiResponse::<RefreshResponse>::err("Failed to generate token".to_string()))
             }
         },
-        None => HttpResponse::Unauthorized()
+        Err("reuse_detected") => HttpResponse::Unauthorized()
+            .json(ApiResponse::<RefreshResponse>::err(
+                "Token reuse detected — all sessions revoked. Please log in again.".to_string(),
+            )),
+        Err(_) => HttpResponse::Unauthorized()
             .json(ApiResponse::<RefreshResponse>::err("Invalid or expired refresh token".to_string())),
     }
+}
+
+async fn logout(
+    store: web::Data<RefreshStore>,
+    body: web::Json<LogoutRequest>,
+) -> HttpResponse {
+    if let Some(true) = body.revoke_all {
+        if let Some(subject) = &body.subject {
+            let count = revoke_all_tokens_for_subject(&store, subject);
+            tracing::info!(subject = %subject, revoked = count, "Revoked all sessions");
+            return HttpResponse::Ok().json(ApiResponse::ok(
+                serde_json::json!({ "revoked": count }),
+            ));
+        }
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<()>::err("subject is required when revoke_all is true".to_string()));
+    }
+
+    if let Some(token) = &body.refresh_token {
+        let mut map = store.lock().unwrap();
+        if map.remove(token).is_some() {
+            return HttpResponse::Ok().json(ApiResponse::ok(
+                serde_json::json!({ "revoked": 1 }),
+            ));
+        }
+        return HttpResponse::Ok().json(ApiResponse::ok(
+            serde_json::json!({ "revoked": 0 }),
+        ));
+    }
+
+    HttpResponse::BadRequest()
+        .json(ApiResponse::<()>::err("refresh_token or revoke_all with subject is required".to_string()))
 }
 
 /// Create a JWT for a given public key.
@@ -354,6 +402,7 @@ pub fn create_jwt(public_key: &str) -> Result<String, jsonwebtoken::errors::Erro
 /// Issue a new opaque refresh token (64-byte hex) and store it.
 pub fn issue_refresh_token(store: &RefreshStore, subject: &str) -> String {
     let token = generate_nonce() + &generate_nonce(); // 128 hex chars
+    let family_id = generate_nonce();
     let expires_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -361,17 +410,63 @@ pub fn issue_refresh_token(store: &RefreshStore, subject: &str) -> String {
         + 30 * 24 * 3600; // 30 days
     store.lock().unwrap().insert(
         token.clone(),
-        RefreshEntry { subject: subject.to_string(), expires_at },
+        RefreshEntry {
+            subject: subject.to_string(),
+            family_id,
+            expires_at,
+        },
     );
     token
 }
 
-/// Validate a refresh token and return the subject if valid.
-pub fn consume_refresh_token(store: &RefreshStore, token: &str) -> Option<String> {
+/// Validate and consume a refresh token with reuse detection.
+/// If a previously consumed token is reused, all tokens for that subject are revoked.
+pub fn consume_refresh_token(
+    store: &RefreshStore,
+    used_store: &UsedTokenStore,
+    token: &str,
+) -> Result<String, &'static str> {
     let mut map = store.lock().unwrap();
-    let entry = map.remove(token)?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    if entry.expires_at > now { Some(entry.subject) } else { None }
+
+    if let Some(entry) = map.remove(token) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        if entry.expires_at <= now {
+            return Err("expired");
+        }
+        // Record as used for reuse detection
+        used_store
+            .lock()
+            .unwrap()
+            .insert(token.to_string(), entry.subject.clone());
+        return Ok(entry.subject);
+    }
+
+    // Check if this token was already consumed (reuse = theft)
+    let used = used_store.lock().unwrap();
+    if let Some(subject) = used.get(token) {
+        let subject = subject.clone();
+        drop(used);
+        tracing::warn!(
+            subject = %subject,
+            "Refresh token reuse detected — revoking all sessions for user"
+        );
+        // Revoke all tokens for this subject
+        map.retain(|_, entry| entry.subject != subject);
+        return Err("reuse_detected");
+    }
+
+    Err("invalid")
+}
+
+/// Revoke all tokens for a given subject
+pub fn revoke_all_tokens_for_subject(store: &RefreshStore, subject: &str) -> usize {
+    let mut map = store.lock().unwrap();
+    let before = map.len();
+    map.retain(|_, entry| entry.subject != subject);
+    before - map.len()
 }
 
 async fn health() -> HttpResponse {
@@ -496,16 +591,19 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Features: TOTP-based 2FA/MFA");
 
     let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+    let used_store: UsedTokenStore = Arc::new(Mutex::new(HashMap::new()));
 
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(store.clone()))
+            .app_data(web::Data::new(used_store.clone()))
             .wrap(middleware::Logger::default())
             .wrap(middleware::NormalizePath::trim())
             .route("/health", web::get().to(health))
             .route("/api/auth/challenge", web::get().to(get_challenge))
             .route("/api/auth/verify", web::post().to(verify_auth_signature))
             .route("/api/auth/refresh", web::post().to(refresh_token))
+            .route("/api/auth/logout", web::post().to(logout))
             .route("/api/auth/mfa/setup", web::post().to(setup_mfa))
             .route("/api/auth/mfa/verify", web::post().to(verify_mfa))
             .route("/api/auth/mfa/backup-codes", web::post().to(generate_backup_codes))
@@ -760,25 +858,44 @@ mod tests {
     #[test]
     fn issue_and_consume_refresh_token_succeeds() {
         let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let used: UsedTokenStore = Arc::new(Mutex::new(HashMap::new()));
         let token = issue_refresh_token(&store, "wallet-1");
         assert_eq!(token.len(), 128);
-        let subject = consume_refresh_token(&store, &token);
-        assert_eq!(subject, Some("wallet-1".to_string()));
+        let subject = consume_refresh_token(&store, &used, &token);
+        assert_eq!(subject, Ok("wallet-1".to_string()));
     }
 
     #[test]
     fn consume_refresh_token_removes_it() {
         let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let used: UsedTokenStore = Arc::new(Mutex::new(HashMap::new()));
         let token = issue_refresh_token(&store, "wallet-1");
-        consume_refresh_token(&store, &token);
-        // Second consume must return None (single-use)
-        assert_eq!(consume_refresh_token(&store, &token), None);
+        let _ = consume_refresh_token(&store, &used, &token);
+        // Second consume detects reuse and revokes all sessions
+        let result = consume_refresh_token(&store, &used, &token);
+        assert_eq!(result, Err("reuse_detected"));
     }
 
     #[test]
-    fn consume_unknown_refresh_token_returns_none() {
+    fn consume_unknown_refresh_token_returns_err() {
         let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
-        assert_eq!(consume_refresh_token(&store, "nonexistent"), None);
+        let used: UsedTokenStore = Arc::new(Mutex::new(HashMap::new()));
+        assert_eq!(consume_refresh_token(&store, &used, "nonexistent"), Err("invalid"));
+    }
+
+    #[test]
+    fn token_reuse_revokes_all_user_sessions() {
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let used: UsedTokenStore = Arc::new(Mutex::new(HashMap::new()));
+        let t1 = issue_refresh_token(&store, "wallet-1");
+        let _t2 = issue_refresh_token(&store, "wallet-1");
+        // Consume t1
+        let _ = consume_refresh_token(&store, &used, &t1);
+        // Reuse t1 — should revoke all wallet-1 tokens including t2
+        let result = consume_refresh_token(&store, &used, &t1);
+        assert_eq!(result, Err("reuse_detected"));
+        // t2 should also be gone
+        assert!(store.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -787,6 +904,17 @@ mod tests {
         let t1 = issue_refresh_token(&store, "wallet-1");
         let t2 = issue_refresh_token(&store, "wallet-1");
         assert_ne!(t1, t2);
+    }
+
+    #[test]
+    fn revoke_all_tokens_clears_subject() {
+        let store: RefreshStore = Arc::new(Mutex::new(HashMap::new()));
+        let _t1 = issue_refresh_token(&store, "wallet-1");
+        let _t2 = issue_refresh_token(&store, "wallet-1");
+        let _t3 = issue_refresh_token(&store, "wallet-2");
+        let count = revoke_all_tokens_for_subject(&store, "wallet-1");
+        assert_eq!(count, 2);
+        assert_eq!(store.lock().unwrap().len(), 1);
     }
 
     // ── POST /api/auth/refresh integration tests ──────────────────────────────
@@ -800,8 +928,10 @@ mod tests {
             InitError = (),
         >,
     > {
+        let used: UsedTokenStore = Arc::new(Mutex::new(HashMap::new()));
         App::new()
             .app_data(web::Data::new(store))
+            .app_data(web::Data::new(used))
             .route("/api/auth/refresh", web::post().to(refresh_token))
     }
 

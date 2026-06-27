@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -20,6 +20,10 @@ import { SkillCombobox } from "@/components/ui/skill-combobox";
 import { ProfileCompletionIndicator } from "@/components/profile/profile-completion-indicator";
 import { trackEvent } from "@/lib/analytics/analytics";
 import { computeProfileCompletion } from "@/lib/profile-completion";
+import {
+    PortfolioReorder,
+    type PortfolioItem,
+} from "@/components/forms/portfolio-reorder";
 
 const profileFormSchema = z.object({
     displayName: z.string().min(2, {
@@ -58,6 +62,16 @@ export function ProfileForm() {
         mode: "onChange",
     });
 
+    const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
+    const [isSaving, setIsSaving] = useState(false);
+
+    const handlePortfolioChange = useCallback(
+        (items: PortfolioItem[]) => {
+            setPortfolioItems(items);
+        },
+        [],
+    );
+
     const watched = useWatch({ control: form.control });
     const completion = computeProfileCompletion({
         displayName: watched.displayName,
@@ -73,9 +87,18 @@ export function ProfileForm() {
         trackEvent("profile_completion_rate", { percentage: completion.percentage });
     }, [completion.percentage]);
 
-    function onSubmit(data: ProfileFormValues) {
-        console.log(data);
-        trackEvent("profile_updated", { completion: completion.percentage });
+    async function onSubmit(data: ProfileFormValues) {
+        setIsSaving(true);
+        try {
+            const payload = {
+                ...data,
+                portfolio: portfolioItems,
+            };
+            console.log(payload);
+            trackEvent("profile_updated", { completion: completion.percentage });
+        } finally {
+            setIsSaving(false);
+        }
     }
 
     return (
@@ -164,6 +187,12 @@ export function ProfileForm() {
                             </FormItem>
                         )}
                     />
+
+                    <PortfolioReorder
+                        items={portfolioItems}
+                        onChange={handlePortfolioChange}
+                    />
+
                     <FormField
                         control={form.control}
                         name="githubUrl"
@@ -216,7 +245,9 @@ export function ProfileForm() {
                             </FormItem>
                         )}
                     />
-                    <Button type="submit">Update profile</Button>
+                    <Button type="submit" disabled={isSaving}>
+                        {isSaving ? "Saving..." : "Update profile"}
+                    </Button>
                 </form>
             </Form>
         </div>

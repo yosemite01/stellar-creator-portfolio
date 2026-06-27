@@ -3,11 +3,14 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AccessClaims {
     pub sub: String,
+    pub jti: Uuid,
     pub family_id: Uuid,
     pub exp: i64,
     pub iat: i64,
@@ -33,6 +36,7 @@ pub fn sign_access_token(
     let exp = now + ttl;
     let claims = AccessClaims {
         sub: user_id.to_string(),
+        jti: Uuid::new_v4(),
         family_id,
         exp: exp.timestamp(),
         iat: now.timestamp(),
@@ -59,13 +63,66 @@ pub fn verify_access_token(
     Ok(token.claims)
 }
 
+#[derive(Clone, Default)]
+pub struct RevocationList {
+    revoked_jtis: Arc<Mutex<HashSet<Uuid>>>,
+}
+
+impl RevocationList {
+    pub fn new() -> Self {
+        Self {
+            revoked_jtis: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    pub fn revoke(&self, jti: Uuid) {
+        self.revoked_jtis.lock().unwrap().insert(jti);
+    }
+
+    pub fn is_revoked(&self, jti: &Uuid) -> bool {
+        self.revoked_jtis.lock().unwrap().contains(jti)
+    }
+}
+
+pub fn verify_access_token_with_revocation(
+    token: &str,
+    jwt_secret: &str,
+    revocation_list: &RevocationList,
+) -> Result<AccessClaims, TokenError> {
+    let claims = verify_access_token(token, jwt_secret)
+        .map_err(|e| TokenError::Jwt(e.to_string()))?;
+
+    if revocation_list.is_revoked(&claims.jti) {
+        return Err(TokenError::Revoked);
+    }
+
+    Ok(claims)
+}
+
+#[derive(Debug, Clone)]
+pub enum TokenError {
+    Jwt(String),
+    Revoked,
+    Reused,
+}
+
+impl std::fmt::Display for TokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenError::Jwt(e) => write!(f, "JWT error: {}", e),
+            TokenError::Revoked => write!(f, "token has been revoked"),
+            TokenError::Reused => write!(f, "token reuse detected — all sessions revoked"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn access_token_round_trip() {
-        let secret = "01234567890123456789012345678901"; // 32 chars
+        let secret = "01234567890123456789012345678901";
         let family = Uuid::new_v4();
         let token = sign_access_token("user-1", family, secret, Duration::minutes(15)).unwrap();
         let claims = verify_access_token(&token, secret).unwrap();
@@ -74,8 +131,56 @@ mod tests {
     }
 
     #[test]
+    fn access_token_has_jti() {
+        let secret = "01234567890123456789012345678901";
+        let family = Uuid::new_v4();
+        let token = sign_access_token("user-1", family, secret, Duration::minutes(15)).unwrap();
+        let claims = verify_access_token(&token, secret).unwrap();
+        assert!(!claims.jti.is_nil());
+    }
+
+    #[test]
+    fn two_tokens_have_different_jtis() {
+        let secret = "01234567890123456789012345678901";
+        let family = Uuid::new_v4();
+        let t1 = sign_access_token("user-1", family, secret, Duration::minutes(15)).unwrap();
+        let t2 = sign_access_token("user-1", family, secret, Duration::minutes(15)).unwrap();
+        let c1 = verify_access_token(&t1, secret).unwrap();
+        let c2 = verify_access_token(&t2, secret).unwrap();
+        assert_ne!(c1.jti, c2.jti);
+    }
+
+    #[test]
     fn refresh_token_hash_stable() {
         let t = "abc";
         assert_eq!(hash_refresh_token(t), hash_refresh_token(t));
+    }
+
+    #[test]
+    fn revocation_list_blocks_revoked_token() {
+        let secret = "01234567890123456789012345678901";
+        let family = Uuid::new_v4();
+        let token = sign_access_token("user-1", family, secret, Duration::minutes(15)).unwrap();
+        let claims = verify_access_token(&token, secret).unwrap();
+
+        let rev_list = RevocationList::new();
+        assert!(!rev_list.is_revoked(&claims.jti));
+
+        rev_list.revoke(claims.jti);
+        assert!(rev_list.is_revoked(&claims.jti));
+
+        let result = verify_access_token_with_revocation(&token, secret, &rev_list);
+        assert!(matches!(result, Err(TokenError::Revoked)));
+    }
+
+    #[test]
+    fn revocation_list_allows_non_revoked_token() {
+        let secret = "01234567890123456789012345678901";
+        let family = Uuid::new_v4();
+        let token = sign_access_token("user-1", family, secret, Duration::minutes(15)).unwrap();
+
+        let rev_list = RevocationList::new();
+        let result = verify_access_token_with_revocation(&token, secret, &rev_list);
+        assert!(result.is_ok());
     }
 }
