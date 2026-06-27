@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { applicationSubmitSchema } from '@/lib/validators'
+import { bountyApplicationSchema } from '@/lib/validations/bounty-application'
 import type { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2 } from 'lucide-react'
 
-const schema = applicationSubmitSchema
+const schema = bountyApplicationSchema
 type FormValues = z.infer<typeof schema>
 
 export function BountyApplicationForm({
@@ -30,6 +30,7 @@ export function BountyApplicationForm({
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
+    mode: 'onChange',
     defaultValues: {
       bounty_id: bountyId,
       proposed_budget: suggestedBudget,
@@ -63,6 +64,7 @@ export function BountyApplicationForm({
           id="proposed_budget"
           type="number"
           min={1}
+          max={1_000_000}
           step={1}
           {...form.register('proposed_budget', { valueAsNumber: true })}
         />
@@ -79,7 +81,7 @@ export function BountyApplicationForm({
           id="timeline"
           type="number"
           min={1}
-          max={3650}
+          max={365}
           {...form.register('timeline', { valueAsNumber: true })}
         />
         {form.formState.errors.timeline && (
@@ -88,7 +90,7 @@ export function BountyApplicationForm({
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="proposal">Proposal (min. 50 characters)</Label>
+        <Label htmlFor="proposal">Proposal (min. 100 characters)</Label>
         <Textarea
           id="proposal"
           rows={10}
@@ -107,7 +109,7 @@ export function BountyApplicationForm({
         </Alert>
       )}
 
-      <Button type="submit" disabled={form.formState.isSubmitting} className="w-full sm:w-auto">
+      <Button type="submit" disabled={!form.formState.isValid || form.formState.isSubmitting} className="w-full sm:w-auto">
         {form.formState.isSubmitting ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />

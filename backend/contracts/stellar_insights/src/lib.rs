@@ -8,6 +8,11 @@ use soroban_sdk::{
 /// Challenge deposit in stroops (10 XLM).
 pub const CHALLENGE_DEPOSIT: i128 = 100_000_000;
 
+const SECONDS_PER_MONTH: u64 = 30 * 86400;
+const GRACE_PERIOD_MONTHS: u64 = 3;
+const DECAY_SCALE: i64 = 10_000;
+const DEFAULT_DECAY_RATE: i64 = 500; // 5% per month
+
 #[contracttype]
 pub struct EpochData {
     pub epoch: u64,
@@ -51,6 +56,15 @@ pub struct ReviewChallenge {
 }
 
 #[contracttype]
+#[derive(Clone, Debug)]
+pub struct CreatorReputation {
+    pub creator: Address,
+    pub score: i64,
+    pub last_activity: u64,
+    pub bounties_completed: u64,
+}
+
+#[contracttype]
 pub enum DataKey {
     Epoch(Symbol, u64),
     Review(u64),
@@ -59,6 +73,8 @@ pub enum DataKey {
     ChallengeCounter,
     Admin,
     PlatformToken,
+    Reputation(Address),
+    DecayRate,
 }
 
 #[contracttype]
@@ -306,6 +322,137 @@ impl StellarInsights {
             .get(&DataKey::Challenge(challenge_id))
             .expect("Challenge not found")
     }
+
+    // ── Reputation decay (#765) ──────────────────────────────────────────────
+
+    fn exp_decay(decay_rate: i64, months: u64) -> i64 {
+        let x = decay_rate * (months as i64);
+        let t1 = DECAY_SCALE * DECAY_SCALE;
+        let t2 = x * DECAY_SCALE;
+        let t3 = (x * x) / 2;
+        let t4 = (x * x * x) / (6 * DECAY_SCALE);
+        let t5 = (x * x * x * x) / (24 * DECAY_SCALE * DECAY_SCALE);
+        let result = (t1 - t2 + t3 - t4 + t5) / DECAY_SCALE;
+        if result < 0 { 0 } else { result }
+    }
+
+    pub fn set_reputation(env: Env, admin: Address, creator: Address, score: i64) -> bool {
+        admin.require_auth();
+        Self::require_admin(&env, &admin);
+        assert!(score >= 0, "Score must be non-negative");
+
+        let rep = CreatorReputation {
+            creator: creator.clone(),
+            score,
+            last_activity: env.ledger().timestamp(),
+            bounties_completed: 0,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reputation(creator.clone()), &rep);
+
+        env.events().publish(
+            (symbol_short!("rep_set"), creator),
+            score,
+        );
+        true
+    }
+
+    pub fn record_bounty_completion(env: Env, creator: Address, bonus: i64) -> bool {
+        creator.require_auth();
+        assert!(bonus >= 0, "Bonus must be non-negative");
+
+        let mut rep: CreatorReputation = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Reputation(creator.clone()))
+            .expect("Creator reputation not found");
+
+        rep.score += bonus;
+        rep.last_activity = env.ledger().timestamp();
+        rep.bounties_completed += 1;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reputation(creator.clone()), &rep);
+
+        env.events().publish(
+            (symbol_short!("bty_done"), creator),
+            (rep.score, rep.bounties_completed),
+        );
+        true
+    }
+
+    pub fn get_effective_reputation(env: Env, creator: Address) -> i64 {
+        let rep: CreatorReputation = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Reputation(creator))
+            .expect("Creator reputation not found");
+
+        let now = env.ledger().timestamp();
+        if now <= rep.last_activity {
+            return rep.score;
+        }
+
+        let months_inactive = (now - rep.last_activity) / SECONDS_PER_MONTH;
+        if months_inactive <= GRACE_PERIOD_MONTHS {
+            return rep.score;
+        }
+
+        let decay_months = months_inactive - GRACE_PERIOD_MONTHS;
+        let decay_rate: i64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DecayRate)
+            .unwrap_or(DEFAULT_DECAY_RATE);
+
+        let factor = Self::exp_decay(decay_rate, decay_months);
+        (rep.score * factor) / DECAY_SCALE
+    }
+
+    pub fn is_decaying(env: Env, creator: Address) -> bool {
+        let rep: Option<CreatorReputation> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Reputation(creator));
+
+        match rep {
+            None => false,
+            Some(r) => {
+                let now = env.ledger().timestamp();
+                if now <= r.last_activity {
+                    return false;
+                }
+                (now - r.last_activity) / SECONDS_PER_MONTH > GRACE_PERIOD_MONTHS
+            }
+        }
+    }
+
+    pub fn set_decay_rate(env: Env, admin: Address, new_rate: i64) -> bool {
+        admin.require_auth();
+        Self::require_admin(&env, &admin);
+        assert!(new_rate > 0 && new_rate <= DECAY_SCALE, "Rate must be between 1 and 10000");
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::DecayRate, &new_rate);
+        true
+    }
+
+    pub fn get_decay_rate(env: Env) -> i64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DecayRate)
+            .unwrap_or(DEFAULT_DECAY_RATE)
+    }
+
+    pub fn get_reputation(env: Env, creator: Address) -> CreatorReputation {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Reputation(creator))
+            .expect("Creator reputation not found")
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -416,5 +563,78 @@ mod tests {
 
         assert_eq!(contract.get_review(&review_id).status, ReviewStatus::Active);
         assert_eq!(contract.get_challenge(&0).status, ChallengeStatus::Rejected);
+    }
+
+    // ── Reputation decay tests (#765) ────────────────────────────────────────
+
+    #[test]
+    fn test_no_decay_within_grace_period() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, token, _, _) = setup(&env);
+        let contract_id = env.register_contract(None, StellarInsights);
+        let contract = StellarInsightsClient::new(&env, &contract_id);
+
+        contract.initialize(&admin, &token);
+        let creator = Address::generate(&env);
+        contract.set_reputation(&admin, &creator, &1000);
+
+        env.ledger().set_timestamp(2 * SECONDS_PER_MONTH);
+        assert_eq!(contract.get_effective_reputation(&creator), 1000);
+        assert!(!contract.is_decaying(&creator));
+    }
+
+    #[test]
+    fn test_decay_after_grace_period() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, token, _, _) = setup(&env);
+        let contract_id = env.register_contract(None, StellarInsights);
+        let contract = StellarInsightsClient::new(&env, &contract_id);
+
+        contract.initialize(&admin, &token);
+        let creator = Address::generate(&env);
+        contract.set_reputation(&admin, &creator, &10000);
+
+        env.ledger().set_timestamp(6 * SECONDS_PER_MONTH);
+        let effective = contract.get_effective_reputation(&creator);
+        assert!(effective < 10000);
+        assert!(effective > 8000);
+        assert!(contract.is_decaying(&creator));
+    }
+
+    #[test]
+    fn test_bounty_completion_refreshes_activity() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, token, _, _) = setup(&env);
+        let contract_id = env.register_contract(None, StellarInsights);
+        let contract = StellarInsightsClient::new(&env, &contract_id);
+
+        contract.initialize(&admin, &token);
+        let creator = Address::generate(&env);
+        contract.set_reputation(&admin, &creator, &1000);
+
+        env.ledger().set_timestamp(6 * SECONDS_PER_MONTH);
+        assert!(contract.is_decaying(&creator));
+
+        contract.record_bounty_completion(&creator, &100);
+        assert!(!contract.is_decaying(&creator));
+        assert_eq!(contract.get_effective_reputation(&creator), 1100);
+    }
+
+    #[test]
+    fn test_governance_adjusts_decay_rate() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, token, _, _) = setup(&env);
+        let contract_id = env.register_contract(None, StellarInsights);
+        let contract = StellarInsightsClient::new(&env, &contract_id);
+
+        contract.initialize(&admin, &token);
+        assert_eq!(contract.get_decay_rate(), DEFAULT_DECAY_RATE);
+
+        contract.set_decay_rate(&admin, &1000);
+        assert_eq!(contract.get_decay_rate(), 1000);
     }
 }

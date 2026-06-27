@@ -9,8 +9,9 @@
  *  - Pull-to-refresh
  */
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -24,6 +25,12 @@ import * as Haptics from "expo-haptics";
 import { useTheme } from "../theme/ThemeProvider";
 import { VirtualizedScrollList } from "../components/VirtualizedScrollList";
 import { FontSize, FontWeight, Radius, Spacing } from "../theme/tokens";
+import {
+  type NearbyCreator,
+  fetchNearbyCreators,
+  getCurrentPosition,
+  requestGeofencingPermissions,
+} from "../services/GeofencingService";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -265,6 +272,34 @@ export function CreatorDirectoryScreen({
   const { colors, isDark } = useTheme();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedDiscipline, setSelectedDiscipline] = useState("All");
+  const [nearbyCreators, setNearbyCreators] = useState<NearbyCreator[]>([]);
+  const [nearbyLoading, setNearbyLoading] = useState(false);
+
+  const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000";
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const perms = await requestGeofencingPermissions();
+      if (!perms.foreground || cancelled) return;
+      setNearbyLoading(true);
+      try {
+        const pos = await getCurrentPosition();
+        const creators = await fetchNearbyCreators(
+          pos.coords.latitude,
+          pos.coords.longitude,
+          10,
+          API_BASE,
+        );
+        if (!cancelled) setNearbyCreators(creators);
+      } catch {
+        // silently degrade — nearby section just won't show
+      } finally {
+        if (!cancelled) setNearbyLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [API_BASE]);
 
   const fetchCreators = useCallback(
     async (page: number, pageSize: number): Promise<Creator[]> => {
@@ -405,6 +440,29 @@ export function CreatorDirectoryScreen({
         })}
       </ScrollView>
 
+      {/* Near You section (#762) */}
+      {nearbyLoading && (
+        <ActivityIndicator size="small" style={{ paddingVertical: Spacing.sm }} />
+      )}
+      {nearbyCreators.length > 0 && (
+        <View style={nearYouStyles.section}>
+          <Text style={[nearYouStyles.title, { color: colors.text }]}>Near You</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: Spacing.sm, paddingHorizontal: Spacing.base }}>
+            {nearbyCreators.map((c) => (
+              <Pressable
+                key={c.id}
+                onPress={() => onSelectCreator?.(c.id)}
+                style={[nearYouStyles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              >
+                <Text style={[nearYouStyles.name, { color: colors.text }]} numberOfLines={1}>{c.name}</Text>
+                <Text style={[nearYouStyles.discipline, { color: colors.primary }]}>{c.discipline}</Text>
+                <Text style={[nearYouStyles.distance, { color: colors.textTertiary }]}>{c.distanceKm.toFixed(1)} km</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {/* Virtualized infinite list */}
       <VirtualizedScrollList
         infiniteConfig={infiniteConfig}
@@ -483,4 +541,13 @@ const styles = StyleSheet.create({
   emptyIcon: { fontSize: 48 },
   emptyTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, textAlign: "center" },
   emptySubtitle: { fontSize: FontSize.base, textAlign: "center", lineHeight: 22 },
+});
+
+const nearYouStyles = StyleSheet.create({
+  section: { paddingVertical: Spacing.sm },
+  title: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, paddingHorizontal: Spacing.base, marginBottom: Spacing.xs },
+  card: { padding: Spacing.sm, borderRadius: Radius.xl, borderWidth: 1, minWidth: 160 },
+  name: { fontSize: FontSize.base, fontWeight: FontWeight.bold },
+  discipline: { fontSize: FontSize.sm, marginTop: 2 },
+  distance: { fontSize: FontSize.xs, marginTop: 2 },
 });

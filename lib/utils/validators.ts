@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { bountyApplicationSchema } from '@/lib/validations/bounty-application'
 
 export const paginationSchema = z.object({
   page: z.coerce.number().int().positive().optional().default(1),
@@ -90,12 +91,7 @@ export const applicationSchema = z.object({
 })
 
 /** Client-submitted body (applicant comes from session). */
-export const applicationSubmitSchema = z.object({
-  bounty_id: z.string().min(1).max(128),
-  proposed_budget: z.number().positive(),
-  timeline: z.number().int().positive().max(3650),
-  proposal: z.string().min(50).max(5000),
-})
+export const applicationSubmitSchema = bountyApplicationSchema
 
 export const applicationStatusBodySchema = z.object({
   status: z.enum(['accepted', 'rejected']),
