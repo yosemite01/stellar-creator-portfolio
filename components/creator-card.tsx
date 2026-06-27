@@ -6,6 +6,7 @@ import { Creator } from '@/lib/creators-data';
 import { ArrowRight, Linkedin, Twitter, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useComparison } from '@/components/ComparisonContext';
+import Image from 'next/image';
 import {
   Tooltip,
   TooltipContent,
@@ -83,10 +84,12 @@ export function CreatorCard({ creator }: CreatorCardProps) {
       {/* Cover Image */}
       <div className="aspect-video bg-gradient-to-br from-primary/20 to-accent/20 overflow-hidden relative">
         {creator.coverImage && (
-          <img
+          <Image
             src={creator.coverImage}
             alt={creator.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            fill
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+            className="object-cover group-hover:scale-105 transition-transform duration-300"
           />
         )}
       </div>

@@ -154,6 +154,31 @@ export function moderateReview(reviewId: string, status: 'approved' | 'rejected'
   return review
 }
 
+export function getReviewsForCreatorsBatch(
+  creatorIds: string[]
+): Record<string, { reviews: Review[]; total: number }> {
+  const approved = Array.from(reviewStore.values()).filter(
+    (r) => r.status === 'approved' && creatorIds.includes(r.creatorId)
+  )
+
+  const grouped: Record<string, Review[]> = {}
+  for (const id of creatorIds) {
+    grouped[id] = []
+  }
+  for (const r of approved) {
+    grouped[r.creatorId].push(r)
+  }
+
+  const result: Record<string, { reviews: Review[]; total: number }> = {}
+  for (const id of creatorIds) {
+    const reviews = grouped[id].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )
+    result[id] = { reviews, total: reviews.length }
+  }
+  return result
+}
+
 export function getPendingReviews(): Review[] {
   return Array.from(reviewStore.values()).filter((r) => r.status === 'pending')
 }

@@ -76,6 +76,7 @@ pub enum DataKey {
     EscrowCounter,
     Yield(u64),
     YieldCfg,
+    YieldPaused,
     MilestoneCount(u64),
     MilestoneTotal(u64),
     MilestoneReleasedCount(u64),
@@ -621,6 +622,51 @@ impl EscrowContract {
         escrow_id
     }
 
+    // ── Issue #754: Yield Farming Pause ────────────────────────────────────────
+
+    pub fn pause_yield(env: Env, admin: Address) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "platform_admin"))
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only platform admin can pause yield");
+
+        env.storage().persistent().set(&DataKey::YieldPaused, &true);
+
+        env.events().publish(
+            (symbol_short!("yield"), symbol_short!("paused")),
+            (),
+        );
+    }
+
+    pub fn unpause_yield(env: Env, admin: Address) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "platform_admin"))
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only platform admin can unpause yield");
+
+        env.storage().persistent().set(&DataKey::YieldPaused, &false);
+
+        env.events().publish(
+            (symbol_short!("yield"), symbol_short!("resumed")),
+            (),
+        );
+    }
+
+    pub fn is_yield_paused(env: Env) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::YieldPaused)
+            .unwrap_or(false)
+    }
+
     // ── Issue #631: Yield Farming ─────────────────────────────────────────────
 
     /// Set yield configuration.  Only the platform admin may call this.
@@ -658,6 +704,14 @@ impl EscrowContract {
     ///
     /// No tokens move during accrual — the number is a credit held internally.
     pub fn accrue_yield(env: Env, escrow_id: u64) {
+        assert!(
+            !env.storage()
+                .persistent()
+                .get::<DataKey, bool>(&DataKey::YieldPaused)
+                .unwrap_or(false),
+            "Yield farming is paused"
+        );
+
         let cfg: YieldConfig = env
             .storage()
             .persistent()
@@ -1435,6 +1489,85 @@ mod tests {
 
         env.ledger().set_timestamp(199);
         contract.release_funds(&payer, &id);
+    }
+
+    // ── yield pause (#754) ──────────────────────────────────────────────────
+
+    #[test]
+    fn admin_can_pause_and_unpause_yield() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+        let _ = (token, payer, payee);
+
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+
+        assert!(!contract.is_yield_paused());
+
+        contract.pause_yield(&admin);
+        assert!(contract.is_yield_paused());
+
+        contract.unpause_yield(&admin);
+        assert!(!contract.is_yield_paused());
+    }
+
+    #[test]
+    #[should_panic(expected = "Only platform admin can pause yield")]
+    fn non_admin_cannot_pause_yield() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+        let _ = (token, payer, payee);
+
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+
+        let stranger = Address::generate(&env);
+        contract.pause_yield(&stranger);
+    }
+
+    #[test]
+    #[should_panic(expected = "Yield farming is paused")]
+    fn accrue_yield_blocked_when_paused() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+        contract.configure_yield(&admin, &300, &500, &9000);
+
+        env.ledger().set_timestamp(100);
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+
+        contract.pause_yield(&admin);
+        env.ledger().set_timestamp(200);
+        contract.accrue_yield(&id);
+    }
+
+    #[test]
+    fn withdraw_yield_allowed_when_paused() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 10_000);
+        let cid = env.register_contract(None, EscrowContract);
+        let contract = EscrowContractClient::new(&env, &cid);
+
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+        contract.configure_yield(&admin, &300, &500, &9000);
+
+        env.ledger().set_timestamp(1000);
+        let id = contract.deposit(&1u64, &payer, &payee, &10_000, &token, &ReleaseCondition::OnCompletion);
+
+        env.ledger().set_timestamp(1000 + 365 * 24 * 3600);
+        contract.accrue_yield(&id);
+        let accrued = contract.get_accrued_yield(&id);
+        assert!(accrued > 0);
+
+        contract.pause_yield(&admin);
+        let withdrawn = contract.withdraw_yield(&admin, &id);
+        assert_eq!(withdrawn, accrued);
     }
 
 }
