@@ -477,6 +477,94 @@ impl GovernanceContract {
             .expect("Proposal not queued")
     }
 
+    // ── Issue #749: Quorum enforcement ───────────────────────────────────────
+
+    const DEFAULT_QUORUM_PERCENT: u64 = 10; // 10% of total voting power
+
+    /// Set the quorum threshold (0–100). Only admin can update.
+    pub fn set_quorum_percent(env: Env, admin: Address, quorum_percent: u64) {
+        admin.require_auth();
+        let config = Self::get_config(env.clone());
+        assert_eq!(admin, config.admin_address, "Only admin can set quorum");
+        assert!(quorum_percent <= 100, "Quorum must be 0-100");
+        let key = Symbol::new(&env, "quorum_pct");
+        env.storage().persistent().set(&key, &quorum_percent);
+        let ledger_ttl = 30 * 24 * 3600 / 5;
+        env.storage().persistent().extend_ttl(&key, 4096, ledger_ttl);
+        env.events().publish((symbol_short!("gov"), symbol_short!("quorum")), (quorum_percent,));
+    }
+
+    /// Get the current quorum threshold. Defaults to 10%.
+    pub fn get_quorum_percent(env: Env) -> u64 {
+        let key = Symbol::new(&env, "quorum_pct");
+        env.storage().persistent().get::<Symbol, u64>(&key).unwrap_or(Self::DEFAULT_QUORUM_PERCENT)
+    }
+
+    /// Set total voting power (governance token supply). Admin only.
+    pub fn set_total_voting_power(env: Env, admin: Address, total: u64) {
+        admin.require_auth();
+        let config = Self::get_config(env.clone());
+        assert_eq!(admin, config.admin_address, "Only admin can set voting power");
+        assert!(total > 0, "Total voting power must be positive");
+        let key = Symbol::new(&env, "total_vp");
+        env.storage().persistent().set(&key, &total);
+        let ledger_ttl = 30 * 24 * 3600 / 5;
+        env.storage().persistent().extend_ttl(&key, 4096, ledger_ttl);
+    }
+
+    /// Get total voting power. Returns 0 if not yet configured.
+    pub fn get_total_voting_power(env: Env) -> u64 {
+        let key = Symbol::new(&env, "total_vp");
+        env.storage().persistent().get::<Symbol, u64>(&key).unwrap_or(0)
+    }
+
+    /// Finalize a proposal after its voting deadline, enforcing quorum.
+    ///
+    /// Requires `(yes_votes + no_votes) * 100 / total_supply >= quorum_percent`.
+    /// Panics if quorum is not met, voting is still open, or total supply is 0.
+    pub fn finalize_proposal(env: Env, proposal_id: u64) -> bool {
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
+        let mut proposal = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
+            .expect("Proposal not found");
+
+        assert!(
+            env.ledger().timestamp() >= proposal.voting_deadline,
+            "Voting still in progress"
+        );
+        let pending = String::from_str(&env, "pending");
+        assert!(proposal.status == pending, "Proposal not pending");
+
+        let total_supply = Self::get_total_voting_power(env.clone());
+        assert!(total_supply > 0, "Total voting power not configured");
+
+        let participation = (proposal.yes_votes + proposal.no_votes)
+            .saturating_mul(100)
+            / total_supply;
+        let quorum = Self::get_quorum_percent(env.clone());
+
+        assert!(participation >= quorum, "QuorumNotMet");
+
+        proposal.status = if proposal.yes_votes > proposal.no_votes {
+            String::from_str(&env, "approved")
+        } else {
+            String::from_str(&env, "rejected")
+        };
+
+        env.storage().persistent().set(&proposal_key, &proposal);
+        let ledger_ttl = 30 * 24 * 3600 / 5;
+        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("finalized")),
+            (proposal_id, participation, quorum),
+        );
+
+        true
+    }
+
     // ── Issue #770: Guardian veto & configurable timelock ────────────────
 
     /// Add a guardian address that can veto queued proposals.
@@ -585,3 +673,5 @@ impl GovernanceContract {
         );
     }
 }
+
+mod tests;

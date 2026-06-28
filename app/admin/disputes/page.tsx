@@ -1,75 +1,125 @@
 'use client';
 
-import { useReducer, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  getDisputeSnapshot,
-  startMediation,
-  openCommunityVote,
-  resolveDisputeWithTemplate,
-  closeDispute,
-  computeDisputeAnalytics,
-  DISPUTE_RESOLUTION_TEMPLATES,
-  type DisputeRecord,
-} from '@/lib/services/dispute-service';
-import { Gavel, Users, BarChart3, ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Gavel, RefreshCw } from 'lucide-react';
 
-const STATUS_LABEL: Record<DisputeRecord['status'], string> = {
-  filed: 'Filed',
-  evidence: 'Evidence',
-  mediation: 'Mediation',
-  community_vote: 'Community vote',
-  resolved: 'Resolved',
-  appealed: 'Appeal',
-  closed: 'Closed',
+interface Dispute {
+  id: string;
+  escrowId: string;
+  creatorId: string;
+  clientId: string;
+  status: string;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type Resolution = 'release_to_freelancer' | 'refund_to_creator' | 'split_50_50';
+
+const STATUS_COLORS: Record<string, string> = {
+  open: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+  resolved: 'bg-green-500/10 text-green-600 border-green-500/20',
+  closed: 'bg-gray-500/10 text-gray-500 border-gray-500/20',
 };
 
+const RESOLUTION_LABELS: Record<Resolution, string> = {
+  release_to_freelancer: 'Release to Freelancer',
+  refund_to_creator: 'Refund to Creator',
+  split_50_50: 'Split 50/50',
+};
+
+function ageLabel(createdAt: string) {
+  const ms = Date.now() - new Date(createdAt).getTime();
+  const days = Math.floor(ms / 86_400_000);
+  if (days > 0) return `${days}d ago`;
+  const hrs = Math.floor(ms / 3_600_000);
+  if (hrs > 0) return `${hrs}h ago`;
+  return 'just now';
+}
+
 export default function AdminDisputesPage() {
-  const [, bump] = useReducer((x: number) => x + 1, 0);
+  const [disputes, setDisputes] = useState<Dispute[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | 'all'>('open');
+  const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mediationNote, setMediationNote] = useState('');
-  const [resolutionExtra, setResolutionExtra] = useState('');
-  const [templateId, setTemplateId] = useState(DISPUTE_RESOLUTION_TEMPLATES[0]?.id ?? '');
+  const [note, setNote] = useState('');
+  const [resolving, setResolving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
-  const snapshot =
-    typeof window !== 'undefined'
-      ? getDisputeSnapshot()
-      : { disputes: [] as DisputeRecord[] };
+  const LIMIT = 20;
 
-  const disputes = snapshot.disputes;
-  const selected = disputes.find((d) => d.id === selectedId) ?? disputes[0] ?? null;
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/disputes?status=${statusFilter}&page=${page}&limit=${LIMIT}`
+      );
+      if (!res.ok) throw new Error('Failed to load disputes');
+      const data = await res.json();
+      setDisputes(data.disputes);
+      setTotal(data.total);
+    } catch (e) {
+      notify('Failed to load disputes');
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter, page]);
 
-  const analytics = computeDisputeAnalytics(disputes);
+  useEffect(() => { load(); }, [load]);
 
-  const voteTally = selected
-    ? selected.communityVotes.reduce(
-        (acc, v) => {
-          acc[v.side] += 1;
-          return acc;
-        },
-        { client: 0, creator: 0 }
-      )
-    : { client: 0, creator: 0 };
+  const selected = disputes.find((d) => d.id === selectedId) ?? null;
 
-  function refresh() {
-    bump();
+  function notify(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
   }
 
+  async function resolve(resolution: Resolution) {
+    if (!selected) return;
+    setResolving(true);
+    try {
+      const res = await fetch(`/api/admin/disputes/${selected.id}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolution, note: note.trim() || undefined }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? 'Failed to resolve');
+      }
+      notify(`Resolved: ${RESOLUTION_LABELS[resolution]}`);
+      setNote('');
+      setSelectedId(null);
+      await load();
+    } catch (e: any) {
+      notify(e.message ?? 'Error resolving dispute');
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  const totalPages = Math.ceil(total / LIMIT);
+
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center gap-4">
+    <div className="max-w-6xl mx-auto space-y-6 p-6">
+      {/* Toast */}
+      {toast && (
+        <div
+          aria-live="polite"
+          className="fixed top-4 right-4 z-50 bg-foreground text-background px-4 py-2 rounded-lg shadow-lg text-sm"
+        >
+          {toast}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" asChild>
           <Link href="/admin" className="gap-1">
             <ArrowLeft className="h-4 w-4" /> Admin
@@ -78,230 +128,191 @@ export default function AdminDisputesPage() {
       </div>
 
       <div>
-        <h1 className="text-2xl font-bold mb-1 flex items-center gap-2">
-          <Gavel className="h-7 w-7" /> Dispute mediation
+        <h1 className="text-2xl font-bold flex items-center gap-2 mb-1">
+          <Gavel className="h-6 w-6" /> Dispute Management
         </h1>
-        <p className="text-muted-foreground text-sm">
-          Review cases, run mediation, optionally open advisory community votes, and resolve using
-          templates. Escrow actions are simulated.
+        <p className="text-sm text-muted-foreground">
+          Review disputes and trigger on-chain resolution. All actions are logged to the audit trail.
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" /> Open
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{analytics.totalOpen}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Mediation</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{analytics.inMediation}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Users className="h-4 w-4" /> Community vote
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{analytics.awaitingCommunity}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Resolved (30d)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{analytics.resolvedLast30d}</p>
-          </CardContent>
-        </Card>
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {(['open', 'resolved', 'all'] as const).map((s) => (
+          <Button
+            key={s}
+            size="sm"
+            variant={statusFilter === s ? 'default' : 'outline'}
+            onClick={() => { setStatusFilter(s); setPage(1); setSelectedId(null); }}
+          >
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </Button>
+        ))}
+        <span className="ml-auto text-sm text-muted-foreground">{total} dispute{total !== 1 ? 's' : ''}</span>
+        <Button variant="ghost" size="icon" onClick={load} aria-label="Refresh">
+          <RefreshCw className="h-4 w-4" />
+        </Button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
-          <CardHeader>
+      <div className="grid gap-6 lg:grid-cols-5">
+        {/* List */}
+        <Card className="lg:col-span-2">
+          <CardHeader className="pb-3">
             <CardTitle className="text-base">Cases</CardTitle>
-            <CardDescription>Select a dispute</CardDescription>
+            <CardDescription>Select a dispute to review</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2 max-h-[480px] overflow-y-auto">
-            {disputes.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                onClick={() => setSelectedId(d.id)}
-                className={`w-full text-left rounded-lg border p-3 text-sm transition-colors ${
-                  selected?.id === d.id
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:bg-secondary/50'
-                }`}
-              >
-                <div className="font-medium line-clamp-1">{d.title}</div>
-                <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
-                  <Badge variant="outline" className="text-[10px]">
-                    {STATUS_LABEL[d.status]}
-                  </Badge>
-                  <span className="truncate">{d.id}</span>
-                </div>
-              </button>
-            ))}
+          <CardContent className="space-y-2 max-h-[500px] overflow-y-auto">
+            {loading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-16 bg-muted rounded-lg animate-pulse" />
+              ))
+            ) : disputes.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">No disputes found.</p>
+            ) : (
+              disputes.map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => { setSelectedId(d.id); setNote(''); }}
+                  className={`w-full text-left rounded-lg border p-3 text-sm transition-colors ${
+                    selectedId === d.id
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:bg-secondary/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] ${STATUS_COLORS[d.status] ?? ''}`}
+                    >
+                      {d.status}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">{ageLabel(d.createdAt)}</span>
+                  </div>
+                  <div className="font-mono text-xs text-muted-foreground truncate">{d.id}</div>
+                  <div className="text-xs mt-1 truncate">Escrow: {d.escrowId}</div>
+                </button>
+              ))
+            )}
           </CardContent>
+          {totalPages > 1 && (
+            <div className="flex justify-center gap-2 px-4 pb-4">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => p - 1)}
+              >
+                Previous
+              </Button>
+              <span className="self-center text-sm text-muted-foreground">
+                {page} / {totalPages}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          )}
         </Card>
 
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-base">Case detail</CardTitle>
+        {/* Detail + Resolution */}
+        <Card className="lg:col-span-3">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Dispute Detail</CardTitle>
             <CardDescription>
-              {selected
-                ? `${selected.filedByName} vs ${selected.counterpartyName}`
-                : 'No disputes loaded'}
+              {selected ? `ID: ${selected.id}` : 'Select a dispute from the list'}
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-5">
             {!selected ? (
-              <p className="text-sm text-muted-foreground">Nothing to show.</p>
+              <p className="text-sm text-muted-foreground">No dispute selected.</p>
             ) : (
               <>
-                <div className="space-y-1 text-sm">
-                  <p>
-                    <span className="text-muted-foreground">Order ref:</span>{' '}
-                    {selected.relatedOrderId}
-                  </p>
-                  <p>
-                    <span className="text-muted-foreground">Category:</span> {selected.category}
-                  </p>
-                  <p className="pt-2">{selected.description}</p>
-                  {selected.escrow.held && (
-                    <p className="text-amber-600 text-sm pt-2">
-                      Escrow hold (simulated): ${(selected.escrow.amountCents / 100).toFixed(2)}
-                    </p>
-                  )}
-                </div>
-
-                {selected.mediationNotes.length > 0 && (
+                {/* Evidence / context */}
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                   <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Mediation notes</p>
-                    <ul className="list-disc pl-5 text-sm space-y-1">
-                      {selected.mediationNotes.map((n, i) => (
-                        <li key={i}>{n}</li>
-                      ))}
-                    </ul>
+                    <dt className="text-xs text-muted-foreground mb-0.5">Status</dt>
+                    <dd>
+                      <Badge
+                        variant="outline"
+                        className={STATUS_COLORS[selected.status] ?? ''}
+                      >
+                        {selected.status}
+                      </Badge>
+                    </dd>
                   </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground mb-0.5">Age</dt>
+                    <dd>{ageLabel(selected.createdAt)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground mb-0.5">Escrow ID</dt>
+                    <dd className="font-mono text-xs truncate">{selected.escrowId}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground mb-0.5">Creator (party A)</dt>
+                    <dd className="font-mono text-xs truncate">{selected.creatorId}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground mb-0.5">Client (party B)</dt>
+                    <dd className="font-mono text-xs truncate">{selected.clientId}</dd>
+                  </div>
+                  {selected.reason && (
+                    <div className="col-span-2">
+                      <dt className="text-xs text-muted-foreground mb-0.5">Reason / Resolution</dt>
+                      <dd>{selected.reason}</dd>
+                    </div>
+                  )}
+                </dl>
+
+                {selected.status === 'open' && (
+                  <>
+                    <div className="border-t border-border pt-4 space-y-3">
+                      <p className="text-sm font-medium">Resolution Actions</p>
+                      <p className="text-xs text-muted-foreground">
+                        Each action calls <code className="font-mono">resolve_dispute()</code> on-chain
+                        and writes an AuditLog entry.
+                      </p>
+                      <Textarea
+                        placeholder="Optional admin note (logged to audit trail)"
+                        rows={2}
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        disabled={resolving}
+                        aria-label="Admin note"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        {(Object.entries(RESOLUTION_LABELS) as [Resolution, string][]).map(
+                          ([key, label]) => (
+                            <Button
+                              key={key}
+                              size="sm"
+                              disabled={resolving}
+                              variant={key === 'release_to_freelancer' ? 'default' : 'outline'}
+                              onClick={() => resolve(key)}
+                            >
+                              {label}
+                            </Button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  </>
                 )}
 
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">
-                    Community votes (advisory)
-                  </p>
-                  <p className="text-sm">
-                    Client: {voteTally.client} · Creator: {voteTally.creator}
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="med-note">Mediation note</Label>
-                  <Textarea
-                    id="med-note"
-                    value={mediationNote}
-                    onChange={(e) => setMediationNote(e.target.value)}
-                    rows={2}
-                    placeholder="Optional note appended to the case"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => {
-                      startMediation(selected.id, 'admin', mediationNote.trim() || undefined);
-                      setMediationNote('');
-                      refresh();
-                    }}
-                  >
-                    Start / continue mediation
-                  </Button>
-                </div>
-
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    openCommunityVote(selected.id);
-                    refresh();
-                  }}
-                >
-                  Open community vote window
-                </Button>
-
-                <div className="space-y-2 border-t border-border pt-4">
-                  <Label>Resolution template</Label>
-                  <Select value={templateId} onValueChange={setTemplateId}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Template" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DISPUTE_RESOLUTION_TEMPLATES.map((t) => (
-                        <SelectItem key={t.id} value={t.id}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Textarea
-                    value={resolutionExtra}
-                    onChange={(e) => setResolutionExtra(e.target.value)}
-                    rows={2}
-                    placeholder="Optional extra context for the parties"
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      onClick={() => {
-                        resolveDisputeWithTemplate(
-                          selected.id,
-                          templateId,
-                          'Admin',
-                          resolutionExtra.trim() || undefined
-                        );
-                        setResolutionExtra('');
-                        refresh();
-                      }}
-                    >
-                      Apply template & resolve
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        closeDispute(selected.id);
-                        refresh();
-                      }}
-                    >
-                      Close case
-                    </Button>
+                {selected.status !== 'open' && (
+                  <div className="border-t border-border pt-4">
+                    <p className="text-sm text-muted-foreground">
+                      This dispute has been <strong>{selected.status}</strong>.{' '}
+                      {selected.reason && `Resolution: ${selected.reason}.`}
+                    </p>
                   </div>
-                </div>
-
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Timeline</p>
-                  <ul className="text-xs space-y-1 max-h-40 overflow-y-auto border rounded-md p-2 bg-muted/30">
-                    {[...selected.timeline].reverse().map((t, i) => (
-                      <li key={i}>
-                        <span className="text-muted-foreground">
-                          {new Date(t.at).toLocaleString()}
-                        </span>{' '}
-                        — {t.message}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                )}
               </>
             )}
           </CardContent>
