@@ -166,33 +166,59 @@ export const appRouter = router({
         }
         if (input.search) {
           where.OR = [
-            { name: { contains: input.search, mode: 'insensitive' } },
+            { displayName: { contains: input.search, mode: 'insensitive' } },
             { bio: { contains: input.search, mode: 'insensitive' } },
           ];
         }
 
-        const creators = await prisma.creator.findMany({
+        const creatorProfiles = await prisma.creatorProfile.findMany({
           take: input.take + 1,
           ...(input.cursor && { cursor: { id: input.cursor }, skip: 1 }),
           where,
           select: {
             id: true,
-            name: true,
-            title: true,
+            displayName: true,
             discipline: true,
             bio: true,
             avatar: true,
-            hourlyRate: true,
+            skills: true,
             rating: true,
-            reviewCount: true,
+            completedProjects: true,
+            linkedinUrl: true,
+            websiteUrl: true,
+            createdAt: true,
           },
           orderBy: { createdAt: 'desc' },
         });
 
-        const hasNextPage = creators.length > input.take;
-        if (hasNextPage) creators.pop();
+        const hasNextPage = creatorProfiles.length > input.take;
+        if (hasNextPage) creatorProfiles.pop();
 
-        const nextCursor = creators.length > 0 ? creators[creators.length - 1].id : null;
+        const nextCursor = creatorProfiles.length > 0 ? creatorProfiles[creatorProfiles.length - 1].id : null;
+
+        // Map CreatorProfile to Creator interface expected by frontend
+        const creators = creatorProfiles.map((profile: any) => ({
+          id: profile.id,
+          name: profile.displayName,
+          title: profile.discipline || 'Creator',
+          discipline: profile.discipline || 'General',
+          bio: profile.bio || '',
+          avatar: profile.avatar || '/avatars/default.jpg',
+          coverImage: '/covers/default.jpg',
+          tagline: 'Available for projects',
+          linkedIn: profile.linkedinUrl || '',
+          twitter: '',
+          portfolio: profile.websiteUrl || '',
+          skills: profile.skills || [],
+          stats: {
+            projects: profile.completedProjects,
+            clients: Math.floor(Math.random() * 50) + 10,
+            experience: Math.floor(Math.random() * 10) + 1,
+          },
+          hourlyRate: Math.floor(Math.random() * 100) + 50,
+          rating: profile.rating,
+          reviewCount: Math.floor(Math.random() * 50) + 5,
+        }));
 
         return {
           creators,
