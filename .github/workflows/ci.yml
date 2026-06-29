@@ -25,6 +25,20 @@ jobs:
       - name: Build
         run: pnpm run build
 
+  migration-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check no duplicate migration prefixes
+        run: |
+          cd backend/migrations
+          duplicates=$(ls *.sql 2>/dev/null | sed 's/_.*//' | sort | uniq -d)
+          if [ -n "$duplicates" ]; then
+            echo "Duplicate migration prefixes found: $duplicates"
+            exit 1
+          fi
+          echo "Migration prefixes are unique"
+
   backend:
     runs-on: ubuntu-latest
     steps:

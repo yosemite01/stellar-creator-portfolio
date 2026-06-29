@@ -1,15 +1,62 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { CreatorCard } from '@/components/creator-card';
-import { creators, disciplines, getCreatorsByDiscipline } from '@/lib/creators-data';
+import { disciplines } from '@/lib/creators-data';
+import { CreatorCard } from '@/components/cards/creator-card';
+import { creators, disciplines, getCreatorsByDiscipline } from '@/lib/services/creators-data';
 import { Button } from '@/components/ui/button';
+import { trpc } from '@/lib/trpc-client';
+import { CardSkeleton } from '@/components/skeletons/card-skeleton';
 
 export default function CreatorsPage() {
   const [selectedDiscipline, setSelectedDiscipline] = useState<string>('All');
-  const filteredCreators = getCreatorsByDiscipline(selectedDiscipline);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    isError,
+    error,
+  } = trpc.creators.list.useInfiniteQuery(
+    {
+      take: 12,
+      discipline: selectedDiscipline === 'All' ? undefined : selectedDiscipline,
+    },
+    {
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+    }
+  );
+
+  // Intersection Observer for infinite scroll
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    const currentRef = loadMoreRef.current;
+    if (currentRef) {
+      observer.observe(currentRef);
+    }
+
+    return () => {
+      if (currentRef) {
+        observer.unobserve(currentRef);
+      }
+    };
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  const allCreators = data?.pages.flatMap((page) => page.creators) || [];
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -55,19 +102,51 @@ export default function CreatorsPage() {
         {/* Creators Grid */}
         <section className="py-16 sm:py-24">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            {filteredCreators.length > 0 ? (
+            {isError ? (
+              <div className="text-center py-12">
+                <p className="text-lg text-red-500 mb-4">
+                  Error loading creators: {error?.message}
+                </p>
+                <Button
+                  variant="outline"
+                  onClick={() => window.location.reload()}
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : isLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <CardSkeleton key={i} />
+                ))}
+              </div>
+            ) : allCreators.length > 0 ? (
               <>
                 <div className="mb-8">
                   <p className="text-sm text-muted-foreground">
-                    Showing {filteredCreators.length} creator{filteredCreators.length !== 1 ? 's' : ''}
+                    Showing {allCreators.length} creator{allCreators.length !== 1 ? 's' : ''}
                   </p>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {filteredCreators.map((creator) => (
+                  {allCreators.map((creator) => (
                     <CreatorCard key={creator.id} creator={creator} />
                   ))}
                 </div>
+
+                {/* Loading indicator for next page */}
+                {isFetchingNextPage && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <CardSkeleton key={i} />
+                    ))}
+                  </div>
+                )}
+
+                {/* Sentinel div for IntersectionObserver */}
+                {hasNextPage && (
+                  <div ref={loadMoreRef} className="h-10" />
+                )}
               </>
             ) : (
               <div className="text-center py-12">

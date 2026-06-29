@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc-client';
-import type { Bounty } from '@/lib/creators-data';
+import type { Bounty } from '@/lib/services/creators-data';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced', 'expert'] as const;
 

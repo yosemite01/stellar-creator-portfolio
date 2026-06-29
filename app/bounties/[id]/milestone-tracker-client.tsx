@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { MilestoneTracker } from '@/components/MilestoneTracker'
-import type { Milestone, MilestoneStatus } from '@/lib/creators-data'
+import type { Milestone, MilestoneStatus } from '@/lib/services/creators-data'
 import { Wifi, WifiOff } from 'lucide-react'
 
 interface Props {

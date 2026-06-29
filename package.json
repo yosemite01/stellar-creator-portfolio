@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@albedo-link/intent": "^0.13.0",
+    "@stellar/freighter-api": "6.0.1",
     "@aws-sdk/client-s3": "^3.1062.0",
     "@aws-sdk/client-secrets-manager": "^3.1062.0",
     "@aws-sdk/s3-request-presigner": "^3.1062.0",
@@ -131,7 +132,6 @@
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "^4.1.8",
     "eslint-config-next": "^16.2.4",
-    "gitleaks": "^8.20.0",
     "husky": "^9.1.7",
     "jsdom": "^29.0.2",
     "postcss": "^8.5",

@@ -6,7 +6,7 @@ import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { Button } from '@/components/ui/button';
 import { ChevronLeft } from 'lucide-react';
-import { creators as allCreators, Creator } from '@/lib/creators-data';
+import { creators as allCreators, Creator } from '@/lib/services/creators-data';
 
 export default function ComparePage() {
   const searchParams = useSearchParams();

@@ -1,4 +1,4 @@
-import { creators, type Creator } from '@/lib/creators-data';
+import { creators, type Creator } from '@/lib/services/creators-data';
 
 const CHUNK_DELAY_MS = 0;
 

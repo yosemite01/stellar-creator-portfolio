@@ -1,6 +1,6 @@
 'use client';
 
-import { Project } from '@/lib/creators-data';
+import { Project } from '@/lib/services/creators-data';
 import { ExternalLink } from 'lucide-react';
 
 interface ProjectCardProps {

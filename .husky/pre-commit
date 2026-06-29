@@ -3,6 +3,21 @@
 
 MAX_SIZE=10485760 # 10MB
 
+# ---------------------------------------------------------------------------
+# Block .env files from being committed (issue #718)
+# Only .env.example files are permitted — everything else is a secret leak.
+# ---------------------------------------------------------------------------
+STAGED_ENV=$(git diff --cached --name-only --diff-filter=ACM | grep -E '(^|/)\.env(\.[^e]|$)' | grep -v '\.env\.example$')
+if [ -n "$STAGED_ENV" ]; then
+  echo "🚨 BLOCKED: The following .env file(s) must never be committed:"
+  echo "$STAGED_ENV" | sed 's/^/   /'
+  echo ""
+  echo "  ✅ Commit .env.example with placeholder values instead."
+  echo "  ✅ Add the real .env to .gitignore."
+  echo "  ✅ Store secrets in GitHub Actions Secrets or AWS Secrets Manager."
+  exit 1
+fi
+
 # Use a temporary file to store the list of changed files
 TMP_FILE=$(mktemp)
 git diff --cached --name-only --diff-filter=ACM > "$TMP_FILE"

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { bounties } from '@/lib/creators-data';
+import { bounties } from '@/lib/services/creators-data';
 import { Button } from '@/components/ui/button';
 import { ArrowRight, Clock, DollarSign, Zap } from 'lucide-react';
 

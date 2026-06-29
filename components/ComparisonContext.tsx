@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback } from 'react';
-import { Creator } from '@/lib/creators-data';
+import { Creator } from '@/lib/services/creators-data';
 
 interface ComparisonContextType {
   selectedCreators: Creator[];

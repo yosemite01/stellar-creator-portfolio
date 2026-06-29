@@ -7,7 +7,7 @@ import { CheckCircle2, Eye, XCircle, Circle, ChevronDown, ChevronUp, Send } from
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
-import type { Milestone, MilestoneStatus, MilestoneComment } from '@/lib/creators-data'
+import type { Milestone, MilestoneStatus, MilestoneComment } from '@/lib/services/creators-data'
 
 interface MilestoneTrackerProps {
   milestones: Milestone[]

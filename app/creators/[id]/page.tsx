@@ -9,7 +9,7 @@ import { CreatorHeroSection, CreatorCtaSection } from '@/components/streaming/cr
 import { CreatorBioSection } from '@/components/streaming/creator-bio-section';
 import { CreatorProjectsSection } from '@/components/streaming/creator-projects-section';
 import { fetchCreatorCore } from '@/lib/streaming/chunk-data';
-import { getCreatorById } from '@/lib/creators-data';
+import { getCreatorById } from '@/lib/services/creators-data';
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;

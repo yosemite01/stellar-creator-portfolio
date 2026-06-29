@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
-import { bounties, formatBudget } from '@/lib/creators-data'
+import { bounties, formatBudget } from '@/lib/services/creators-data'
 import { Header } from '@/components/header'
 import { Footer } from '@/components/footer'
 import { BountyMetaRow } from './bounty-meta-client'

@@ -25,8 +25,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SkillCombobox } from "@/components/ui/skill-combobox";
-import { CreatorCard } from "@/components/creator-card";
-import { creators, bounties } from "@/lib/creators-data";
+import { CreatorCard } from "@/components/cards/creator-card";
+import { creators, bounties } from "@/lib/services/creators-data";
 import { trackEvent, trackConversion } from "@/lib/analytics/analytics";
 
 const TOTAL_STEPS = 3;
