@@ -8,8 +8,19 @@ __v0_jsx-dev-runtime.ts
 .vercel/
 next.user-config.*
 
-# Environment variables
+# Environment variables — never commit real credentials
+# Root-level env files
+.env
+.env.*
 .env*.local
+!.env.example
+!**/.env.example
+
+# Service-level env files — explicit coverage for each service
+backend/services/api/.env
+backend/services/api/.env.*
+backend/limit/.env
+backend/limit/.env.*
 
 # Common ignores
 node_modules/
