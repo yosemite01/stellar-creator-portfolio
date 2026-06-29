@@ -15,6 +15,9 @@
  *   stellar://dashboard            → Dashboard screen
  *   stellar://messages/:id         → Messaging screen
  *   stellar://upload               → ImagePicker screen
+ *   stellar://bounty/:id           → BountyDetail screen
+ *   stellar://verify?token=...     → EmailVerification screen
+ *   stellar://payment/complete     → PaymentComplete screen
  *
  * Universal links (HTTPS):
  *   https://stellar.app/creator/:id
@@ -22,6 +25,9 @@
  *   https://stellar.app/dashboard
  *   https://stellar.app/messages/:id
  *   https://stellar.app/upload
+ *   https://stellar.app/bounty/:id
+ *   https://stellar.app/verify
+ *   https://stellar.app/payment/complete
  */
 
 import { Linking } from "react-native";
@@ -63,6 +69,10 @@ export const DEEP_LINK_CONFIG: LinkingOptions<RootStackParamList>["config"] = {
     ImagePicker: "upload",
     StreamHost: "stream/:roomId/host",
     StreamViewer: "stream/:roomId",
+    BountyDetail: "bounty/:bountyId",
+    EmailVerification: "verify",
+    PaymentComplete: "payment/complete",
+    NotificationSettings: "settings/notifications",
   } as any, // cast needed until extended param list is added
 };
 
@@ -114,6 +124,10 @@ export type DeepLinkRoute =
   | { screen: "StreamHost"; params: { roomId: string } }
   | { screen: "StreamViewer"; params: { roomId: string } }
   | { screen: "LanguageSettings" }
+  | { screen: "NotificationSettings" }
+  | { screen: "BountyDetail"; params: { bountyId: string } }
+  | { screen: "EmailVerification"; params?: { token?: string } }
+  | { screen: "PaymentComplete"; params?: { paymentId?: string; status?: string } }
   | { screen: "Unknown"; url: string };
 
 // ─── URL parser ───────────────────────────────────────────────────────────────
@@ -130,18 +144,25 @@ export type DeepLinkRoute =
  *   // → { screen: 'FreelancerDirectory' }
  */
 export function parseDeepLink(url: string): DeepLinkRoute {
-  // Normalise: strip scheme + host to get the path
-  let path = url;
-
+  // Normalise: strip scheme + host to get the path, preserve query string separately
+  let raw = url;
   for (const prefix of DEEP_LINK_PREFIXES) {
     if (url.startsWith(prefix)) {
-      path = url.slice(prefix.length);
+      raw = url.slice(prefix.length);
       break;
     }
   }
 
-  // Strip leading slash and query string
-  path = path.replace(/^\/+/, "").split("?")[0].split("#")[0];
+  const [pathPart, queryPart] = raw.split("?");
+  const path = pathPart.replace(/^\/+/, "").split("#")[0];
+
+  const queryParams: Record<string, string> = {};
+  if (queryPart) {
+    queryPart.split("&").forEach((pair) => {
+      const [k, v] = pair.split("=");
+      if (k) queryParams[decodeURIComponent(k)] = decodeURIComponent(v ?? "");
+    });
+  }
 
   const segments = path.split("/").filter(Boolean);
   const [first, second] = segments;
@@ -182,8 +203,28 @@ export function parseDeepLink(url: string): DeepLinkRoute {
       }
       return { screen: "StreamViewer", params: { roomId: second } };
 
+    case "bounty":
+      if (second) return { screen: "BountyDetail", params: { bountyId: second } };
+      return { screen: "Home" };
+
+    case "verify":
+      return { screen: "EmailVerification", params: queryParams.token ? { token: queryParams.token } : undefined };
+
+    case "payment":
+      if (second === "complete") {
+        return {
+          screen: "PaymentComplete",
+          params: {
+            paymentId: queryParams.paymentId,
+            status: queryParams.status,
+          },
+        };
+      }
+      return { screen: "Home" };
+
     case "settings":
       if (second === "language") return { screen: "LanguageSettings" };
+      if (second === "notifications") return { screen: "NotificationSettings" };
       return { screen: "Home" };
 
     case "profile":

@@ -4,6 +4,8 @@ import { Analytics } from "@vercel/analytics/next";
 import { ThemeProvider } from "next-themes";
 import { LayoutProvider } from "@/components/layout-provider";
 import { DataLoaderProvider } from "@/app/providers/DataLoaderProvider";
+import { ErrorBoundary } from "@/components/error-boundary";
+import { ErrorTrackingProvider } from "@/components/error-tracking-provider";
 import "./globals.css";
 
 const _geist = Geist({ subsets: ["latin"] });
@@ -86,9 +88,13 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange={false}
         >
-          <DataLoaderProvider>
-            <LayoutProvider>{children}</LayoutProvider>
-          </DataLoaderProvider>
+          <ErrorTrackingProvider>
+            <ErrorBoundary>
+              <DataLoaderProvider>
+                <LayoutProvider>{children}</LayoutProvider>
+              </DataLoaderProvider>
+            </ErrorBoundary>
+          </ErrorTrackingProvider>
           <Analytics />
         </ThemeProvider>
       </body>

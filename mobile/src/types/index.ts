@@ -16,6 +16,10 @@ export type RootStackParamList = {
   BiometricAuth: undefined;
   StreamHost: { roomId: string; signalingServerUrl?: string };
   StreamViewer: { roomId: string; creatorName?: string; signalingServerUrl?: string };
+  NotificationSettings: undefined;
+  BountyDetail: { bountyId: string };
+  EmailVerification: { token?: string };
+  PaymentComplete: { paymentId?: string; status?: string };
 };
 
 export type MainTabParamList = {

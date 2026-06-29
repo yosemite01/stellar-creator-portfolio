@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { ErrorBoundary } from '@/components/error-boundary';
 
 export const metadata: Metadata = {
   title: 'Bounty Directory',
@@ -22,5 +23,5 @@ export default function BountiesLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return children;
+  return <ErrorBoundary>{children}</ErrorBoundary>;
 }

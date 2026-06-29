@@ -36,6 +36,9 @@ export interface AuthState {
   clearAuth: () => void;
 }
 
+/** Notification permission states mirroring expo-notifications PermissionStatus. */
+export type NotificationPermission = 'undetermined' | 'granted' | 'denied';
+
 /** Global UI store state + actions (in-memory only, never persisted). */
 export interface UIState {
   /** Whether a global blocking loader should be shown. */
@@ -56,4 +59,8 @@ export interface UIState {
   setCurrentTrack: (track: { title: string; creator: string; artworkUrl?: string } | null) => void;
   /** Set audio playing state. */
   setAudioPlaying: (isPlaying: boolean) => void;
+  /** Push notification permission state. */
+  notificationPermission: NotificationPermission;
+  /** Update the stored notification permission state. */
+  setNotificationPermission: (permission: NotificationPermission) => void;
 }

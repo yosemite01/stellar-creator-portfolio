@@ -17,9 +17,11 @@ export const useUIStore = create<UIState>((set) => ({
   toastMessage: null,
   currentTrack: null,
   isAudioPlaying: false,
+  notificationPermission: 'undetermined',
   setLoading: (value) => set({ isLoading: value }),
   showToast: (message) => set({ toastMessage: message }),
   clearToast: () => set({ toastMessage: null }),
   setCurrentTrack: (track) => set({ currentTrack: track }),
   setAudioPlaying: (isPlaying) => set({ isAudioPlaying: isPlaying }),
+  setNotificationPermission: (permission) => set({ notificationPermission: permission }),
 }));
