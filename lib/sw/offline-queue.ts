@@ -1,9 +1,11 @@
 /**
  * Issue #630 — Client-side offline mutation queue
+ * Issue #879 — Offline-first bounty application queue
  *
  * Stores pending mutations in IndexedDB when the user is offline.
  * Registers a Background Sync tag so the service worker replays them
- * automatically once connectivity is restored.
+ * automatically once connectivity is restored. Bounty application
+ * submissions are a first-class mutation type with typed helpers.
  */
 
 const DB_NAME = 'stellar-offline-queue';
@@ -16,6 +18,17 @@ export interface OfflineMutation {
   headers: Record<string, string>;
   body?: string;
   timestamp: number;
+  /** Discriminator for typed mutations */
+  type?: string;
+}
+
+/** Typed bounty application payload stored in the queue. */
+export interface BountyApplicationMutation extends OfflineMutation {
+  type: 'bounty-application';
+  /** Human-readable bounty title for UX display. */
+  bountyTitle: string;
+  /** Local attempt count for display purposes. */
+  retries: number;
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -44,6 +57,41 @@ export async function enqueue(mutation: OfflineMutation): Promise<void> {
     const reg = await navigator.serviceWorker.ready;
     await reg.sync.register(SYNC_TAG);
   }
+}
+
+/**
+ * Queue a bounty application for offline submission.
+ * Automatically registers a background sync tag and sets up an online
+ * listener as a fallback for browsers without Background Sync support.
+ */
+export async function enqueueBountyApplication(
+  payload: Record<string, unknown>,
+  bountyTitle: string,
+): Promise<void> {
+  const mutation: BountyApplicationMutation = {
+    url: '/api/bounty-applications',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    timestamp: Date.now(),
+    type: 'bounty-application',
+    bountyTitle,
+    retries: 0,
+  };
+  await enqueue(mutation);
+  registerOnlineFlush();
+}
+
+/** List pending bounty application mutations only. */
+export async function listQueuedBountyApplications(): Promise<
+  Array<{ key: IDBValidKey; mutation: BountyApplicationMutation }>
+> {
+  const db = await openDB();
+  const all = await listAllWithKeys(db);
+  return all.filter(
+    (e): e is { key: IDBValidKey; mutation: BountyApplicationMutation } =>
+      (e.mutation as BountyApplicationMutation).type === 'bounty-application',
+  );
 }
 
 /** Retrieve all queued mutations without removing them. */
@@ -93,6 +141,32 @@ export async function flush(): Promise<{ replayed: number; failed: number }> {
   }
 
   return { replayed, failed };
+}
+
+// ---------------------------------------------------------------------------
+// Online-listener flush fallback (for browsers without Background Sync)
+// ---------------------------------------------------------------------------
+
+let onlineListenerRegistered = false;
+
+/**
+ * Register a one-time online listener that calls flush() when connectivity
+ * returns. Safe to call multiple times — only registers once.
+ */
+export function registerOnlineFlush(): void {
+  if (typeof window === 'undefined' || onlineListenerRegistered) return;
+  onlineListenerRegistered = true;
+
+  const handler = async () => {
+    // Only flush if Background Sync is not supported
+    if (!('SyncManager' in window)) {
+      await flush();
+    }
+    window.removeEventListener('online', handler);
+    onlineListenerRegistered = false;
+  };
+
+  window.addEventListener('online', handler);
 }
 
 function listAllWithKeys(db: IDBDatabase): Promise<Array<{ key: IDBValidKey; mutation: OfflineMutation }>> {

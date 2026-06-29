@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { bountyApplicationSchema } from '@/lib/validations/bounty-application'
@@ -10,7 +10,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Loader2 } from 'lucide-react'
+import { Loader2, WifiOff, Clock } from 'lucide-react'
+import { enqueueBountyApplication } from '@/lib/sw/offline-queue'
 
 const schema = bountyApplicationSchema
 type FormValues = z.infer<typeof schema>
@@ -27,6 +28,20 @@ export function BountyApplicationForm({
   onSuccess?: () => void
 }) {
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [isOnline, setIsOnline] = useState(true)
+  const [queued, setQueued] = useState(false)
+
+  useEffect(() => {
+    setIsOnline(navigator.onLine)
+    const handleOnline = () => setIsOnline(true)
+    const handleOffline = () => setIsOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -41,22 +56,54 @@ export function BountyApplicationForm({
 
   const onSubmit = form.handleSubmit(async (values) => {
     setSubmitError(null)
-    const res = await fetch('/api/bounty-applications', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(values),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) {
-      setSubmitError(data.error || 'Failed to submit application')
+    setQueued(false)
+
+    if (!isOnline) {
+      await enqueueBountyApplication(values, bountyTitle)
+      setQueued(true)
       return
     }
-    onSuccess?.()
+
+    try {
+      const res = await fetch('/api/bounty-applications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setSubmitError(data.error || 'Failed to submit application')
+        return
+      }
+      onSuccess?.()
+    } catch {
+      // Network failed mid-submit — queue it
+      await enqueueBountyApplication(values, bountyTitle)
+      setQueued(true)
+    }
   })
 
   return (
     <form onSubmit={onSubmit} className="space-y-6">
       <input type="hidden" {...form.register('bounty_id')} />
+
+      {!isOnline && (
+        <Alert>
+          <WifiOff className="h-4 w-4" aria-hidden="true" />
+          <AlertDescription>
+            You&apos;re offline. Your application will be saved and submitted automatically when you reconnect.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {queued && (
+        <Alert>
+          <Clock className="h-4 w-4" aria-hidden="true" />
+          <AlertDescription>
+            Application queued — it will be submitted automatically once you&apos;re back online.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="space-y-2">
         <Label htmlFor="proposed_budget">Proposed budget ({bountyTitle})</Label>
@@ -109,11 +156,21 @@ export function BountyApplicationForm({
         </Alert>
       )}
 
-      <Button type="submit" disabled={!form.formState.isValid || form.formState.isSubmitting} className="w-full sm:w-auto">
+      <Button type="submit" disabled={!form.formState.isValid || form.formState.isSubmitting || queued} className="w-full sm:w-auto">
         {form.formState.isSubmitting ? (
           <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Submitting…
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+            {isOnline ? 'Submitting…' : 'Saving offline…'}
+          </>
+        ) : queued ? (
+          <>
+            <Clock className="mr-2 h-4 w-4" aria-hidden="true" />
+            Queued for submission
+          </>
+        ) : !isOnline ? (
+          <>
+            <WifiOff className="mr-2 h-4 w-4" aria-hidden="true" />
+            Save for later
           </>
         ) : (
           'Submit application'

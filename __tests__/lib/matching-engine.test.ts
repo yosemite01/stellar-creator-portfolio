@@ -7,6 +7,9 @@ import {
   tokenize,
   jaccard,
   aggregateStrategyInsights,
+  exactSkillOverlap,
+  exactCategoryMatch,
+  activityBoost,
   type BountyFeatures,
   type CreatorFeatures,
 } from '@/lib/matching-engine'
@@ -113,5 +116,146 @@ describe('matching-engine', () => {
     const t0 = performance.now()
     rankBountiesForCreator(bounties, creator, 'control', 50)
     expect(performance.now() - t0).toBeLessThan(2000)
+  })
+
+  // -------------------------------------------------------------------------
+  // #878 — Exact skill/category weighting and activity boost
+  // -------------------------------------------------------------------------
+
+  describe('exactSkillOverlap', () => {
+    it('returns 1 when all bounty tags are exact creator skills', () => {
+      const bounty = sampleBounty({ tags: ['react', 'typescript'] })
+      const creator = sampleCreator({ skills: ['react', 'typescript', 'figma'] })
+      expect(exactSkillOverlap(bounty, creator)).toBe(1)
+    })
+
+    it('returns 0.5 when half of bounty tags are exact creator skills', () => {
+      const bounty = sampleBounty({ tags: ['react', 'rust'] })
+      const creator = sampleCreator({ skills: ['react', 'figma'] })
+      expect(exactSkillOverlap(bounty, creator)).toBe(0.5)
+    })
+
+    it('returns 0 when no bounty tags match creator skills', () => {
+      const bounty = sampleBounty({ tags: ['rust', 'webassembly'] })
+      const creator = sampleCreator({ skills: ['figma', 'sketch'] })
+      expect(exactSkillOverlap(bounty, creator)).toBe(0)
+    })
+
+    it('is case-insensitive', () => {
+      const bounty = sampleBounty({ tags: ['React', 'TypeScript'] })
+      const creator = sampleCreator({ skills: ['react', 'typescript'] })
+      expect(exactSkillOverlap(bounty, creator)).toBe(1)
+    })
+
+    it('returns 0 when bounty has no tags', () => {
+      const bounty = sampleBounty({ tags: [] })
+      const creator = sampleCreator()
+      expect(exactSkillOverlap(bounty, creator)).toBe(0)
+    })
+  })
+
+  describe('exactCategoryMatch', () => {
+    it('returns 1 for identical category and discipline', () => {
+      const bounty = sampleBounty({ category: 'Design' })
+      const creator = sampleCreator({ discipline: 'Design' })
+      expect(exactCategoryMatch(bounty, creator)).toBe(1)
+    })
+
+    it('returns 0.5 when one contains the other', () => {
+      const bounty = sampleBounty({ category: 'UI/UX Design' })
+      const creator = sampleCreator({ discipline: 'Design' })
+      expect(exactCategoryMatch(bounty, creator)).toBe(0.5)
+    })
+
+    it('returns 0 for completely different category and discipline', () => {
+      const bounty = sampleBounty({ category: 'Legal' })
+      const creator = sampleCreator({ discipline: 'Design' })
+      expect(exactCategoryMatch(bounty, creator)).toBe(0)
+    })
+
+    it('returns 0 when category or discipline is missing', () => {
+      expect(exactCategoryMatch(sampleBounty({ category: null }), sampleCreator())).toBe(0)
+      expect(exactCategoryMatch(sampleBounty(), sampleCreator({ discipline: null }))).toBe(0)
+    })
+  })
+
+  describe('activityBoost', () => {
+    it('returns high score for recently active creator with perfect response rate', () => {
+      const creator = sampleCreator({
+        lastBountyCompletedAt: new Date().toISOString(),
+        responseRate: 1,
+      })
+      const score = activityBoost(creator)
+      expect(score).toBeCloseTo(1, 1)
+    })
+
+    it('returns 0 when no activity data provided', () => {
+      const creator = sampleCreator({ lastBountyCompletedAt: null, responseRate: null })
+      expect(activityBoost(creator)).toBe(0)
+    })
+
+    it('decays to 0 when last completion exceeds recencyWindowDays', () => {
+      const oldDate = new Date(Date.now() - 400 * 86_400_000).toISOString()
+      const creator = sampleCreator({ lastBountyCompletedAt: oldDate, responseRate: 0 })
+      expect(activityBoost(creator, { recencyWindowDays: 180 })).toBe(0)
+    })
+
+    it('respects weight multiplier', () => {
+      const creator = sampleCreator({
+        lastBountyCompletedAt: new Date().toISOString(),
+        responseRate: 1,
+      })
+      const base = activityBoost(creator, { weight: 1 })
+      const half = activityBoost(creator, { weight: 0.5 })
+      expect(half).toBeCloseTo(base * 0.5, 1)
+    })
+  })
+
+  describe('scoreCreatorBountyPair — exact match edge cases', () => {
+    it('exact skill match raises score vs text-similar but different skills', () => {
+      const bounty = sampleBounty({ tags: ['react', 'typescript'], category: 'Development' })
+
+      // High text similarity but NO exact skill match
+      const textSimilarCreator = sampleCreator({
+        bio: 'I work on react and typescript projects daily',
+        skills: ['vue', 'javascript'], // different actual skills
+        discipline: 'Development',
+      })
+
+      // Exact skill match
+      const exactMatchCreator = sampleCreator({
+        bio: 'Backend developer',
+        skills: ['react', 'typescript'],
+        discipline: 'Development',
+      })
+
+      const textScore = scoreCreatorBountyPair(bounty, textSimilarCreator)
+      const exactScore = scoreCreatorBountyPair(bounty, exactMatchCreator)
+      expect(exactScore.score).toBeGreaterThan(textScore.score)
+    })
+
+    it('components include exactSkill and exactCategory fields', () => {
+      const result = scoreCreatorBountyPair(sampleBounty(), sampleCreator())
+      expect(result.components).toHaveProperty('exactSkill')
+      expect(result.components).toHaveProperty('exactCategory')
+      expect(result.components).toHaveProperty('activity')
+    })
+
+    it('activity boost reason appears for highly active creator', () => {
+      const creator = sampleCreator({
+        lastBountyCompletedAt: new Date().toISOString(),
+        responseRate: 1,
+      })
+      const result = scoreCreatorBountyPair(sampleBounty(), creator)
+      expect(result.reasons.some((r) => r.toLowerCase().includes('active'))).toBe(true)
+    })
+
+    it('treatment_skill strategy boosts exact skill weight more than treatment_budget', () => {
+      const bounty = sampleBounty({ tags: ['react', 'typescript'] })
+      const creator = sampleCreator({ skills: ['react', 'typescript'] })
+      const skillStrat = scoreCreatorBountyPair(bounty, creator, 'treatment_skill')
+      const budgetStrat = scoreCreatorBountyPair(bounty, creator, 'treatment_budget')
+      expect(skillStrat.score).toBeGreaterThan(budgetStrat.score)
+    })
   })
 })
