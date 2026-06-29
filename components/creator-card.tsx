@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { Creator } from '@/lib/creators-data';
+import { Creator } from '@/lib/services/creators-data';
 import { ArrowRight, Linkedin, Twitter, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useComparison } from '@/components/ComparisonContext';
