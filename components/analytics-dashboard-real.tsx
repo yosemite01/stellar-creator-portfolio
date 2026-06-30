@@ -6,13 +6,13 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { 
-  LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
+import {
+  AreaChart, Area, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts'
-import { 
-  TrendingUp, DollarSign, Clock, Award, Users, Target,
-  Calendar, ArrowUpRight, ArrowDownRight, Activity
+import {
+  DollarSign, Clock, Award, Target,
+  ArrowUpRight, ArrowDownRight, Activity
 } from 'lucide-react'
 import { trpc } from '@/lib/trpc-client'
 
@@ -66,19 +66,14 @@ export function AnalyticsDashboard() {
     }
   }, [analytics])
 
-  // Generate chart data from real bounties
+  // Chart data sourced from the real earnings time series returned by tRPC
   const chartData = useMemo(() => {
-    const last30Days = Array.from({ length: 30 }, (_, i) => {
-      const date = new Date()
-      date.setDate(date.getDate() - (29 - i))
-      return {
-        date: date.toISOString().slice(5, 10), // MM-DD format
-        earnings: Math.floor(Math.random() * 500) + 200, // Placeholder - replace with real data
-        projects: Math.floor(Math.random() * 3) + 1,
-      }
-    })
-    return last30Days
-  }, [])
+    if (!analytics?.earnings.timeSeries?.length) return []
+    return analytics.earnings.timeSeries.map((point) => ({
+      date: point.date.slice(5), // MM-DD
+      earnings: point.value,
+    }))
+  }, [analytics])
 
   if (analyticsQuery.isLoading) {
     return (
@@ -317,35 +312,25 @@ export function AnalyticsDashboard() {
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <h4 className="font-medium mb-4">Completion Rate by Category</h4>
-                  <ResponsiveContainer width="100%" height={200}>
-                    <PieChart>
-                      <Pie
-                        data={[
-                          { name: 'UI/UX Design', value: 95 },
-                          { name: 'Development', value: 88 },
-                          { name: 'Marketing', value: 92 },
-                          { name: 'Writing', value: 97 },
-                        ]}
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={80}
-                        fill="#3b82f6"
-                        dataKey="value"
-                        label={({ name, value }) => `${name}: ${value}%`}
+                  <h4 className="font-medium mb-4">Top Skills in Demand</h4>
+                  {analytics?.topSkills && analytics.topSkills.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart
+                        data={analytics.topSkills.map((s) => ({ name: s.tag, value: s.count }))}
+                        layout="vertical"
                       >
-                        {[
-                          { name: 'UI/UX Design', value: 95 },
-                          { name: 'Development', value: 88 },
-                          { name: 'Marketing', value: 92 },
-                          { name: 'Writing', value: 97 },
-                        ].map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={`hsl(${index * 90}, 70%, 60%)`} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis type="number" tick={{ fontSize: 11 }} />
+                        <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Bar dataKey="value" fill="#3b82f6" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-sm text-muted-foreground py-8 text-center">
+                      No skill data yet
+                    </p>
+                  )}
                 </div>
 
                 <div>
