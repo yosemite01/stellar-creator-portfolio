@@ -149,6 +149,11 @@ impl BountyContract {
             .persistent()
             .set(&bounty_counter_key, &counter);
 
+        env.events().publish(
+            (symbol_short!("bounty"), symbol_short!("created")),
+            (bounty_id, creator, budget, deadline),
+        );
+
         bounty_id
     }
 
@@ -241,6 +246,11 @@ impl BountyContract {
             .persistent()
             .set(&app_counter_key, &counter);
 
+        env.events().publish(
+            (symbol_short!("bounty"), symbol_short!("applied")),
+            (bounty_id, application_id, freelancer),
+        );
+
         application_id
     }
 
@@ -269,10 +279,16 @@ impl BountyContract {
         let application = Self::get_application(env.clone(), application_id);
         assert_eq!(application.bounty_id, bounty_id, "Application does not match bounty");
 
-        bounty.selected_freelancer = Some(application.freelancer);
+        let selected = application.freelancer;
+        bounty.selected_freelancer = Some(selected.clone());
         bounty.status = BountyStatus::InProgress;
 
         env.storage().persistent().set(&bounty_key, &bounty);
+
+        env.events().publish(
+            (symbol_short!("bounty"), symbol_short!("selected")),
+            (bounty_id, application_id, selected),
+        );
 
         true
     }
@@ -323,9 +339,15 @@ impl BountyContract {
         );
 
         bounty.status = BountyStatus::Completed;
-        bounty.completed_at = Some(env.ledger().timestamp());
+        let completed_at = env.ledger().timestamp();
+        bounty.completed_at = Some(completed_at);
 
         env.storage().persistent().set(&bounty_key, &bounty);
+
+        env.events().publish(
+            (symbol_short!("bounty"), symbol_short!("completed")),
+            (bounty_id, completed_at),
+        );
 
         true
     }
@@ -344,6 +366,11 @@ impl BountyContract {
         bounty.status = BountyStatus::Cancelled;
 
         env.storage().persistent().set(&bounty_key, &bounty);
+
+        env.events().publish(
+            (symbol_short!("bounty"), symbol_short!("cancelled")),
+            (bounty_id,),
+        );
 
         true
     }

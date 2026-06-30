@@ -188,6 +188,11 @@ impl GovernanceContract {
         env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
         env.storage().persistent().extend_ttl(&proposal_counter_key, 4096, ledger_ttl);
 
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("created")),
+            (proposal_id, proposer, proposal.voting_deadline),
+        );
+
         proposal_id
     }
 
@@ -233,6 +238,11 @@ impl GovernanceContract {
         let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
         env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
         env.storage().persistent().extend_ttl(&vote_key, 4096, ledger_ttl);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("voted")),
+            (proposal_id, voter, vote_yes),
+        );
 
         true
     }

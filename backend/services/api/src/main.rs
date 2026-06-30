@@ -19,7 +19,7 @@ mod ml;
 mod ml_handlers;
 mod reputation;
 mod verification_rewards;
-mod webhook;
+mod webhooks;
 mod websocket;
 
 pub const API_VERSION: &str = "1";
@@ -1379,7 +1379,7 @@ async fn main() -> std::io::Result<()> {
                     .route("/escrow/{id}", web::get().to(get_escrow))
                     .route(
                         "/webhooks/payment",
-                        web::post().to(webhook::payment_webhook),
+                        web::post().to(webhooks::payment_webhook),
                     )
                     .route(
                         "/payments/{id}/status",
