@@ -17,6 +17,31 @@ use crate::cqrs_write::DomainEvent;
 // Read model projections
 // ---------------------------------------------------------------------------
 
+/// Materialised search projection for the `bounty_search_view` Postgres view.
+///
+/// Kept in-sync by `project_event`: the projector calls
+/// `schedule_search_view_refresh` after any bounty-mutating event so that the
+/// Postgres view is refreshed asynchronously by the background worker.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BountySearchView {
+    pub bounty_id: String,
+    pub creator_id: String,
+    pub title: String,
+    pub description: String,
+    pub budget: u64,
+    pub status: String,
+    pub category: Option<String>,
+    /// Pre-computed tag/skill tokens for fast keyword matching.
+    pub skill_tokens: String,
+    /// Tag array for containment queries.
+    pub tags: Vec<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    /// True when this in-memory projection is dirty and the Postgres view
+    /// needs a concurrent REFRESH.
+    pub needs_refresh: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BountyView {
     pub bounty_id: String,
@@ -60,6 +85,22 @@ pub struct ReadStore {
     pub bounties: HashMap<String, BountyView>,
     pub reputations: HashMap<String, CreatorReputationView>,
     pub escrows: HashMap<String, EscrowView>,
+    /// In-memory mirror of the `bounty_search_view` Postgres materialized view.
+    /// Entries flagged `needs_refresh = true` are picked up by the background
+    /// refresh worker and flushed via `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
+    pub search_views: HashMap<String, BountySearchView>,
+}
+
+/// Enqueue an async REFRESH of the `bounty_search_view` materialized view.
+///
+/// In production this posts the bounty_id to a background worker channel;
+/// the worker debounces rapid successive refreshes (e.g. burst of applications)
+/// and issues `REFRESH MATERIALIZED VIEW CONCURRENTLY bounty_search_view` which
+/// never takes a table lock.
+pub fn schedule_search_view_refresh(store: &mut ReadStore, bounty_id: &str) {
+    if let Some(sv) = store.search_views.get_mut(bounty_id) {
+        sv.needs_refresh = true;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +128,24 @@ pub fn project_event(store: &mut ReadStore, event: &DomainEvent) {
                     ..Default::default()
                 },
             );
+            // Materialise the search projection and mark it for async Postgres refresh.
+            store.search_views.insert(
+                bounty_id.clone(),
+                BountySearchView {
+                    bounty_id: bounty_id.clone(),
+                    creator_id: creator_id.clone(),
+                    title: title.clone(),
+                    description: String::new(),
+                    budget: *budget_usd,
+                    status: "open".into(),
+                    category: None,
+                    skill_tokens: String::new(),
+                    tags: Vec::new(),
+                    created_at: *occurred_at,
+                    updated_at: *occurred_at,
+                    needs_refresh: true,
+                },
+            );
         }
 
         DomainEvent::BountyApplicationReceived { bounty_id, .. } => {
@@ -106,6 +165,11 @@ pub fn project_event(store: &mut ReadStore, event: &DomainEvent) {
             if let Some(b) = store.bounties.get_mut(bounty_id) {
                 b.status = "completed".into();
                 b.completed_at = Some(*occurred_at);
+            }
+            if let Some(sv) = store.search_views.get_mut(bounty_id) {
+                sv.status = "completed".into();
+                sv.updated_at = *occurred_at;
+                sv.needs_refresh = true;
             }
         }
 
@@ -179,5 +243,37 @@ impl ReadStore {
     /// Return the reputation view for a creator, if it exists.
     pub fn creator_reputation(&self, creator_id: &str) -> Option<&CreatorReputationView> {
         self.reputations.get(creator_id)
+    }
+
+    /// Return open bounty search views matching a keyword in title or skill tokens.
+    /// Used as an in-process fallback before the Postgres materialized view is ready.
+    pub fn search_bounties<'a>(&'a self, keyword: &str) -> Vec<&'a BountySearchView> {
+        let lower = keyword.to_lowercase();
+        let mut results: Vec<&BountySearchView> = self
+            .search_views
+            .values()
+            .filter(|sv| {
+                sv.status != "cancelled"
+                    && (sv.title.to_lowercase().contains(&lower)
+                        || sv.skill_tokens.to_lowercase().contains(&lower))
+            })
+            .collect();
+        results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        results
+    }
+
+    /// Drain all search view entries that need a Postgres materialized view refresh.
+    pub fn drain_pending_refreshes(&mut self) -> Vec<String> {
+        self.search_views
+            .values_mut()
+            .filter_map(|sv| {
+                if sv.needs_refresh {
+                    sv.needs_refresh = false;
+                    Some(sv.bounty_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }

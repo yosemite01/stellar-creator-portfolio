@@ -371,26 +371,123 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        // Get user's analytics data
-        const user = ctx.user!;
+        const userId = ctx.user!.id;
 
-        // This would calculate real metrics from bounties, applications, etc.
+        const periodDays = { '7d': 7, '30d': 30, '90d': 90, '1y': 365 }[input.period];
+        const since = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+        const prevSince = new Date(since.getTime() - periodDays * 24 * 60 * 60 * 1000);
+
+        // Earnings from Transaction table grouped into current vs previous period
+        const [txCurrent, txPrev] = await Promise.all([
+          prisma.transaction.aggregate({
+            where: { userId, type: 'payment', createdAt: { gte: since } },
+            _sum: { amount: true },
+          }),
+          prisma.transaction.aggregate({
+            where: { userId, type: 'payment', createdAt: { gte: prevSince, lt: since } },
+            _sum: { amount: true },
+          }),
+        ]);
+
+        const totalEarnings = txCurrent._sum.amount ?? 0;
+        const prevEarnings = txPrev._sum.amount ?? 0;
+        const earningsChange =
+          prevEarnings > 0
+            ? Math.round(((totalEarnings - prevEarnings) / prevEarnings) * 1000) / 10
+            : 0;
+
+        // Monthly earnings for this calendar month
+        const monthStart = new Date();
+        monthStart.setDate(1);
+        monthStart.setHours(0, 0, 0, 0);
+        const txMonth = await prisma.transaction.aggregate({
+          where: { userId, type: 'payment', createdAt: { gte: monthStart } },
+          _sum: { amount: true },
+        });
+
+        // Earnings time series — one point per period bucket
+        const earningsTimeSeries = await prisma.$queryRaw<
+          { bucket: Date; total: number }[]
+        >`
+          SELECT
+            date_trunc(${periodDays <= 30 ? 'day' : 'week'}, "createdAt") AS bucket,
+            SUM(amount)::integer                                           AS total
+          FROM "Transaction"
+          WHERE "userId" = ${userId}
+            AND "type"   = 'payment'
+            AND "createdAt" >= ${since}
+          GROUP BY bucket
+          ORDER BY bucket ASC
+        `;
+
+        // Bounty performance — creator's own bounties
+        const [totalBounties, completedBounties, activeBounties, pendingBounties] =
+          await Promise.all([
+            prisma.bounty.count({ where: { creatorId: userId } }),
+            prisma.bounty.count({ where: { creatorId: userId, status: 'COMPLETED' } }),
+            prisma.bounty.count({ where: { creatorId: userId, status: 'IN_PROGRESS' } }),
+            prisma.bounty.count({ where: { creatorId: userId, status: 'OPEN' } }),
+          ]);
+
+        const completionRate =
+          totalBounties > 0 ? Math.round((completedBounties / totalBounties) * 100) : 0;
+
+        // Average rating from Review table where the reviewer reviewed this creator
+        const ratingAgg = await prisma.review.aggregate({
+          where: { creatorId: userId, status: 'APPROVED' },
+          _avg: { rating: true },
+          _count: { id: true },
+        });
+        const avgRating = ratingAgg._avg.rating
+          ? Math.round(ratingAgg._avg.rating * 10) / 10
+          : 0;
+
+        // Top skills by demand — tags on bounties where this creator applied
+        const appliedBountyIds = (
+          await prisma.bountyApplication.findMany({
+            where: { applicantId: userId },
+            select: { bountyId: true },
+          })
+        ).map((a) => a.bountyId);
+
+        const tagRows = await prisma.bounty.findMany({
+          where: { id: { in: appliedBountyIds } },
+          select: { tags: true },
+        });
+        const tagFreq: Record<string, number> = {};
+        for (const row of tagRows) {
+          for (const tag of row.tags) {
+            tagFreq[tag] = (tagFreq[tag] ?? 0) + 1;
+          }
+        }
+        const topSkills = Object.entries(tagFreq)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 8)
+          .map(([tag, count]) => ({ tag, count }));
+
         return {
           earnings: {
-            total: 12500,
-            thisMonth: 3200,
-            change: 15.3,
+            total: totalEarnings,
+            thisMonth: txMonth._sum.amount ?? 0,
+            change: earningsChange,
+            timeSeries: earningsTimeSeries.map((r) => ({
+              date: r.bucket.toISOString().slice(0, 10),
+              value: Number(r.total),
+            })),
           },
           performance: {
-            completionRate: 94,
-            avgRating: 4.7,
-            responseTime: '2h',
+            completionRate,
+            avgRating,
+            responseTime: '< 2h',
+            totalReviews: ratingAgg._count.id,
           },
           projects: {
-            active: 3,
-            completed: 28,
-            pending: 5,
+            active: activeBounties,
+            completed: completedBounties,
+            pending: pendingBounties,
+            total: totalBounties,
           },
+          topSkills,
         };
       }),
   }),

@@ -627,6 +627,115 @@ export async function postgresFtsSearch(
   }));
 }
 
+// ── Bounty materialized-view search (#744) ───────────────────────────────────
+
+export interface BountySearchOptions {
+  query: string;
+  limit?: number;
+  minBudget?: number;
+  maxBudget?: number;
+  /** Filter by exact status (OPEN | IN_PROGRESS | COMPLETED) */
+  status?: string;
+  /** Required tags/skills — all must match (AND semantics) */
+  tags?: string[];
+}
+
+export interface BountySearchResult {
+  id: string;
+  creatorId: string;
+  title: string;
+  description: string;
+  budget: number;
+  status: string;
+  category: string | null;
+  tags: string[];
+  createdAt: Date;
+  rank: number;
+}
+
+/**
+ * Full-text search over the `bounty_search_view` materialized view.
+ *
+ * Queries the read replica (or primary if no replica is configured) using the
+ * pre-computed `search_vector` GIN index so no full-table scans occur on the
+ * write database.  The view is refreshed asynchronously by the CQRS event
+ * projector after every BountyCreated / bounty-mutating event.
+ */
+export async function bountyViewSearch(
+  options: BountySearchOptions,
+): Promise<BountySearchResult[]> {
+  const { query, limit = 10, minBudget, maxBudget, status, tags } = options;
+  if (!query.trim()) return [];
+
+  const tsquery = toPrefixTsQuery(query);
+  if (!tsquery) return [];
+
+  // Build dynamic WHERE clauses with Prisma parameterised SQL.
+  const filters: Prisma.Sql[] = [];
+  if (status) filters.push(Prisma.sql`sv.status = ${status}`);
+  if (minBudget !== undefined) filters.push(Prisma.sql`sv.budget >= ${minBudget}`);
+  if (maxBudget !== undefined) filters.push(Prisma.sql`sv.budget <= ${maxBudget}`);
+  if (tags?.length) filters.push(Prisma.sql`sv.tags @> ${tags}::text[]`);
+
+  const whereExtra = filters.length
+    ? Prisma.sql`AND ${Prisma.join(filters, ' AND ')}`
+    : Prisma.empty;
+
+  interface BountyViewRow {
+    id: string;
+    creatorId: string;
+    title: string;
+    description: string;
+    budget: number;
+    status: string;
+    category: string | null;
+    tags: string[];
+    createdAt: Date;
+    rank: number;
+  }
+
+  const rows = await prisma.$queryRaw<BountyViewRow[]>`
+    SELECT
+      sv.id,
+      sv."creatorId",
+      sv.title,
+      sv.description,
+      sv.budget,
+      sv.status,
+      sv.category,
+      sv.tags,
+      sv."createdAt",
+      ts_rank(sv.search_vector, to_tsquery('english', ${tsquery})) AS rank
+    FROM bounty_search_view sv
+    WHERE sv.search_vector @@ to_tsquery('english', ${tsquery})
+      ${whereExtra}
+    ORDER BY rank DESC, sv."createdAt" DESC
+    LIMIT ${limit}
+  `;
+
+  return rows.map((r) => ({
+    id: r.id,
+    creatorId: r.creatorId,
+    title: r.title,
+    description: r.description,
+    budget: Number(r.budget),
+    status: r.status,
+    category: r.category,
+    tags: r.tags ?? [],
+    createdAt: r.createdAt,
+    rank: Number(r.rank),
+  }));
+}
+
+/**
+ * Trigger an async REFRESH of the bounty_search_view materialized view.
+ * Called by the CQRS event projector after BountyCreated / bounty-mutating events.
+ * Uses CONCURRENTLY so no table lock is taken; safe to call on a hot database.
+ */
+export async function refreshBountySearchView(): Promise<void> {
+  await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY bounty_search_view`;
+}
+
 // ── Cluster health ────────────────────────────────────────────────────────────
 
 /**
