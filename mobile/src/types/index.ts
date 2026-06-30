@@ -168,3 +168,19 @@ export interface FocusSession {
   durationSeconds: number;
   completedAt: string; // ISO 8601
 }
+
+// ─── Offline / Network ────────────────────────────────────────────────────────
+
+export type NetworkState = 'unknown' | 'online' | 'offline';
+export type SyncStatus = 'synced' | 'syncing' | 'error';
+
+export interface QueuedOperation {
+  id: string;
+  type: 'create' | 'update' | 'delete';
+  endpoint: string;
+  payload?: Record<string, unknown>;
+  retries: number;
+  createdAt: string;
+  /** Epoch ms — op is not retried until Date.now() >= nextRetryAt */
+  nextRetryAt: number;
+}
