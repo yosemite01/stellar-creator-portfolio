@@ -1,12 +1,11 @@
-/// Webhook handler for external payment events — Issue #346
+/// Stripe (and Coinbase Commerce) payment webhook handler — Issue #346
 ///
-/// Receives signed webhook payloads from external payment processors
-/// (e.g. Stripe, Coinbase Commerce) and maps them to escrow operations
-/// via the Stellar SDK.
+/// Receives signed webhook payloads from external payment processors and maps
+/// them to escrow operations via the Stellar SDK.
 ///
-/// Security: every incoming request must carry a valid HMAC-SHA256
-/// signature in the `X-Webhook-Signature` header.  The secret is read
-/// from the `WEBHOOK_SECRET` environment variable.
+/// Security: every incoming request must carry a valid HMAC-SHA256 signature
+/// in the `X-Webhook-Signature` header.  The secret is read from the
+/// `WEBHOOK_SECRET` environment variable.
 use actix_web::{web, HttpRequest, HttpResponse};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;

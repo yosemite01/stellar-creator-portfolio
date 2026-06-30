@@ -1,3 +1,8 @@
+/// Soroban event webhook registry and delivery
+///
+/// Allows external consumers to register HTTPS endpoints that receive
+/// platform events (bounty, escrow, governance) as they are emitted by
+/// the Soroban contracts indexed by the event indexer.
 use actix_web::{web, HttpResponse};
 use deadpool_redis::{redis::AsyncCommands, Pool};
 use serde::{Deserialize, Serialize};
