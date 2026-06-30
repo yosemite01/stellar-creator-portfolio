@@ -4,7 +4,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useTheme } from 'next-themes';
 import { Moon, Sun, Menu, X, AlertTriangle } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { DeferredSwapLauncher } from '@/components/streaming/deferred-swap-launcher';
 import { NotificationCenter } from '@/backend/services/notifications/notification-center';
@@ -15,6 +15,9 @@ export function Header() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const previousActiveElement = useRef<HTMLElement | null>(null);
   const { address, network, isConnected, isLoading, connect, disconnect } = useWallet();
   const expectedNetwork: string = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'testnet';
   const networkMismatch = isConnected && network !== 'unknown' && network !== expectedNetwork;
@@ -31,8 +34,19 @@ export function Header() {
     };
 
     if (isMenuOpen) {
+      previousActiveElement.current = document.activeElement as HTMLElement;
       document.addEventListener('keydown', handleEscape);
       document.body.style.overflow = 'hidden';
+      // Focus first menu item
+      setTimeout(() => {
+        const firstMenuItem = menuRef.current?.querySelector('a') as HTMLElement;
+        firstMenuItem?.focus();
+      }, 0);
+    } else {
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'unset';
+      // Return focus to menu button
+      previousActiveElement.current?.focus();
     }
 
     return () => {
@@ -130,24 +144,33 @@ export function Header() {
 
             {/* Mobile Menu Button */}
             <button
-              className="md:hidden p-2 hover:bg-secondary/40 rounded-lg transition-smooth"
+              ref={menuButtonRef}
+              className="md:hidden p-2 hover:bg-secondary/40 rounded-lg transition-smooth focus:outline-none focus:ring-2 focus:ring-ring"
               onClick={() => setIsMenuOpen(!isMenuOpen)}
               aria-label="Toggle menu"
+              aria-expanded={isMenuOpen}
+              aria-controls="mobile-menu"
             >
-              {isMenuOpen ? <X size={20} /> : <Menu size={20} />}
+              {isMenuOpen ? <X size={20} aria-hidden="true" /> : <Menu size={20} aria-hidden="true" />}
             </button>
           </div>
         </div>
 
         {/* Mobile Navigation */}
         {isMenuOpen && (
-          <nav className="md:hidden border-t border-border/40 bg-background animate-slide-up">
+          <nav
+            ref={menuRef}
+            id="mobile-menu"
+            className="md:hidden border-t border-border/40 bg-background animate-slide-up"
+            role="navigation"
+            aria-label="Main navigation"
+          >
             <div className="flex flex-col py-2">
               {navigationItems.map((item, index) => (
                 <Link
                   key={item.href}
                   href={item.href}
-                  className="block px-4 py-3 text-sm font-medium text-foreground hover:text-primary hover:bg-secondary/40 transition-smooth min-h-[44px] flex items-center"
+                  className="block px-4 py-3 text-sm font-medium text-foreground hover:text-primary hover:bg-secondary/40 transition-smooth min-h-[44px] flex items-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-inset"
                   onClick={() => setIsMenuOpen(false)}
                   style={{
                     animation: `slide-up 0.3s ease-out ${index * 0.05}s backwards`,

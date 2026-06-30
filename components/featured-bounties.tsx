@@ -9,6 +9,17 @@ export function FeaturedBounties() {
   const router = useRouter();
   const featured = bounties.slice(0, 3);
 
+  const handleBountyClick = (bountyId: string) => {
+    router.push(`/bounties/${bountyId}`);
+  };
+
+  const handleBountyKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, bountyId: string) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      router.push(`/bounties/${bountyId}`);
+    }
+  };
+
   return (
     <section className="py-16 sm:py-24 border-b border-border">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -26,9 +37,10 @@ export function FeaturedBounties() {
             variant="outline"
             onClick={() => router.push('/bounties')}
             className="hidden sm:inline-flex gap-2"
+            aria-label="View all bounties"
           >
             View All
-            <ArrowRight size={16} />
+            <ArrowRight size={16} aria-hidden="true" />
           </Button>
         </div>
 
@@ -37,8 +49,12 @@ export function FeaturedBounties() {
           {featured.map((bounty) => (
             <div
               key={bounty.id}
-              onClick={() => router.push('/bounties')}
-              className="group bg-card border border-border rounded-lg p-6 hover:shadow-lg transition-all duration-300 hover:-translate-y-1 cursor-pointer"
+              onClick={() => handleBountyClick(bounty.id)}
+              onKeyDown={(e) => handleBountyKeyDown(e, bounty.id)}
+              tabIndex={0}
+              role="button"
+              aria-label={`View bounty: ${bounty.title}`}
+              className="group bg-card border border-border rounded-lg p-6 hover:shadow-lg transition-all duration-300 hover:-translate-y-1 cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
             >
               {/* Header */}
               <div className="flex items-start justify-between mb-4">
@@ -60,13 +76,13 @@ export function FeaturedBounties() {
               {/* Meta Information */}
               <div className="space-y-2 mb-4 py-4 border-y border-border/50">
                 <div className="flex items-center gap-2">
-                  <DollarSign size={16} className="text-accent" />
+                  <DollarSign size={16} className="text-accent" aria-hidden="true" />
                   <span className="text-sm font-semibold text-foreground">
                     ${bounty.budget.toLocaleString()}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Clock size={16} className="text-accent" />
+                  <Clock size={16} className="text-accent" aria-hidden="true" />
                   <span className="text-sm text-muted-foreground">
                     {Math.ceil(
                       (bounty.deadline.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
@@ -97,9 +113,10 @@ export function FeaturedBounties() {
               <Button
                 variant="ghost"
                 className="w-full text-primary hover:text-primary hover:bg-primary/10"
+                aria-label={`View details for ${bounty.title}`}
               >
                 View Details
-                <ArrowRight size={16} className="ml-2" />
+                <ArrowRight size={16} className="ml-2" aria-hidden="true" />
               </Button>
             </div>
           ))}
@@ -110,9 +127,10 @@ export function FeaturedBounties() {
           <Button
             className="w-full"
             onClick={() => router.push('/bounties')}
+            aria-label="View all bounties"
           >
             View All Bounties
-            <ArrowRight size={16} className="ml-2" />
+            <ArrowRight size={16} className="ml-2" aria-hidden="true" />
           </Button>
         </div>
       </div>
