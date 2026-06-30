@@ -3,7 +3,7 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
 // WatermelonDB schema that mirrors remote entities
 // Supports offline-first architecture with local data persistence
 export const schema = appSchema({
-  version: 1,
+  version: 2,
   tables: [
     tableSchema({
       name: 'portfolios',
@@ -52,6 +52,30 @@ export const schema = appSchema({
         { name: 'last_synced_at', type: 'number' },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
+      ],
+    }),
+    tableSchema({
+      name: 'offline_queue',
+      columns: [
+        { name: 'remote_id', type: 'string', isIndexed: true },
+        { name: 'op_type', type: 'string' },
+        { name: 'endpoint', type: 'string' },
+        { name: 'payload', type: 'string' },
+        { name: 'retries', type: 'number' },
+        { name: 'next_retry_at', type: 'number' },
+        { name: 'created_at', type: 'number' },
+      ],
+    }),
+    tableSchema({
+      name: 'offline_dead_letter',
+      columns: [
+        { name: 'remote_id', type: 'string', isIndexed: true },
+        { name: 'op_type', type: 'string' },
+        { name: 'endpoint', type: 'string' },
+        { name: 'payload', type: 'string' },
+        { name: 'retries', type: 'number' },
+        { name: 'created_at', type: 'number' },
+        { name: 'failed_at', type: 'number' },
       ],
     }),
   ],

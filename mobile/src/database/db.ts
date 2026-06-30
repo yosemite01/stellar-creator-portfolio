@@ -1,11 +1,47 @@
 import Database from '@nozbe/watermelondb';
 import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
 import { synchronize } from '@nozbe/watermelondb/sync';
+import { schemaMigrations, createTable } from '@nozbe/watermelondb/Schema/migrations';
 import { schema } from './schema';
+
+const migrations = schemaMigrations({
+  migrations: [
+    {
+      toVersion: 2,
+      steps: [
+        createTable({
+          name: 'offline_queue',
+          columns: [
+            { name: 'remote_id', type: 'string', isIndexed: true },
+            { name: 'op_type', type: 'string' },
+            { name: 'endpoint', type: 'string' },
+            { name: 'payload', type: 'string' },
+            { name: 'retries', type: 'number' },
+            { name: 'next_retry_at', type: 'number' },
+            { name: 'created_at', type: 'number' },
+          ],
+        }),
+        createTable({
+          name: 'offline_dead_letter',
+          columns: [
+            { name: 'remote_id', type: 'string', isIndexed: true },
+            { name: 'op_type', type: 'string' },
+            { name: 'endpoint', type: 'string' },
+            { name: 'payload', type: 'string' },
+            { name: 'retries', type: 'number' },
+            { name: 'created_at', type: 'number' },
+            { name: 'failed_at', type: 'number' },
+          ],
+        }),
+      ],
+    },
+  ],
+});
 
 // SQLiteAdapter configuration for offline persistence
 const adapter = new SQLiteAdapter({
   schema,
+  migrations,
   dbName: 'stellar-portfolio',
   onSetUpError: (error) => {
     console.error('Database setup error:', error);

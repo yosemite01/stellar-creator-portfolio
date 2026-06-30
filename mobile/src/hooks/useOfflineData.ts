@@ -6,10 +6,12 @@
  *  2. If online, fetches fresh data in the background and updates the cache.
  *  3. If offline, serves stale cache with isStale=true so the UI can warn the user.
  *  4. Exposes refetch() for pull-to-refresh.
+ *  5. Exposes pendingOpsCount and deadLetterCount so screens can show retry status.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCache, setCache } from '../offline/OfflineStore';
+import { pendingCount, deadLetterCount as getDLQCount } from '../offline/OfflineQueue';
 import { useNetwork } from '../offline/NetworkProvider';
 
 interface UseOfflineDataOptions {
@@ -25,6 +27,10 @@ interface UseOfflineDataResult<T> {
   error: string | null;
   cachedAt: Date | null;
   refetch: () => Promise<void>;
+  /** Number of mutations queued for replay when connectivity is restored. */
+  pendingOpsCount: number;
+  /** Number of mutations that exhausted all retries and need user attention. */
+  deadLetterCount: number;
 }
 
 export function useOfflineData<T>(
@@ -35,12 +41,22 @@ export function useOfflineData<T>(
   const { isOnline } = useNetwork();
   const { ttlMs, skipFetch = false } = options;
 
-  const [data, setData]         = useState<T | null>(null);
-  const [isLoading, setLoading] = useState(true);
-  const [isStale, setIsStale]   = useState(false);
-  const [error, setError]       = useState<string | null>(null);
-  const [cachedAt, setCachedAt] = useState<Date | null>(null);
+  const [data, setData]               = useState<T | null>(null);
+  const [isLoading, setLoading]       = useState(true);
+  const [isStale, setIsStale]         = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+  const [cachedAt, setCachedAt]       = useState<Date | null>(null);
+  const [pendingOpsCount, setPending] = useState(0);
+  const [deadLetterCount, setDLQ]     = useState(0);
   const mounted = useRef(true);
+
+  const refreshQueueCounts = useCallback(async () => {
+    const [pending, dlq] = await Promise.all([pendingCount(), getDLQCount()]);
+    if (mounted.current) {
+      setPending(pending);
+      setDLQ(dlq);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     if (!mounted.current) return;
@@ -75,7 +91,8 @@ export function useOfflineData<T>(
     }
 
     if (mounted.current) setLoading(false);
-  }, [cacheKey, fetcher, isOnline, skipFetch, ttlMs]);
+    await refreshQueueCounts();
+  }, [cacheKey, fetcher, isOnline, skipFetch, ttlMs, refreshQueueCounts]);
 
   useEffect(() => {
     mounted.current = true;
@@ -84,5 +101,19 @@ export function useOfflineData<T>(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey, isOnline]);
 
-  return { data, isLoading, isStale, error, cachedAt, refetch: load };
+  // Refresh queue counts whenever connectivity changes
+  useEffect(() => {
+    refreshQueueCounts();
+  }, [isOnline, refreshQueueCounts]);
+
+  return {
+    data,
+    isLoading,
+    isStale,
+    error,
+    cachedAt,
+    refetch: load,
+    pendingOpsCount,
+    deadLetterCount,
+  };
 }
