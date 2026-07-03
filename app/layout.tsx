@@ -4,8 +4,10 @@ import { Analytics } from "@vercel/analytics/next";
 import { ThemeProvider } from "next-themes";
 import { LayoutProvider } from "@/components/layout-provider";
 import { DataLoaderProvider } from "@/app/providers/DataLoaderProvider";
+import { TRPCProvider } from "@/app/providers/TRPCProvider";
 import { WalletProvider } from "@/contexts/WalletContext";
 import "./globals.css";
+
 
 const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
@@ -88,9 +90,11 @@ export default function RootLayout({
           disableTransitionOnChange={false}
         >
           <WalletProvider>
-            <DataLoaderProvider>
-              <LayoutProvider>{children}</LayoutProvider>
-            </DataLoaderProvider>
+            <TRPCProvider>
+              <DataLoaderProvider>
+                <LayoutProvider>{children}</LayoutProvider>
+              </DataLoaderProvider>
+            </TRPCProvider>
           </WalletProvider>
           <Analytics />
         </ThemeProvider>
