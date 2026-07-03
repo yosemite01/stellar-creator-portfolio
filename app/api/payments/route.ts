@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getStripe, isStripeConfigured } from '@/lib/stripe'
+import { getStripe, isStripeConfigured } from '@/lib/payments/stripe'
 import {
   createEscrow,
   attachPaymentIntent,
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
       currency: data.currency,
     })
 
-    const stripe = getStripe()
+    const stripe = await getStripe()
     const pi = await stripe.paymentIntents.create({
       amount: data.amountCents,
       currency: data.currency,
@@ -120,7 +120,7 @@ export async function POST(request: NextRequest) {
     const successUrl = data.successUrl ?? `${base}/dashboard/payments?session_id={CHECKOUT_SESSION_ID}`
     const cancelUrl = data.cancelUrl ?? `${base}/dashboard/payments?canceled=1`
 
-    const stripe = getStripe()
+    const stripe = await getStripe()
     const sessionCheckout = await stripe.checkout.sessions.create({
       mode: 'subscription',
       line_items: [{ price: data.priceId, quantity: 1 }],
@@ -161,7 +161,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(responseBody)
     }
 
-    const stripe = getStripe()
+    const stripe = await getStripe()
     const captured = await stripe.paymentIntents.capture(escrow.paymentIntentId, {
       expand: ['latest_charge'],
     })
@@ -204,7 +204,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(responseBody)
     }
 
-    const stripe = getStripe()
+    const stripe = await getStripe()
     const pi = await stripe.paymentIntents.retrieve(escrow.paymentIntentId)
     if (pi.status === 'requires_capture') {
       await stripe.paymentIntents.cancel(escrow.paymentIntentId)
