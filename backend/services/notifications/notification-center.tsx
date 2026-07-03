@@ -79,15 +79,19 @@ async function markAllAsRead(): Promise<void> {
 export function NotificationCenter() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
+  const [wsUrl, setWsUrl] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     fetchNotifications().then(setNotifications);
+    // Compute WebSocket URL client-side only (window is not available during SSR)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    setWsUrl(`${protocol}//${window.location.host}/api/ws`);
   }, []);
 
   const { isConnected } = useWebSocket({
-    url: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws`,
+    url: wsUrl ?? '',
     onMessage: (message) => {
       if (message.type === 'notification:created') {
         const n = message.data as any;
@@ -214,9 +218,8 @@ export function NotificationCenter() {
                     <button
                       key={notification.id}
                       onClick={() => handleNotificationClick(notification)}
-                      className={`w-full text-left p-3 hover:bg-secondary/30 transition-colors group ${
-                        notification.status === 'unread' ? 'bg-primary/5' : ''
-                      }`}
+                      className={`w-full text-left p-3 hover:bg-secondary/30 transition-colors group ${notification.status === 'unread' ? 'bg-primary/5' : ''
+                        }`}
                     >
                       <div className="flex gap-3">
                         <div className="mt-0.5 shrink-0">
@@ -225,11 +228,10 @@ export function NotificationCenter() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-start justify-between gap-2">
                             <h3
-                              className={`text-sm leading-tight truncate ${
-                                notification.status === 'unread'
+                              className={`text-sm leading-tight truncate ${notification.status === 'unread'
                                   ? 'font-semibold text-foreground'
                                   : 'font-medium text-muted-foreground'
-                              }`}
+                                }`}
                             >
                               {notification.title}
                             </h3>
