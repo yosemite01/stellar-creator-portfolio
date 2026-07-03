@@ -91,5 +91,6 @@ export type Database = {
     };
   };
 };
+export { prisma } from './prisma';
 
 export default supabaseClient;
