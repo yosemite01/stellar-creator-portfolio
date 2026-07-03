@@ -3,8 +3,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
-import { CreatorCard } from '@/components/creator-card';
-import { disciplines } from '@/lib/creators-data';
 import { CreatorCard } from '@/components/cards/creator-card';
 import { creators, disciplines, getCreatorsByDiscipline } from '@/lib/services/creators-data';
 import { Button } from '@/components/ui/button';
@@ -87,9 +85,8 @@ export default function CreatorsPage() {
                     variant={selectedDiscipline === discipline ? 'default' : 'outline'}
                     size="sm"
                     onClick={() => setSelectedDiscipline(discipline)}
-                    className={`transition-all duration-200 ease-out ${
-                      selectedDiscipline === discipline ? 'scale-105 shadow-lg shadow-primary/30' : 'hover:scale-105'
-                    }`}
+                    className={`transition-all duration-200 ease-out ${selectedDiscipline === discipline ? 'scale-105 shadow-lg shadow-primary/30' : 'hover:scale-105'
+                      }`}
                   >
                     {discipline}
                   </Button>
