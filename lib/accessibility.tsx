@@ -1,3 +1,4 @@
+import React from 'react';
 // Accessibility utilities and helpers for WCAG compliance
 
 export const A11Y_LABELS = {
@@ -180,5 +181,3 @@ export class AccessibilityChecker {
     return { score, issues, warnings };
   }
 }
-
-import React
