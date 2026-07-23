@@ -53,6 +53,8 @@ const CONTRACTS = [
   { name: "escrow",     wasm: `${WASM_DIR}/escrow.wasm`,     outputKey: "escrow_contract_id" },
   { name: "freelancer", wasm: `${WASM_DIR}/freelancer.wasm`, outputKey: "freelancer_contract_id" },
   { name: "governance", wasm: `${WASM_DIR}/governance.wasm`, outputKey: "governance_contract_id" },
+  { name: "oracle",     wasm: `${WASM_DIR}/oracle.wasm`,     outputKey: "oracle_contract_id" },
+  { name: "identity",   wasm: `${WASM_DIR}/identity.wasm`,   outputKey: "identity_contract_id" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -138,12 +140,27 @@ console.log(`   Network : ${NETWORK ?? "(not set)"}`);
 console.log(`   RPC     : ${RPC_URL}`);
 console.log(`   Mode    : ${SIMULATE_ONLY ? "simulate-only" : "deploy"}\n`);
 
+const deployedContracts = {};
+
 for (const contract of CONTRACTS) {
   if (SIMULATE_ONLY) {
     simulateContract(contract);
   } else {
-    deployContract(contract);
+    const contractId = deployContract(contract);
+    deployedContracts[contract.name] = contractId;
   }
+}
+
+if (!SIMULATE_ONLY && Object.keys(deployedContracts).length > 0) {
+  const contractsJson = {
+    network: NETWORK,
+    timestamp: new Date().toISOString(),
+    commit: process.env.GITHUB_SHA || "local",
+    contracts: deployedContracts,
+  };
+  const outPath = path.resolve("contracts.json");
+  fs.writeFileSync(outPath, JSON.stringify(contractsJson, null, 2) + "\n");
+  console.log(`\n📄 Contract IDs written to ${outPath}`);
 }
 
 console.log(`\n✅ All contracts ${SIMULATE_ONLY ? "simulated" : "deployed"} successfully.\n`);

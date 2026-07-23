@@ -1,9 +1,74 @@
 /**
  * Rate Limiting Middleware
- * Implements sliding window rate limiting with DDoS protection
+ * Implements sliding window rate limiting with DDoS protection, Redis backing, and Prometheus metrics
  */
 
 import { Request, Response, NextFunction } from "express";
+import { RedisClient } from "redis";
+
+// ─── Per-Endpoint Rate Limit Constants ─────────────────────────────────────
+
+/** Rate limits for specific API endpoints (endpoint_name: {limit, window_ms}). */
+export const ENDPOINT_RATE_LIMITS = {
+  "POST /api/messages": {
+    limit: 30,
+    windowMs: 60 * 1000, // 60 seconds
+  },
+  "POST /api/bounties": {
+    limit: 5,
+    windowMs: 60 * 60 * 1000, // 3600 seconds (1 hour)
+  },
+  "GET /api/search": {
+    limit: 100,
+    windowMs: 60 * 1000, // 60 seconds
+  },
+  "POST /api/relay/sponsor": {
+    limit: 10,
+    windowMs: 60 * 1000, // 60 seconds
+  },
+  "POST /api/ipfs/pin": {
+    limit: 20,
+    windowMs: 60 * 60 * 1000, // 3600 seconds (1 hour)
+  },
+} as const;
+
+// ─── Prometheus Metrics ───────────────────────────────────────────────────
+
+let prometheusMetrics: {
+  rateLimitHitsTotal?: { inc: (labels: any) => void };
+} = {};
+
+/**
+ * Initialize Prometheus metrics (called once during app setup)
+ */
+export function initPrometheusMetrics(register: any): void {
+  try {
+    // Import prometheus client if available
+    const prometheus = require("prom-client");
+    if (!prometheus) return;
+
+    prometheusMetrics.rateLimitHitsTotal = new prometheus.Counter({
+      name: "rate_limit_hits_total",
+      help: "Total number of rate limit checks",
+      labelNames: ["endpoint", "result"],
+      registers: [register],
+    });
+  } catch {
+    // Prometheus not installed; metrics will be no-ops
+  }
+}
+
+/**
+ * Record a rate limit hit in Prometheus
+ */
+function recordRateLimitMetric(
+  endpoint: string,
+  result: "allowed" | "blocked",
+): void {
+  if (prometheusMetrics.rateLimitHitsTotal) {
+    prometheusMetrics.rateLimitHitsTotal.inc({ endpoint, result });
+  }
+}
 
 interface RateLimitEntry {
   count: number;
@@ -18,6 +83,8 @@ interface RateLimitConfig {
   skip?: (req: Request) => boolean; // Skip rate limiting for certain requests
   onLimitReached?: (req: Request, res: Response) => void; // Callback when limit reached
   blockDurationMs?: number; // Block duration for DDoS protection
+  redisClient?: RedisClient; // Optional Redis client for distributed rate limiting
+  endpointName?: string; // Name of endpoint for metrics and logging
 }
 
 interface RateLimitStore {
@@ -26,11 +93,13 @@ interface RateLimitStore {
 
 /**
  * Sliding Window Rate Limiter Implementation
+ * Supports both in-memory and Redis-backed storage.
  */
 export class RateLimiter {
   private store: RateLimitStore = {};
   private config: RateLimitConfig;
   private cleanupInterval: NodeJS.Timeout;
+  private redisClient?: RedisClient;
 
   constructor(config: RateLimitConfig) {
     this.config = {
@@ -40,10 +109,14 @@ export class RateLimiter {
       ...config,
     };
 
-    // Cleanup old entries every 10 minutes
-    this.cleanupInterval = setInterval(() => {
-      this.cleanup();
-    }, 600000);
+    this.redisClient = config.redisClient;
+
+    // Cleanup old entries every 10 minutes (only for in-memory store)
+    if (!this.redisClient) {
+      this.cleanupInterval = setInterval(() => {
+        this.cleanup();
+      }, 600000);
+    }
   }
 
   /**
@@ -65,16 +138,45 @@ export class RateLimiter {
   }
 
   /**
-   * Check if request is within rate limit
+   * Check if user has admin role (to bypass rate limits)
    */
-  public isLimited(req: Request): {
+  private isAdmin(req: Request): boolean {
+    const userRole = (req as any).user?.role || (req as any).role;
+    return userRole === "admin" || userRole === "ADMIN";
+  }
+
+  /**
+   * Check if request is within rate limit
+   * Supports both in-memory and Redis-backed sliding window.
+   */
+  public async isLimited(req: Request): Promise<{
+    limited: boolean;
+    remaining: number;
+    reset: number;
+  }> {
+    // Admin role always bypasses rate limits
+    if (this.isAdmin(req)) {
+      return { limited: false, remaining: this.config.maxRequests, reset: Date.now() + this.config.windowMs };
+    }
+
+    const key = this.getKey(req);
+    const now = Date.now();
+
+    if (this.redisClient) {
+      return this.checkLimitRedis(key, now);
+    } else {
+      return this.checkLimitMemory(key, now);
+    }
+  }
+
+  /**
+   * Check rate limit using in-memory store (non-distributed)
+   */
+  private checkLimitMemory(key: string, now: number): {
     limited: boolean;
     remaining: number;
     reset: number;
   } {
-    const key = this.getKey(req);
-    const now = Date.now();
-
     // Get or initialize entry
     let entry = this.store[key];
     if (!entry) {
@@ -116,40 +218,90 @@ export class RateLimiter {
   }
 
   /**
-   * Middleware function
+   * Check rate limit using Redis-backed sliding window
+   */
+  private async checkLimitRedis(key: string, now: number): Promise<{
+    limited: boolean;
+    remaining: number;
+    reset: number;
+  }> {
+    if (!this.redisClient) {
+      throw new Error("Redis client not configured");
+    }
+
+    try {
+      const windowStart = now - this.config.windowMs;
+
+      // Remove old entries outside the window
+      await this.redisClient.zRemRangeByScore(key, "-inf", windowStart);
+
+      // Count requests in current window
+      const count = await this.redisClient.zCard(key);
+      const isLimited = count >= this.config.maxRequests;
+
+      // Add current request
+      await this.redisClient.zAdd(key, { score: now, member: String(now) });
+
+      // Set expiration (window + extra time for safety)
+      await this.redisClient.expire(key, Math.ceil((this.config.windowMs + 10000) / 1000));
+
+      return {
+        limited: isLimited,
+        remaining: Math.max(0, this.config.maxRequests - count),
+        reset: now + this.config.windowMs,
+      };
+    } catch (error) {
+      console.error("Redis rate limit check failed:", error);
+      // Fall back to in-memory on Redis error
+      return this.checkLimitMemory(key, now);
+    }
+  }
+
+  /**
+   * Middleware function (async-aware)
    */
   public middleware() {
-    return (req: Request, res: Response, next: NextFunction) => {
+    return async (req: Request, res: Response, next: NextFunction) => {
       // Skip if configured
       if (this.config.skip && this.config.skip(req)) {
         return next();
       }
 
-      const status = this.isLimited(req);
+      try {
+        const status = await this.isLimited(req);
+        const endpointName = this.config.endpointName || req.path;
 
-      // Set rate limit headers
-      res.set("X-RateLimit-Limit", this.config.maxRequests.toString());
-      res.set("X-RateLimit-Remaining", status.remaining.toString());
-      res.set("X-RateLimit-Reset", Math.ceil(status.reset / 1000).toString());
+        // Set rate limit headers
+        res.set("X-RateLimit-Limit", this.config.maxRequests.toString());
+        res.set("X-RateLimit-Remaining", status.remaining.toString());
+        res.set("X-RateLimit-Reset", Math.ceil(status.reset / 1000).toString());
 
-      if (status.limited) {
-        res.set(
-          "Retry-After",
-          Math.ceil((status.reset - Date.now()) / 1000).toString(),
-        );
+        if (status.limited) {
+          const retryAfterSeconds = Math.ceil((status.reset - Date.now()) / 1000);
+          res.set("Retry-After", retryAfterSeconds.toString());
 
-        if (this.config.onLimitReached) {
-          this.config.onLimitReached(req, res);
+          // Record Prometheus metric
+          recordRateLimitMetric(endpointName, "blocked");
+
+          if (this.config.onLimitReached) {
+            this.config.onLimitReached(req, res);
+          }
+
+          return res.status(429).json({
+            error: "Rate limit exceeded",
+            retryAfter: retryAfterSeconds,
+          });
         }
 
-        return res.status(429).json({
-          error: "Too Many Requests",
-          message: "Rate limit exceeded. Please try again later.",
-          retryAfter: Math.ceil((status.reset - Date.now()) / 1000),
-        });
-      }
+        // Record Prometheus metric
+        recordRateLimitMetric(endpointName, "allowed");
 
-      next();
+        next();
+      } catch (error) {
+        console.error("Rate limit check error:", error);
+        // On error, allow the request through
+        next();
+      }
     };
   }
 
@@ -364,21 +516,41 @@ export function createApiRateLimiter(config: Partial<RateLimitConfig> = {}) {
 }
 
 /**
- * Create endpoint-specific rate limiter
+ * Create endpoint-specific rate limiter using named constants from ENDPOINT_RATE_LIMITS
  */
 export function createEndpointRateLimiter(
-  endpoint: string,
+  endpoint: keyof typeof ENDPOINT_RATE_LIMITS,
   config: Partial<RateLimitConfig> = {},
+  redisClient?: RedisClient,
 ) {
+  const limitConfig = ENDPOINT_RATE_LIMITS[endpoint];
   const limiter = new RateLimiter({
-    windowMs: 60000,
-    maxRequests: 20,
+    windowMs: limitConfig.windowMs,
+    maxRequests: limitConfig.limit,
+    endpointName: endpoint,
     keyGenerator: (req: Request) => {
+      // Use authenticated user ID if available, otherwise use IP + API key
+      const userId = (req as any).user?.id || (req as any).userId;
       const apiKey = req.headers["x-api-key"] as string;
+      if (userId) {
+        return `${endpoint}:${userId}`;
+      }
       return apiKey ? `${endpoint}:${apiKey}` : `${endpoint}:${req.ip}`;
     },
+    redisClient,
     ...config,
   });
 
   return limiter.middleware();
+}
+
+/**
+ * Create rate limiter factory that uses ENDPOINT_RATE_LIMITS constants
+ * Returns a function that can be used as Express middleware
+ */
+export function createPerEndpointRateLimiter(
+  endpoint: keyof typeof ENDPOINT_RATE_LIMITS,
+  redisClient?: RedisClient,
+) {
+  return createEndpointRateLimiter(endpoint, {}, redisClient);
 }

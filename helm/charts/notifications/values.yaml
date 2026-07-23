@@ -1,0 +1,48 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/tukura11/stellar-notifications
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  type: ClusterIP
+  port: 3003
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+config:
+  RUST_LOG: "info"
+  NOTIFICATIONS_PORT: "3003"
+
+secrets:
+  awsSecretName: stellar/notifications
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3003
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 3003
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+pdb:
+  minAvailable: 1

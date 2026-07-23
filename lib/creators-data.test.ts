@@ -10,7 +10,7 @@ import {
   getBountiesByDifficulty,
   creators,
   bounties,
-} from './creators-data';
+} from './services/creators-data';
 
 describe('getCreatorsByDiscipline', () => {
   it('returns all creators for "All"', () => {

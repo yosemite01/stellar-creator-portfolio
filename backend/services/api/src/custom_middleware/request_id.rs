@@ -8,11 +8,27 @@ use std::task::{Context, Poll};
 use tracing::Span;
 use uuid::Uuid;
 
-/// Header name for request ID
 pub const REQUEST_ID_HEADER: &str = "X-Request-ID";
 
-/// Middleware that generates and propagates request IDs
-pub struct RequestId;
+pub struct RequestId {
+    service_name: String,
+}
+
+impl RequestId {
+    pub fn new(service_name: &str) -> Self {
+        Self {
+            service_name: service_name.to_string(),
+        }
+    }
+}
+
+impl Default for RequestId {
+    fn default() -> Self {
+        Self {
+            service_name: "stellar-api".to_string(),
+        }
+    }
+}
 
 impl<S, B> Transform<S, ServiceRequest> for RequestId
 where
@@ -27,12 +43,16 @@ where
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ready(Ok(RequestIdMiddleware { service }))
+        ready(Ok(RequestIdMiddleware {
+            service,
+            service_name: self.service_name.clone(),
+        }))
     }
 }
 
 pub struct RequestIdMiddleware<S> {
     service: S,
+    service_name: String,
 }
 
 impl<S, B> Service<ServiceRequest> for RequestIdMiddleware<S>
@@ -48,7 +68,6 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        // Extract or generate request ID
         let request_id = req
             .headers()
             .get(REQUEST_ID_HEADER)
@@ -56,47 +75,72 @@ where
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        // Store request ID in request extensions for handler access
-        req.extensions_mut().insert(RequestIdExtension(request_id.clone()));
+        let source_service = req
+            .headers()
+            .get("X-Source-Service")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
 
-        // Create a tracing span with the request ID
+        req.extensions_mut()
+            .insert(RequestIdExtension(request_id.clone()));
+
+        let service_name = self.service_name.clone();
+
         let span = tracing::info_span!(
             "request",
-            request_id = %request_id,
+            trace_id = %request_id,
+            service_name = %service_name,
             method = %req.method(),
             path = %req.path(),
         );
+
+        if let Some(src) = &source_service {
+            tracing::info!(
+                trace_id = %request_id,
+                service_name = %service_name,
+                source_service = %src,
+                "Received cross-service request"
+            );
+        }
 
         let fut = self.service.call(req);
 
         Box::pin(async move {
             let _enter = span.enter();
-            
-            tracing::info!("Processing request");
-            
+
+            tracing::info!(
+                trace_id = %request_id,
+                service_name = %service_name,
+                "Processing request"
+            );
+
             let mut res = fut.await?;
-            
-            // Add request ID to response headers
+
             res.headers_mut().insert(
                 actix_web::http::header::HeaderName::from_static("x-request-id"),
                 actix_web::http::header::HeaderValue::from_str(&request_id)
                     .unwrap_or_else(|_| actix_web::http::header::HeaderValue::from_static("invalid")),
             );
-            
-            tracing::info!("Request completed");
-            
+
+            tracing::info!(
+                trace_id = %request_id,
+                service_name = %service_name,
+                status = %res.status().as_u16(),
+                "Request completed"
+            );
+
             Ok(res)
         })
     }
 }
 
-/// Extension type to store request ID in request extensions
 #[derive(Clone, Debug)]
 pub struct RequestIdExtension(pub String);
 
-/// Helper function to extract request ID from request extensions
 pub fn get_request_id(req: &actix_web::HttpRequest) -> Option<String> {
-    req.extensions().get::<RequestIdExtension>().map(|ext| ext.0.clone())
+    req.extensions()
+        .get::<RequestIdExtension>()
+        .map(|ext| ext.0.clone())
 }
 
 #[cfg(test)]

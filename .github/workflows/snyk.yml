@@ -6,17 +6,15 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Run every Monday at 08:30 UTC
     - cron: "30 8 * * 1"
 
 jobs:
   snyk:
-    name: Snyk — Code & Dependencies
+    name: Snyk — npm + Cargo
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
-      issues: write
 
     steps:
       - name: Checkout
@@ -30,41 +28,61 @@ jobs:
       - name: Install root dependencies
         run: npm ci --ignore-scripts
 
-      - name: Snyk — test root dependencies for vulnerabilities
+      # ── npm scan ────────────────────────────────────────────────────────────
+      - name: Snyk — npm dependencies
         uses: snyk/actions/node@master
-        continue-on-error: true
+        # continue-on-error removed: high findings will now fail the step
         env:
-          SNYK_TOKEN: ${{ secrets.Drips }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --severity-threshold=high --sarif-file-output=snyk-deps.sarif
+          args: --all-projects --severity-threshold=high --sarif-file-output=snyk-npm.sarif
 
+      - name: Upload npm SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: snyk-npm.sarif
+          category: snyk-npm
+
+      # ── Cargo (Rust) scan ───────────────────────────────────────────────────
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Snyk — Cargo dependencies
+        uses: snyk/actions/rust@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --file=backend/Cargo.toml --severity-threshold=high --sarif-file-output=snyk-cargo.sarif
+
+      - name: Upload Cargo SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: snyk-cargo.sarif
+          category: snyk-cargo
+
+      # ── SAST ────────────────────────────────────────────────────────────────
       - name: Snyk — static code analysis (SAST)
         uses: snyk/actions/node@master
-        continue-on-error: true
         env:
-          SNYK_TOKEN: ${{ secrets.Drips }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           command: code test
           args: --severity-threshold=high --sarif-file-output=snyk-code.sarif
 
-      - name: Upload Snyk dependency results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: snyk-deps.sarif
-          category: snyk-dependencies
-
-      - name: Upload Snyk code results to GitHub Security tab
+      - name: Upload SAST SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: snyk-code.sarif
           category: snyk-code
 
-      - name: Snyk — monitor project (track on snyk.io dashboard)
+      - name: Snyk — monitor (track on snyk.io)
         uses: snyk/actions/node@master
+        if: github.ref == 'refs/heads/main'
         env:
-          SNYK_TOKEN: ${{ secrets.Drips }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           command: monitor
           args: --org=yosemite01

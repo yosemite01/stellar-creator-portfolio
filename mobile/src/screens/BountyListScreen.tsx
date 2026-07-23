@@ -21,6 +21,7 @@ import {
   Alert,
 } from "react-native";
 import * as Haptics from "expo-haptics";
+import { trigger as triggerHaptic } from "../haptics/HapticEngine";
 import { useTheme } from "../theme/ThemeProvider";
 import { InfiniteScrollList } from "../components/InfiniteScrollList";
 import { ProposalModal, BountySummary } from "../components/ProposalModal";
@@ -61,130 +62,6 @@ const DIFFICULTY_COLORS: Record<Difficulty, string> = {
 
 const ITEM_HEIGHT = 168;
 
-export function BountyListScreen({
-  onSelectBounty,
-  onBack,
-}: {
-  onSelectBounty?: (id: string) => void;
-  onBack?: () => void;
-}) {
-  const { colors, isDark } = useTheme();
-  const [selectedDifficulty, setSelectedDifficulty] = useState<"All" | Difficulty>("All");
-  const [selectedCategory, setSelectedCategory] = useState("All");
-  const [proposalBounty, setProposalBounty] = useState<BountySummary | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-
-  // Real API fetcher - replaces mock data generation
-  const fetchBounties = useCallback(
-    async (page: number, pageSize: number): Promise<Bounty[]> => {
-      try {
-        setError(null);
-        setIsLoading(true);
-
-        const response = await apiClient.getBounties({
-          page,
-          limit: pageSize,
-          difficulty: selectedDifficulty !== "All" ? selectedDifficulty : undefined,
-          category: selectedCategory !== "All" ? selectedCategory : undefined,
-        });
-
-        return response.items;
-      } catch (err) {
-        const errorMessage = err instanceof ApiError
-          ? err.message
-          : err instanceof NetworkError
-          ? "Network connection failed. Please check your connection."
-          : "Failed to load bounties. Please try again.";
-        
-        setError(errorMessage);
-        
-        // Show user-friendly error
-        Alert.alert(
-          "Error Loading Bounties",
-          errorMessage,
-          [{ text: "Retry", onPress: () => window.location.reload() }]
-        );
-        
-        return [];
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [selectedDifficulty, selectedCategory]
-  );
-
-  const infiniteConfig = useMemo(
-    () => ({
-      pageSize: 20,
-      maxItems: 300,
-      initialData: [] as Bounty[], // Start empty, load from API
-      onLoadMore: fetchBounties,
-    }),
-    [fetchBounties]
-  );
-
-  const handleDifficultySelect = useCallback((d: "All" | Difficulty) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSelectedDifficulty(d);
-  }, []);
-
-  const handleCategorySelect = useCallback((c: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSelectedCategory(c);
-  }, []);
-
-  const handleBountyPress = useCallback(
-    async (id: string) => {
-      try {
-        // Fetch detailed bounty info from API
-        const bounty = await apiClient.getBounty(id);
-        setProposalBounty({
-          id: bounty.id,
-          title: bounty.title,
-          budget: bounty.budget,
-          currency: "USD", // Default currency
-          difficulty: bounty.difficulty,
-          category: bounty.category,
-        });
-        onSelectBounty?.(id);
-      } catch (err) {
-        Alert.alert(
-          "Error",
-          "Failed to load bounty details. Please try again."
-        );
-      }
-    },
-    [onSelectBounty]
-  );
-
-  const handleProposalSubmit = useCallback(
-    async (bountyId: string, fields: ProposalFields) => {
-      try {
-        await apiClient.applyForBounty(bountyId, {
-          freelancer: "mobile-user", // Replace with actual user ID
-          proposal: fields.proposal,
-          proposedBudget: fields.budget,
-          timeline: fields.timeline,
-        });
-
-        Alert.alert(
-          "Success",
-          "Your proposal has been submitted successfully!",
-          [{ text: "OK", onPress: () => setProposalBounty(null) }]
-        );
-      } catch (err) {
-        const errorMessage = err instanceof ApiError
-          ? err.message
-          : "Failed to submit proposal. Please try again.";
-        
-        Alert.alert("Submission Failed", errorMessage);
-        throw err; // Re-throw to let form handle the error
-      }
-    },
-    []
-  );
-
 // ─── BountyCard ───────────────────────────────────────────────────────────────
 
 const BountyCard = React.memo(
@@ -198,7 +75,7 @@ const BountyCard = React.memo(
     colors: any;
   }) => {
     const handlePress = useCallback(() => {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      triggerHaptic('light');
       onPress(item.id);
     }, [item.id, onPress]);
 
@@ -372,12 +249,12 @@ export function BountyListScreen({
   );
 
   const handleDifficultySelect = useCallback((d: "All" | Difficulty) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerHaptic('light');
     setSelectedDifficulty(d);
   }, []);
 
   const handleCategorySelect = useCallback((c: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerHaptic('light');
     setSelectedCategory(c);
   }, []);
 

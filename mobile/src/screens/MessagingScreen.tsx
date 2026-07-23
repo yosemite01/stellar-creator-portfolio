@@ -37,10 +37,12 @@ import {
   View,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import { trigger as triggerHaptic } from '../haptics/HapticEngine';
 import { useTheme } from '../theme/ThemeProvider';
 import { FontSize, FontWeight, Radius, Spacing } from '../theme/tokens';
 import i18n, { AppLocale, LOCALE_INFO, SUPPORTED_LOCALES } from '../i18n';
 import { useChatTranslation } from '../hooks/useChatTranslation';
+import { useSecureMessaging } from '../messaging/useSecureMessaging';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -119,6 +121,16 @@ export function MessagingScreen({
   const [isTyping, setIsTyping] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  const {
+    messages: encryptedMessages,
+    send: sendEncrypted,
+    loading: e2eLoading,
+    error: e2eError,
+  } = useSecureMessaging({
+    localUserId: currentUserId,
+    remoteUserId: conversationId,
+  });
+
   // ── Translation state ──────────────────────────────────────────────────────
   const [translationLocale, setTranslationLocale] = useState<AppLocale>(i18n.locale);
   const [showLocalePicker, setShowLocalePicker] = useState(false);
@@ -141,10 +153,10 @@ export function MessagingScreen({
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     if (inputText.trim().length === 0) return;
 
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerHaptic('medium');
 
     const newMessage: Message = {
       id: Date.now().toString(),
@@ -158,18 +170,25 @@ export function MessagingScreen({
     setMessages((prev) => [...prev, newMessage]);
     setInputText('');
 
-    setTimeout(() => {
+    try {
+      await sendEncrypted(inputText.trim());
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === newMessage.id ? { ...msg, status: 'sent' } : msg
         )
       );
-    }, 500);
+    } catch {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === newMessage.id ? { ...msg, status: 'failed' } : msg
+        )
+      );
+    }
 
     setTimeout(() => {
       flatListRef.current?.scrollToEnd({ animated: true });
     }, 100);
-  }, [inputText, currentUserId]);
+  }, [inputText, currentUserId, sendEncrypted]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);

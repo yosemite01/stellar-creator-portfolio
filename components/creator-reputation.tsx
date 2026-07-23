@@ -9,14 +9,13 @@ import { ReviewForm } from '@/components/review-form';
 import { ErrorAlert } from '@/components/error-alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { CheckCircle, ChevronLeft, ChevronRight, Info } from 'lucide-react';
-import { 
-  Tooltip, 
-  TooltipContent, 
-  TooltipProvider, 
-  TooltipTrigger 
+import { CheckCircle, ChevronLeft, ChevronRight, Info, Star } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
 } from '@/components/ui/tooltip';
-import { CheckCircle, ChevronLeft, ChevronRight, Star } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -107,7 +106,7 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
   const loadReviews = async (newFilters: ReviewFilterOptions) => {
     setIsLoading(true);
     setError(null);
-    
+
     try {
       const params = new URLSearchParams();
       Object.entries(newFilters).forEach(([key, value]) => {
@@ -115,19 +114,19 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
           params.set(key, value.toString());
         }
       });
-      
+
       const queryString = params.toString();
       const url = `${API_BASE}/api/v1/creators/${encodeURIComponent(creatorId)}/reviews${queryString ? `?${queryString}` : ''}`;
-      
-      const res = await fetch(url, { 
-        headers: { Accept: 'application/json' } 
+
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' }
       });
-      
+
       if (!res.ok) {
         setError('Failed to load reviews');
         return;
       }
-      
+
       const body = (await res.json()) as ApiResponse<FilteredReputationPayload>;
       if (isApiSuccess(body)) {
         setPayload(body.data);
@@ -184,9 +183,9 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
           <Button onClick={() => setShowReviewForm(true)}>Write a Review</Button>
           {showReviewForm && (
             <div className="mt-8 text-left max-w-2xl mx-auto">
-              <ReviewForm 
-                creatorId={creatorId} 
-                creatorName="this creator" 
+              <ReviewForm
+                creatorId={creatorId}
+                creatorName="this creator"
                 bountyId={`demo-${Math.random().toString(36).substring(7)}`}
                 onSuccess={() => {
                   setShowReviewForm(false);
@@ -218,8 +217,8 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
               Ratings from verified clients who worked with this creator.
             </p>
           </div>
-          
-          <Button 
+
+          <Button
             onClick={() => setShowReviewForm(!showReviewForm)}
             variant={showReviewForm ? "outline" : "default"}
           >
@@ -229,9 +228,9 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
 
         {showReviewForm && (
           <div className="mb-12 animate-in fade-in slide-in-from-top-4 duration-300">
-            <ReviewForm 
-              creatorId={creatorId} 
-              creatorName="this creator" 
+            <ReviewForm
+              creatorId={creatorId}
+              creatorName="this creator"
               bountyId={`demo-${Math.random().toString(36).substring(7)}`}
               onSuccess={() => {
                 setShowReviewForm(false);
@@ -258,7 +257,7 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
                 {hasFilters && ` (filtered from ${aggregation.totalReviews} total)`}
               </p>
             </div>
-            
+
             {/* Reliability Index - NEW FEATURE #364 */}
             <div className="flex-1 flex justify-end">
               <TooltipProvider>
@@ -273,28 +272,29 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
                         <Info size={10} />
                       </div>
                       <div className="w-full h-1 bg-primary/20 rounded-full mt-3 overflow-hidden">
-                        <div 
-                          className="h-full bg-primary transition-all duration-1000 ease-out" 
+                        <div
+                          className="h-full bg-primary transition-all duration-1000 ease-out"
                           style={{ width: `${Math.round(aggregation.reliabilityScore * 100)}%` }}
                         />
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-2 text-center leading-tight">
-                        Weighted by recency & <br/>review consistency
+                        Weighted by recency & <br />review consistency
                       </p>
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="top" className="max-w-xs p-3">
                     <p className="text-xs leading-relaxed">
-                      This index uses a time-decayed algorithm where recent reviews have more weight. 
+                      This index uses a time-decayed algorithm where recent reviews have more weight.
                       It also factors in rating consistency to provide a realistic measure of current performance.
                     </p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </div>
+          </div>
 
-          <Histogram 
-            aggregation={displayAggregation} 
+          <Histogram
+            aggregation={displayAggregation}
             title={hasFilters ? "Filtered rating breakdown" : "Rating breakdown"}
           />
 
@@ -317,14 +317,14 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
               totalReviews={reviews?.totalCount || 0}
               isLoading={isLoading}
             />
-            
+
             <ReviewList reviews={reviews?.reviews || []} />
-            
+
             {/* Pagination */}
             {reviews && reviews.totalPages > 1 && (
               <div className="flex items-center justify-between mt-6 pt-6 border-t">
                 <div className="text-sm text-muted-foreground">
-                  Page {reviews.page} of {reviews.totalPages} 
+                  Page {reviews.page} of {reviews.totalPages}
                   ({reviews.totalCount} total reviews)
                 </div>
                 <div className="flex gap-2">

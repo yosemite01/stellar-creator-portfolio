@@ -25,6 +25,20 @@ jobs:
       - name: Build
         run: pnpm run build
 
+  migration-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check no duplicate migration prefixes
+        run: |
+          cd backend/migrations
+          duplicates=$(ls *.sql 2>/dev/null | sed 's/_.*//' | sort | uniq -d)
+          if [ -n "$duplicates" ]; then
+            echo "Duplicate migration prefixes found: $duplicates"
+            exit 1
+          fi
+          echo "Migration prefixes are unique"
+
   backend:
     runs-on: ubuntu-latest
     steps:
@@ -64,3 +78,75 @@ jobs:
           name: soroban-contracts-${{ github.sha }}
           path: artifacts/
           if-no-files-found: error
+
+  lighthouse:
+    name: Lighthouse CI
+    runs-on: ubuntu-latest
+    needs: frontend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 8
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install
+      - name: Build
+        run: pnpm run build
+      - name: Run Lighthouse CI
+        run: |
+          pnpm exec lhci autorun
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+      - name: Comment PR with Lighthouse scores
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const resultsPath = '.lighthouseci';
+            if (!fs.existsSync(resultsPath)) return;
+            const files = fs.readdirSync(resultsPath).filter(f => f.endsWith('.json') && f.startsWith('lhr-'));
+            if (files.length === 0) return;
+
+            let body = '## Lighthouse CI Results\n\n| URL | Performance | Accessibility | Best Practices | SEO |\n|-----|------------|---------------|----------------|-----|\n';
+
+            for (const file of files) {
+              const report = JSON.parse(fs.readFileSync(`${resultsPath}/${file}`, 'utf8'));
+              const url = new URL(report.requestedUrl).pathname || '/';
+              const perf = Math.round(report.categories.performance.score * 100);
+              const a11y = Math.round(report.categories.accessibility.score * 100);
+              const bp = Math.round(report.categories['best-practices'].score * 100);
+              const seo = Math.round(report.categories.seo.score * 100);
+              const perfIcon = perf >= 90 ? '🟢' : perf >= 50 ? '🟠' : '🔴';
+              const a11yIcon = a11y >= 90 ? '🟢' : a11y >= 50 ? '🟠' : '🔴';
+              body += `| \`${url}\` | ${perfIcon} ${perf} | ${a11yIcon} ${a11y} | ${bp} | ${seo} |\n`;
+            }
+
+            body += '\n_Scores from Lighthouse CI — [detailed report](https://storage.googleapis.com/lighthouse-infrastructure.appspot.com/reports)_';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  docker-app:
+    name: Build Production Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build Docker image
+        run: docker build -f Dockerfile.app -t stellar-creator-portfolio:${{ github.sha }} .
+      - name: Verify image size under 300MB
+        run: |
+          SIZE=$(docker image inspect stellar-creator-portfolio:${{ github.sha }} --format='{{.Size}}')
+          echo "Image size: $SIZE bytes"
+          if [ "$SIZE" -gt 314572800 ]; then
+            echo "Image exceeds 300MB limit"
+            exit 1
+          fi

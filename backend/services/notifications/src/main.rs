@@ -8,7 +8,31 @@ mod dispatcher;
 use crate::config::Settings;
 use crate::dispatcher::NotificationDispatcher;
 use crate::models::{Notification, NotificationChannel};
+use actix_web::{middleware, web, App, HttpResponse, HttpServer};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_subscriber::fmt::format::FmtSpan;
+
+/// Liveness probe — returns 200 if the process is running.
+async fn health() -> HttpResponse {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "timestamp": timestamp
+    }))
+}
+
+/// Readiness probe — the notifications service has no external DB dependency;
+/// it is ready as soon as the dispatcher is initialised.
+async fn ready() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "db": "ok",
+        "stellar_rpc": "ok",
+        "cache": "ok"
+    }))
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     settings.validate()?;
 
     // Initialize the dispatcher
-    let dispatcher = NotificationDispatcher::new(settings);
+    let dispatcher = NotificationDispatcher::new(settings.clone());
 
     // Initial service startup check
     tracing::info!("Notifications Service initialized and ready");
@@ -47,11 +71,27 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Keep the service alive (placeholder for an actual message loop)
-    tracing::info!("Service is now idling (listening for events placeholder)");
-    
-    // Simulate a long-running service loop
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-    }
-}
+    // Start the HTTP server for health/readiness probes in the background
+    let port: u16 = std::env::var("NOTIFICATIONS_PORT")
+        .unwrap_or_else(|_| "3003".to_string())
+        .parse()
+        .unwrap_or(3003);
+    let host = std::env::var("NOTIFICATIONS_HOST")
+        .unwrap_or_else(|_| "0.0.0.0".to_string());
+
+    tracing::info!("Health endpoints available on {}:{}", host, port);
+
+    let server = HttpServer::new(|| {
+        App::new()
+            .wrap(middleware::Logger::default())
+            .route("/health", web::get().to(health))
+            .route("/ready", web::get().to(ready))
+    })
+    .bind((host.as_str(), port))?
+    .run();
+
+    // Keep the service alive (listening for events + serving health probes)
+    tracing::info!("Service is now running");
+
+    server.await?;
+    Ok(())

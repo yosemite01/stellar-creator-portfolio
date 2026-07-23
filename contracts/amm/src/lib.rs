@@ -1,11 +1,11 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Vec, Map};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
-// Simple constant product AMM contract (x * y = k)
+// Simple constant product AMM (x * y = k)
 
 #[contracttype]
 pub enum StorageKey {
-    Reserves(Symbol), // token id string
+    Reserves(Symbol),
     TotalLp,
     LpBalance(Address),
 }
@@ -15,46 +15,33 @@ pub struct AmmContract;
 
 #[contractimpl]
 impl AmmContract {
-    // Initialize reserves for two token symbols (strings) to zero.
-    pub fn init(env: Env) {
-        // noop in this minimal example
-        let _: () = ();
-    }
+    pub fn init(_env: Env) {}
 
     pub fn add_liquidity(env: Env, user: Address, amount_x: i128, amount_y: i128) -> i128 {
         user.require_auth();
         assert!(amount_x > 0 && amount_y > 0, "invalid amounts");
 
-        let key_x = Symbol::short("x");
-        let key_y = Symbol::short("y");
+        let key_x = symbol_short!("x");
+        let key_y = symbol_short!("y");
 
-        let reserves_x: i128 = env.storage().get(&StorageKey::Reserves(key_x.clone())).unwrap_or(0);
-        let reserves_y: i128 = env.storage().get(&StorageKey::Reserves(key_y.clone())).unwrap_or(0);
+        let reserves_x: i128 = env.storage().instance().get(&StorageKey::Reserves(key_x.clone())).unwrap_or(0);
+        let reserves_y: i128 = env.storage().instance().get(&StorageKey::Reserves(key_y.clone())).unwrap_or(0);
+        let total_lp: i128 = env.storage().instance().get(&StorageKey::TotalLp).unwrap_or(0);
 
-        // mint LP proportional to added liquidity
-        let lp_minted: i128;
-        let total_lp: i128 = env.storage().get(&StorageKey::TotalLp).unwrap_or(0);
-        if total_lp == 0 || reserves_x == 0 || reserves_y == 0 {
-            lp_minted = (amount_x + amount_y) / 2; // initial seed heuristic
+        let lp_minted: i128 = if total_lp == 0 || reserves_x == 0 || reserves_y == 0 {
+            (amount_x + amount_y) / 2
         } else {
-            // proportional to smallest share
             let share_x = amount_x * total_lp / reserves_x;
             let share_y = amount_y * total_lp / reserves_y;
-            lp_minted = core::cmp::min(share_x, share_y);
-        }
+            core::cmp::min(share_x, share_y)
+        };
 
-        let new_reserves_x = reserves_x + amount_x;
-        let new_reserves_y = reserves_y + amount_y;
+        env.storage().instance().set(&StorageKey::Reserves(key_x), &(reserves_x + amount_x));
+        env.storage().instance().set(&StorageKey::Reserves(key_y), &(reserves_y + amount_y));
+        env.storage().instance().set(&StorageKey::TotalLp, &(total_lp + lp_minted));
 
-        env.storage().set(&StorageKey::Reserves(key_x), &new_reserves_x);
-        env.storage().set(&StorageKey::Reserves(key_y), &new_reserves_y);
-
-        let new_total_lp = total_lp + lp_minted;
-        env.storage().set(&StorageKey::TotalLp, &new_total_lp);
-
-        // credit LP to user
-        let prev_lp: i128 = env.storage().get(&StorageKey::LpBalance(user.clone())).unwrap_or(0);
-        env.storage().set(&StorageKey::LpBalance(user), &(prev_lp + lp_minted));
+        let prev_lp: i128 = env.storage().instance().get(&StorageKey::LpBalance(user.clone())).unwrap_or(0);
+        env.storage().instance().set(&StorageKey::LpBalance(user), &(prev_lp + lp_minted));
 
         lp_minted
     }
@@ -63,61 +50,44 @@ impl AmmContract {
         user.require_auth();
         assert!(lp_amount > 0, "invalid lp amount");
 
-        let total_lp: i128 = env.storage().get(&StorageKey::TotalLp).unwrap_or(0);
+        let total_lp: i128 = env.storage().instance().get(&StorageKey::TotalLp).unwrap_or(0);
         assert!(total_lp > 0, "no liquidity");
 
-        let user_lp: i128 = env.storage().get(&StorageKey::LpBalance(user.clone())).unwrap_or(0);
+        let user_lp: i128 = env.storage().instance().get(&StorageKey::LpBalance(user.clone())).unwrap_or(0);
         assert!(user_lp >= lp_amount, "not enough lp");
 
-        let key_x = Symbol::short("x");
-        let key_y = Symbol::short("y");
-        let reserves_x: i128 = env.storage().get(&StorageKey::Reserves(key_x.clone())).unwrap_or(0);
-        let reserves_y: i128 = env.storage().get(&StorageKey::Reserves(key_y.clone())).unwrap_or(0);
+        let key_x = symbol_short!("x");
+        let key_y = symbol_short!("y");
+        let reserves_x: i128 = env.storage().instance().get(&StorageKey::Reserves(key_x.clone())).unwrap_or(0);
+        let reserves_y: i128 = env.storage().instance().get(&StorageKey::Reserves(key_y.clone())).unwrap_or(0);
 
         let amount_x = reserves_x * lp_amount / total_lp;
         let amount_y = reserves_y * lp_amount / total_lp;
 
-        let new_reserves_x = reserves_x - amount_x;
-        let new_reserves_y = reserves_y - amount_y;
-
-        env.storage().set(&StorageKey::Reserves(key_x), &new_reserves_x);
-        env.storage().set(&StorageKey::Reserves(key_y), &new_reserves_y);
-
-        let new_total_lp = total_lp - lp_amount;
-        env.storage().set(&StorageKey::TotalLp, &new_total_lp);
-
-        env.storage().set(&StorageKey::LpBalance(user.clone()), &(user_lp - lp_amount));
+        env.storage().instance().set(&StorageKey::Reserves(key_x), &(reserves_x - amount_x));
+        env.storage().instance().set(&StorageKey::Reserves(key_y), &(reserves_y - amount_y));
+        env.storage().instance().set(&StorageKey::TotalLp, &(total_lp - lp_amount));
+        env.storage().instance().set(&StorageKey::LpBalance(user), &(user_lp - lp_amount));
 
         (amount_x, amount_y)
     }
 
-    // Swap x for y using constant product with 0.3% fee. Simple protective checks prevent 0-output trades.
     pub fn swap_x_for_y(env: Env, user: Address, dx: i128, min_dy: i128) -> i128 {
         user.require_auth();
         assert!(dx > 0, "invalid amount");
 
-        let fee_numerator: i128 = 997; // 0.3% fee
-        let fee_denominator: i128 = 1000;
-
-        let key_x = Symbol::short("x");
-        let key_y = Symbol::short("y");
-        let reserves_x: i128 = env.storage().get(&StorageKey::Reserves(key_x.clone())).unwrap_or(0);
-        let reserves_y: i128 = env.storage().get(&StorageKey::Reserves(key_y.clone())).unwrap_or(0);
-
+        let key_x = symbol_short!("x");
+        let key_y = symbol_short!("y");
+        let reserves_x: i128 = env.storage().instance().get(&StorageKey::Reserves(key_x.clone())).unwrap_or(0);
+        let reserves_y: i128 = env.storage().instance().get(&StorageKey::Reserves(key_y.clone())).unwrap_or(0);
         assert!(reserves_x > 0 && reserves_y > 0, "empty pool");
 
-        let dx_with_fee = dx * fee_numerator;
-        let numerator = dx_with_fee * reserves_y;
-        let denominator = reserves_x * fee_denominator + dx_with_fee;
-        let dy = numerator / denominator;
-
+        let dx_with_fee = dx * 997;
+        let dy = dx_with_fee * reserves_y / (reserves_x * 1000 + dx_with_fee);
         assert!(dy >= min_dy && dy > 0, "slippage or zero output");
 
-        let new_reserves_x = reserves_x + dx;
-        let new_reserves_y = reserves_y - dy;
-
-        env.storage().set(&StorageKey::Reserves(key_x), &new_reserves_x);
-        env.storage().set(&StorageKey::Reserves(key_y), &new_reserves_y);
+        env.storage().instance().set(&StorageKey::Reserves(key_x), &(reserves_x + dx));
+        env.storage().instance().set(&StorageKey::Reserves(key_y), &(reserves_y - dy));
 
         dy
     }
@@ -126,7 +96,7 @@ impl AmmContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{Env, testutils::Address as _};
+    use soroban_sdk::{testutils::Address as _, Env};
 
     #[test]
     fn basic_add_and_swap() {

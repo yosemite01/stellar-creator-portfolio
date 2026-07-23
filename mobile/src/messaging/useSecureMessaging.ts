@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SignalSessionManager } from './signal-session';
-import type { DecryptedMessage, EncryptedMessage, KeyBundle } from '../types';
+import type { DecryptedMessage, DeliveryReceipt, EncryptedMessage, KeyBundle } from '../types';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? 'https://api.stellar.dev';
 
@@ -18,6 +18,7 @@ interface UseSecureMessagingOptions {
 
 interface UseSecureMessagingResult {
   messages:  DecryptedMessage[];
+  receipts:  Map<string, DeliveryReceipt>;
   send:      (text: string) => Promise<void>;
   loading:   boolean;
   error:     string | null;
@@ -29,6 +30,7 @@ export function useSecureMessaging({
 }: UseSecureMessagingOptions): UseSecureMessagingResult {
   const manager  = useRef(new SignalSessionManager());
   const [messages, setMessages] = useState<DecryptedMessage[]>([]);
+  const [receipts, setReceipts] = useState<Map<string, DeliveryReceipt>>(new Map());
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState<string | null>(null);
 
@@ -101,12 +103,24 @@ export function useSecureMessaging({
         );
         setMessages((prev) => {
           const ids = new Set(prev.map((m) => m.id));
-          return [...prev, ...decrypted.filter((m) => !ids.has(m.id))];
+          const newMsgs = decrypted.filter((m) => !ids.has(m.id));
+
+          for (const msg of newMsgs) {
+            const receipt = manager.current.createDeliveryReceipt(msg.id, localUserId);
+            setReceipts((prev) => new Map(prev).set(msg.id, receipt));
+            fetch(`${API_BASE}/api/messages/${msg.id}/receipt`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(receipt),
+            }).catch(() => {});
+          }
+
+          return [...prev, ...newMsgs];
         });
       } catch { /* silent — network may be unavailable */ }
     }, 3000);
     return () => clearInterval(interval);
-  }, [loading, remoteUserId]);
+  }, [loading, remoteUserId, localUserId]);
 
-  return { messages, send, loading, error };
+  return { messages, receipts, send, loading, error };
 }

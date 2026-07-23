@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReviewsForCreator } from "@/lib/services/review-service";
+import { getReviewsForCreatorsBatch } from "@/lib/services/review-service";
 
-/**
- * POST /api/creators/reputation/batch
- * Batch fetch reputation stats for multiple creators
- * Aggregates review data without fetching individual reviews
- */
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as { creatorIds: string[] };
@@ -25,43 +20,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const batchResults = getReviewsForCreatorsBatch(creatorIds);
+
     const results: Record<string, any> = {};
 
-    await Promise.all(
-      creatorIds.map(async (creatorId) => {
-        try {
-          const { reviews, total } = await getReviewsForCreator(creatorId);
+    for (const creatorId of creatorIds) {
+      const { reviews, total } = batchResults[creatorId];
 
-          // Calculate aggregated stats
-          const avgRating =
-            reviews.length > 0
-              ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
-              : 0;
+      const avgRating =
+        reviews.length > 0
+          ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
+          : 0;
 
-          const ratingDistribution = {
-            5: reviews.filter((r) => r.rating === 5).length,
-            4: reviews.filter((r) => r.rating === 4).length,
-            3: reviews.filter((r) => r.rating === 3).length,
-            2: reviews.filter((r) => r.rating === 2).length,
-            1: reviews.filter((r) => r.rating === 1).length,
-          };
+      const ratingDistribution = {
+        5: reviews.filter((r) => r.rating === 5).length,
+        4: reviews.filter((r) => r.rating === 4).length,
+        3: reviews.filter((r) => r.rating === 3).length,
+        2: reviews.filter((r) => r.rating === 2).length,
+        1: reviews.filter((r) => r.rating === 1).length,
+      };
 
-          results[creatorId] = {
-            totalReviews: total,
-            averageRating: Math.round(avgRating * 10) / 10,
-            ratingDistribution,
-            recentReviews: reviews.slice(0, 3),
-          };
-        } catch (error) {
-          results[creatorId] = {
-            totalReviews: 0,
-            averageRating: 0,
-            ratingDistribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
-            error: String(error),
-          };
-        }
-      }),
-    );
+      results[creatorId] = {
+        totalReviews: total,
+        averageRating: Math.round(avgRating * 10) / 10,
+        ratingDistribution,
+        recentReviews: reviews.slice(0, 3),
+      };
+    }
 
     return NextResponse.json(results);
   } catch (error) {

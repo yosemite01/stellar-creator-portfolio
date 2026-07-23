@@ -29,3 +29,4 @@ rand = { version = "0.8", features = ["getrandom"] }
 urlencoding = "2.1"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 jsonwebtoken = { version = "10.4", features = ["use_pem"] }
+uuid = { version = "1", features = ["v4", "serde"] }

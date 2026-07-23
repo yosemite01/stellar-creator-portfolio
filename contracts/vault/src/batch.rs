@@ -9,7 +9,7 @@
 // is rejected via panic!, preserving consistent vault state.
 
 #![no_std]
-use soroban_sdk::{contracttype, panic_with_error, Address, Env, Vec};
+use soroban_sdk::{contracterror, contracttype, panic_with_error, Address, Env, Vec};
 
 /// A single withdrawal request within a batch.
 #[contracttype]
@@ -33,24 +33,13 @@ pub struct WithdrawalOutcome {
 }
 
 /// Error codes for batch failures.
-#[contracttype]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum BatchError {
     EmptyBatch = 1,
     ZeroAmount = 2,
     InsufficientBalance = 3,
-}
-
-impl soroban_sdk::contracterror::ContractError for BatchError {
-    fn from_val(v: u32) -> Option<Self> {
-        match v {
-            1 => Some(Self::EmptyBatch),
-            2 => Some(Self::ZeroAmount),
-            3 => Some(Self::InsufficientBalance),
-            _ => None,
-        }
-    }
 }
 
 /// Process a batch of withdrawal requests atomically.

@@ -1,0 +1,142 @@
+apiVersion: 1
+
+# Grafana alert rules for Stellar microservice readiness probes.
+# Issue #730: alert on repeated /ready 503 responses.
+
+groups:
+  - name: stellar_readiness_alerts
+    folder: Stellar Platform
+    interval: 1m
+    rules:
+
+      - uid: stellar-api-ready-503
+        title: "API Service /ready returning 503"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: |
+                sum(rate(http_server_requests_total{job="stellar-api", path="/ready", status="503"}[5m])) > 0
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  query:
+                    params: [A]
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: "stellar-api /ready is returning 503"
+          description: "The API service readiness probe has been failing for more than 2 minutes. Check DB connectivity and Stellar RPC reachability."
+          runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/wiki/runbooks/api-readiness"
+        labels:
+          severity: critical
+          service: stellar-api
+          issue: "730"
+
+      - uid: stellar-auth-ready-503
+        title: "Auth Service /ready returning 503"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: |
+                sum(rate(http_server_requests_total{job="stellar-auth", path="/ready", status="503"}[5m])) > 0
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  query:
+                    params: [A]
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: "stellar-auth /ready is returning 503"
+          description: "The auth service readiness probe has been failing for more than 2 minutes."
+          runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/wiki/runbooks/auth-readiness"
+        labels:
+          severity: critical
+          service: stellar-auth
+          issue: "730"
+
+      - uid: stellar-notifications-ready-503
+        title: "Notifications Service /ready returning 503"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: |
+                sum(rate(http_server_requests_total{job="stellar-notifications", path="/ready", status="503"}[5m])) > 0
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  query:
+                    params: [A]
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: "stellar-notifications /ready is returning 503"
+          description: "The notifications service readiness probe has been failing for more than 2 minutes."
+          runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/wiki/runbooks/notifications-readiness"
+        labels:
+          severity: warning
+          service: stellar-notifications
+          issue: "730"
+
+      - uid: stellar-indexer-ready-503
+        title: "Indexer Service /ready returning 503"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: |
+                sum(rate(http_server_requests_total{job="stellar-indexer", path="/ready", status="503"}[5m])) > 0
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  query:
+                    params: [A]
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: "stellar-indexer /ready is returning 503"
+          description: "The indexer service readiness probe has been failing for more than 2 minutes. Check DB connectivity."
+          runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/wiki/runbooks/indexer-readiness"
+        labels:
+          severity: critical
+          service: stellar-indexer
+          issue: "730"

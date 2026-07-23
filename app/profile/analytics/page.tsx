@@ -3,6 +3,7 @@
 import dynamic from 'next/dynamic'
 import { Header } from '@/components/header'
 import { Footer } from '@/components/footer'
+import { SocialShare } from '@/components/common/social-share'
 
 // Dynamic import keeps Yjs/Worker APIs out of the SSR bundle
 const AnalyticsDashboardReal = dynamic(
@@ -22,11 +23,19 @@ export default function ProfileAnalyticsPage() {
       <div className="min-h-screen flex flex-col bg-background">
         <Header />
         <main className="flex-grow container max-w-5xl mx-auto px-4 py-10">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
-            <p className="text-muted-foreground mt-1">
-              Real-time earnings, performance, and insights from connected data sources.
-            </p>
+          <div className="mb-8 flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
+              <p className="text-muted-foreground mt-1">
+                Real-time earnings, performance, and insights from connected data sources.
+              </p>
+            </div>
+            <SocialShare
+              title="Check out my earnings on Stellar Creators!"
+              description="Creator analytics and milestones"
+              url="/profile/analytics"
+              hashtags={['StellarCreators', 'Web3Earnings', 'Milestone']}
+            />
           </div>
           <AnalyticsDashboardReal />
         </main>

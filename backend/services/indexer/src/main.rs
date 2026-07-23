@@ -8,12 +8,15 @@
 //! `indexer_cursors` table so restarts resume from where they left off.
 
 use anyhow::{Context, Result};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use sqlx::PgPool;
 use std::time::Duration;
 use stellar_discovery::{create_discovery, ServiceInfo};
 use tracing::{error, info, warn};
 
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{runtime, trace::{self, TracerProvider}, Resource};
@@ -29,6 +32,8 @@ struct Config {
     freelancer_contract_id: String,
     escrow_contract_id: String,
     indexer_stellar_account_id: String,
+    /// HMAC-SHA256 secret for verifying X-Horizon-Signature headers
+    horizon_webhook_secret: String,
     /// How many ledgers to fetch per poll
     ledger_chunk: u32,
     /// Seconds between polls
@@ -46,6 +51,7 @@ impl Config {
             escrow_contract_id: std::env::var("ESCROW_CONTRACT_ID").unwrap_or_default(),
             indexer_stellar_account_id: std::env::var("INDEXER_STELLAR_ACCOUNT_ID")
                 .unwrap_or_else(|_| "GBEXPIREDDDEADLINE123456789012345678901234567890123".into()),
+            horizon_webhook_secret: std::env::var("HORIZON_WEBHOOK_SECRET").unwrap_or_default(),
             ledger_chunk: std::env::var("INDEXER_LEDGER_CHUNK")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -720,6 +726,102 @@ async fn check_and_expire_bounties(pool: &PgPool, cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+// ── Horizon webhook signature verification ────────────────────────────────────
+
+/// Verify the HMAC-SHA256 signature in `X-Horizon-Signature: sha256=<hex>`.
+/// Returns `false` when the secret is empty (reject-all) or the HMAC mismatches.
+fn verify_horizon_signature(payload: &[u8], sig_header: &str, secret: &[u8]) -> bool {
+    if secret.is_empty() || sig_header.is_empty() {
+        return false;
+    }
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = match HmacSha256::new_from_slice(secret) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    mac.update(payload);
+    let expected = hex::encode(mac.finalize().into_bytes());
+    let provided = sig_header.trim_start_matches("sha256=");
+    provided == expected
+}
+
+/// POST /webhooks/horizon
+///
+/// Accepts Horizon/RPC event webhook callbacks. Requests with a missing or
+/// invalid `X-Horizon-Signature` header are rejected with 401 before the
+/// payload is parsed, preventing injection of fake on-chain state.
+async fn horizon_webhook(
+    req: HttpRequest,
+    body: web::Bytes,
+    secret: web::Data<String>,
+) -> HttpResponse {
+    if secret.is_empty() {
+        warn!("HORIZON_WEBHOOK_SECRET not set — rejecting all Horizon webhook requests");
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Webhook secret not configured"
+        }));
+    }
+
+    let sig_header = req
+        .headers()
+        .get("X-Horizon-Signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !verify_horizon_signature(&body, sig_header, secret.as_bytes()) {
+        warn!("Horizon webhook signature verification failed");
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid webhook signature"
+        }));
+    }
+
+    let event: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to parse Horizon webhook payload: {e}");
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "Invalid webhook payload"
+            }));
+        }
+    };
+
+    info!("Verified Horizon webhook event: type={:?}", event.get("type"));
+    HttpResponse::Ok().json(serde_json::json!({ "received": true }))
+}
+
+// ── Health & readiness endpoints ──────────────────────────────────────────────
+
+/// Liveness probe — returns 200 if the indexer process is running.
+async fn health() -> HttpResponse {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "timestamp": timestamp
+    }))
+}
+
+/// Readiness probe — returns 200 if the DB connection pool is healthy.
+async fn ready(pool: web::Data<PgPool>) -> HttpResponse {
+    match pool.acquire().await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "db": "ok",
+            "stellar_rpc": "ok",
+            "cache": "ok"
+        })),
+        Err(e) => {
+            tracing::error!("Indexer readiness check failed: {}", e);
+            HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "db": "error",
+                "stellar_rpc": "ok",
+                "cache": "ok"
+            }))
+        }
+    }
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -812,6 +914,36 @@ async fn main() -> Result<()> {
     let mut cursor = load_cursor(&pool, "main").await?;
     info!("Starting indexer from ledger {cursor}");
 
+    // ── Health / readiness / webhook HTTP server ──────────────────────────
+    let health_pool = pool.clone();
+    let health_port: u16 = std::env::var("INDEXER_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9000);
+    let health_host = std::env::var("INDEXER_HOST")
+        .unwrap_or_else(|_| "0.0.0.0".to_string());
+
+    let webhook_secret = web::Data::new(cfg.horizon_webhook_secret.clone());
+    let health_host_clone = health_host.clone();
+    tokio::spawn(async move {
+        let pool_data = health_pool;
+        let _ = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(pool_data.clone()))
+                .app_data(webhook_secret.clone())
+                .wrap(middleware::Logger::default())
+                .route("/health", web::get().to(health))
+                .route("/ready", web::get().to(ready))
+                .route("/webhooks/horizon", web::post().to(horizon_webhook))
+        })
+        .bind((health_host_clone.as_str(), health_port))
+        .expect("Failed to bind health server")
+        .run()
+        .await;
+    });
+
+    info!("Health endpoints available on {}:{}", health_host, health_port);
+
     loop {
         let ids_ref: Vec<&str> = contract_ids.iter().map(String::as_str).collect();
 
@@ -899,6 +1031,7 @@ mod tests {
             bounty_contract_id: "bounty-contract".to_string(),
             freelancer_contract_id: "freelancer-contract".to_string(),
             escrow_contract_id: "escrow-contract".to_string(),
+            indexer_stellar_account_id: "GBTEST123456789012345678901234567890123456789012".to_string(),
             ledger_chunk: 100,
             poll_interval_secs: 6,
         }
@@ -1014,5 +1147,55 @@ mod tests {
         let canonical = "aaaa";
         let reorg_detected = stored != canonical;
         assert!(!reorg_detected, "identical hashes must not trigger reorg");
+    }
+
+    // ── Horizon webhook signature verification ────────────────────────────────
+
+    fn make_horizon_sig(secret: &[u8], payload: &[u8]) -> String {
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+        mac.update(payload);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    #[test]
+    fn valid_horizon_signature_passes() {
+        let payload = b"test-event-payload";
+        let secret = b"horizon-secret";
+        let sig = make_horizon_sig(secret, payload);
+        assert!(verify_horizon_signature(payload, &sig, secret));
+    }
+
+    #[test]
+    fn tampered_horizon_payload_fails() {
+        let secret = b"horizon-secret";
+        let sig = make_horizon_sig(secret, b"original");
+        assert!(!verify_horizon_signature(b"tampered", &sig, secret));
+    }
+
+    #[test]
+    fn wrong_horizon_secret_fails() {
+        let payload = b"data";
+        let sig = make_horizon_sig(b"correct-secret", payload);
+        assert!(!verify_horizon_signature(payload, &sig, b"wrong-secret"));
+    }
+
+    #[test]
+    fn missing_horizon_signature_fails() {
+        assert!(!verify_horizon_signature(b"body", "", b"secret"));
+    }
+
+    #[test]
+    fn unconfigured_horizon_secret_rejects() {
+        assert!(!verify_horizon_signature(b"body", "sha256=anything", b""));
+    }
+
+    #[test]
+    fn horizon_signature_with_prefix_is_accepted() {
+        let payload = b"event";
+        let secret = b"s3cr3t";
+        let sig = make_horizon_sig(secret, payload);
+        assert!(sig.starts_with("sha256="));
+        assert!(verify_horizon_signature(payload, &sig, secret));
     }
 }

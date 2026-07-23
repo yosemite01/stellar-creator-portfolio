@@ -22,7 +22,7 @@ import React, {
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import {
   dequeue,
-  getPendingOps,
+  getRetryableOps,
   markRetry,
 } from './OfflineQueue';
 import { NetworkState, SyncStatus, QueuedOperation } from '../types';
@@ -76,7 +76,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
 
   // ── Refresh pending count ──────────────────────────────────────────────────
   const refreshCount = useCallback(async () => {
-    const ops = await getPendingOps();
+    const ops = await getRetryableOps();
     setPendingOpsCount(ops.length);
   }, []);
 
@@ -87,7 +87,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     setSyncStatus('syncing');
 
     try {
-      const ops = await getPendingOps();
+      const ops = await getRetryableOps();
       if (ops.length === 0) {
         setSyncStatus('synced');
         return;
@@ -99,8 +99,12 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
           await replayOperation(op);
           await dequeue(op.id);
         } catch {
-          await markRetry(op.id);
+          const movedToDLQ = await markRetry(op.id);
           hadError = true;
+          if (movedToDLQ) {
+            // Op exhausted all retries — caller should surface a user notification
+            console.warn(`[OfflineQueue] op ${op.id} moved to dead-letter queue after ${op.retries + 1} failures`);
+          }
         }
       }
 

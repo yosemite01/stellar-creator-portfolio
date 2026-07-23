@@ -3,8 +3,11 @@ name = "stellar_insights"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-soroban-sdk = "21.7.7"
-
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = "23.5.3"
+
+[dev-dependencies]
+soroban-sdk = { version = "23.5.3", features = ["testutils"] }

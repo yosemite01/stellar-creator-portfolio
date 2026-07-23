@@ -1,44 +1,146 @@
-/**
- * useMultiAccount
- *
- * Convenience hook that exposes multi-account switching with loading state.
- */
+import { useState, useEffect, useCallback } from "react";
+import type { StellarAccount } from "../services/MultiAccountService";
+import * as MultiAccountService from "../services/MultiAccountService";
 
-import { useState, useCallback } from 'react';
-import { useMultiAccountStore, AccountCache } from '../services/MultiAccountService';
+export interface UseMultiAccountReturn {
+  accounts: StellarAccount[];
+  activeAccount: StellarAccount | null;
+  isLoading: boolean;
+  isSwitching: boolean;
+  error: string | null;
+  switchAccount: (publicKey: string) => Promise<void>;
+  addAccount: (
+    publicKey: string,
+    encryptedSecret: string,
+    label: string,
+  ) => Promise<void>;
+  removeAccount: (publicKey: string) => Promise<void>;
+  signTransaction: (transactionXdr: string) => Promise<string>;
+  clearError: () => void;
+}
 
-export function useMultiAccount() {
-  const { accounts, activeAccountId, switchAccount, addAccount, removeAccount, getActiveAccount } =
-    useMultiAccountStore();
-  const [switching, setSwitching] = useState(false);
+export function useMultiAccount(): UseMultiAccountReturn {
+  const [accounts, setAccounts] = useState<StellarAccount[]>([]);
+  const [activeAccount, setActiveAccount] =
+    useState<StellarAccount | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSwitching, setIsSwitching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSwitch = useCallback(
-    async (id: string) => {
-      if (id === activeAccountId) return;
-      setSwitching(true);
+  useEffect(() => {
+    let mounted = true;
+
+    async function init() {
       try {
-        await switchAccount(id);
+        await MultiAccountService.initialize();
+        if (mounted) {
+          setAccounts(MultiAccountService.getAccounts());
+          setActiveAccount(MultiAccountService.getActiveAccount());
+        }
+      } catch (e) {
+        if (mounted) {
+          setError(
+            e instanceof Error ? e.message : "Failed to initialize accounts",
+          );
+        }
       } finally {
-        setSwitching(false);
+        if (mounted) setIsLoading(false);
+      }
+    }
+
+    init();
+
+    const unsub = MultiAccountService.addEventListener((event) => {
+      if (!mounted) return;
+      setAccounts(MultiAccountService.getAccounts());
+      setActiveAccount(MultiAccountService.getActiveAccount());
+    });
+
+    return () => {
+      mounted = false;
+      unsub();
+    };
+  }, []);
+
+  const switchAccount = useCallback(async (publicKey: string) => {
+    setIsSwitching(true);
+    setError(null);
+    try {
+      const account = await MultiAccountService.switchAccount(publicKey);
+      setActiveAccount(account);
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Failed to switch account";
+      setError(msg);
+      throw e;
+    } finally {
+      setIsSwitching(false);
+    }
+  }, []);
+
+  const addAccount = useCallback(
+    async (
+      publicKey: string,
+      encryptedSecret: string,
+      label: string,
+    ) => {
+      setError(null);
+      try {
+        await MultiAccountService.addAccount(
+          publicKey,
+          encryptedSecret,
+          label,
+        );
+        setAccounts(MultiAccountService.getAccounts());
+        setActiveAccount(MultiAccountService.getActiveAccount());
+      } catch (e) {
+        const msg =
+          e instanceof Error ? e.message : "Failed to add account";
+        setError(msg);
+        throw e;
       }
     },
-    [activeAccountId, switchAccount],
+    [],
   );
 
-  const cacheForActive = useCallback(() => {
-    const active = getActiveAccount();
-    if (!active) throw new Error('No active account');
-    return new AccountCache(active.id);
-  }, [getActiveAccount]);
+  const removeAccount = useCallback(async (publicKey: string) => {
+    setError(null);
+    try {
+      await MultiAccountService.removeAccount(publicKey);
+      setAccounts(MultiAccountService.getAccounts());
+      setActiveAccount(MultiAccountService.getActiveAccount());
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Failed to remove account";
+      setError(msg);
+      throw e;
+    }
+  }, []);
+
+  const signTransaction = useCallback(async (transactionXdr: string) => {
+    setError(null);
+    try {
+      return await MultiAccountService.signTransaction(transactionXdr);
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Failed to sign transaction";
+      setError(msg);
+      throw e;
+    }
+  }, []);
+
+  const clearError = useCallback(() => setError(null), []);
 
   return {
     accounts,
-    activeAccountId,
-    activeAccount: getActiveAccount(),
-    switching,
-    switchAccount: handleSwitch,
+    activeAccount,
+    isLoading,
+    isSwitching,
+    error,
+    switchAccount,
     addAccount,
     removeAccount,
-    cacheForActive,
+    signTransaction,
+    clearError,
   };
 }

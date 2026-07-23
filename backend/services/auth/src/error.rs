@@ -5,6 +5,10 @@ use serde_json::json;
 pub enum AuthError {
     #[error("invalid or expired refresh token")]
     InvalidRefreshToken,
+    #[error("refresh token reuse detected — all sessions for this user have been revoked")]
+    TokenReuseDetected,
+    #[error("access token has been revoked")]
+    TokenRevoked,
     #[error(
         "mint not configured: set AUTH_MINT_SECRET or AUTH_DEV_MINT=1 for local development only"
     )]
@@ -27,6 +31,12 @@ impl ResponseError for AuthError {
     fn error_response(&self) -> HttpResponse {
         let (status, msg) = match self {
             AuthError::InvalidRefreshToken => {
+                (actix_web::http::StatusCode::UNAUTHORIZED, self.to_string())
+            }
+            AuthError::TokenReuseDetected => {
+                (actix_web::http::StatusCode::UNAUTHORIZED, self.to_string())
+            }
+            AuthError::TokenRevoked => {
                 (actix_web::http::StatusCode::UNAUTHORIZED, self.to_string())
             }
             AuthError::MintNotConfigured => (

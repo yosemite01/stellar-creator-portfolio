@@ -26,8 +26,10 @@ import {
   ViewToken,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import * as ExpoNotifications from 'expo-notifications';
 import { useTheme } from '../../theme/ThemeProvider';
 import { FontSize, FontWeight, Radius, Spacing } from '../../theme/tokens';
+import { useUIStore } from '../../store/uiStore';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -71,6 +73,13 @@ const STEPS: WalkthroughStep[] = [
     color: '#10b981',
   },
   {
+    id: 'notify',
+    title: 'Stay in the Loop',
+    description: "We'll notify you when someone applies to your bounty, sends you a message, or completes a milestone.",
+    icon: '🔔',
+    color: '#f97316',
+  },
+  {
     id: '5',
     title: 'Ready to Start?',
     description: 'Join thousands of creators building their careers on Stellar. Let\'s get you set up!',
@@ -88,15 +97,31 @@ interface OnboardingWalkthroughProps {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+const NOTIFICATION_STEP_INDEX = STEPS.findIndex((s) => s.id === 'notify');
+
 export function OnboardingWalkthrough({ onComplete, onSkip }: OnboardingWalkthroughProps) {
   const { colors, isDark } = useTheme();
   const [currentIndex, setCurrentIndex] = useState(0);
   const flatListRef = useRef<FlatList<WalkthroughStep>>(null);
   const scrollX = useRef(new Animated.Value(0)).current;
+  const setNotificationPermission = useUIStore((s) => s.setNotificationPermission);
 
   const isLastStep = currentIndex === STEPS.length - 1;
+  const isNotificationStep = currentIndex === NOTIFICATION_STEP_INDEX;
 
   // ── Handlers ──────────────────────────────────────────────────────────────
+
+  const requestNotificationPermission = useCallback(async () => {
+    try {
+      const { status } = await ExpoNotifications.requestPermissionsAsync();
+      setNotificationPermission(
+        status === 'granted' ? 'granted' : status === 'denied' ? 'denied' : 'undetermined',
+      );
+    } catch {
+      setNotificationPermission('denied');
+    }
+    flatListRef.current?.scrollToIndex({ index: currentIndex + 1, animated: true });
+  }, [currentIndex, setNotificationPermission]);
 
   const handleNext = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -225,16 +250,39 @@ export function OnboardingWalkthrough({ onComplete, onSkip }: OnboardingWalkthro
       {/* Pagination & Action */}
       <View style={styles.footer}>
         {renderPagination()}
-        <Pressable
-          style={[styles.button, { backgroundColor: colors.primary }]}
-          onPress={handleNext}
-          accessibilityRole="button"
-          accessibilityLabel={isLastStep ? 'Get started' : 'Next step'}
-        >
-          <Text style={styles.buttonText}>
-            {isLastStep ? 'Get Started' : 'Next'}
-          </Text>
-        </Pressable>
+        {isNotificationStep ? (
+          <>
+            <Pressable
+              style={[styles.button, { backgroundColor: colors.primary }]}
+              onPress={requestNotificationPermission}
+              accessibilityRole="button"
+              accessibilityLabel="Allow notifications"
+            >
+              <Text style={styles.buttonText}>Allow Notifications</Text>
+            </Pressable>
+            <Pressable
+              style={styles.skipInline}
+              onPress={handleNext}
+              accessibilityRole="button"
+              accessibilityLabel="Skip notifications"
+            >
+              <Text style={[styles.skipInlineText, { color: colors.textSecondary }]}>
+                Not now
+              </Text>
+            </Pressable>
+          </>
+        ) : (
+          <Pressable
+            style={[styles.button, { backgroundColor: colors.primary }]}
+            onPress={handleNext}
+            accessibilityRole="button"
+            accessibilityLabel={isLastStep ? 'Get started' : 'Next step'}
+          >
+            <Text style={styles.buttonText}>
+              {isLastStep ? 'Get Started' : 'Next'}
+            </Text>
+          </Pressable>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -309,5 +357,13 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
+  },
+  skipInline: {
+    alignItems: 'center',
+    paddingVertical: Spacing.sm,
+  },
+  skipInlineText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.medium,
   },
 });

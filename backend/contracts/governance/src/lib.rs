@@ -2,6 +2,8 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol};
 
+const DEFAULT_TIMELOCK_SECONDS: u64 = 48 * 60 * 60; // 48 hours
+
 /// Governance Configuration
 #[contracttype]
 pub struct GovernanceConfig {
@@ -186,6 +188,11 @@ impl GovernanceContract {
         env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
         env.storage().persistent().extend_ttl(&proposal_counter_key, 4096, ledger_ttl);
 
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("created")),
+            (proposal_id, proposer, proposal.voting_deadline),
+        );
+
         proposal_id
     }
 
@@ -231,6 +238,11 @@ impl GovernanceContract {
         let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
         env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
         env.storage().persistent().extend_ttl(&vote_key, 4096, ledger_ttl);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("voted")),
+            (proposal_id, voter, vote_yes),
+        );
 
         true
     }
@@ -474,4 +486,219 @@ impl GovernanceContract {
             .get::<(Symbol, u64), ExecutionTimelock>(&tl_key)
             .expect("Proposal not queued")
     }
+
+    // ── Issue #749: Quorum enforcement ───────────────────────────────────────
+
+    const DEFAULT_QUORUM_PERCENT: u64 = 10; // 10% of total voting power
+
+    /// Set the quorum threshold (0–100). Only admin can update.
+    pub fn set_quorum_percent(env: Env, admin: Address, quorum_percent: u64) {
+        admin.require_auth();
+        let config = Self::get_config(env.clone());
+        assert_eq!(admin, config.admin_address, "Only admin can set quorum");
+        assert!(quorum_percent <= 100, "Quorum must be 0-100");
+        let key = Symbol::new(&env, "quorum_pct");
+        env.storage().persistent().set(&key, &quorum_percent);
+        let ledger_ttl = 30 * 24 * 3600 / 5;
+        env.storage().persistent().extend_ttl(&key, 4096, ledger_ttl);
+        env.events().publish((symbol_short!("gov"), symbol_short!("quorum")), (quorum_percent,));
+    }
+
+    /// Get the current quorum threshold. Defaults to 10%.
+    pub fn get_quorum_percent(env: Env) -> u64 {
+        let key = Symbol::new(&env, "quorum_pct");
+        env.storage().persistent().get::<Symbol, u64>(&key).unwrap_or(Self::DEFAULT_QUORUM_PERCENT)
+    }
+
+    /// Set total voting power (governance token supply). Admin only.
+    pub fn set_total_voting_power(env: Env, admin: Address, total: u64) {
+        admin.require_auth();
+        let config = Self::get_config(env.clone());
+        assert_eq!(admin, config.admin_address, "Only admin can set voting power");
+        assert!(total > 0, "Total voting power must be positive");
+        let key = Symbol::new(&env, "total_vp");
+        env.storage().persistent().set(&key, &total);
+        let ledger_ttl = 30 * 24 * 3600 / 5;
+        env.storage().persistent().extend_ttl(&key, 4096, ledger_ttl);
+    }
+
+    /// Get total voting power. Returns 0 if not yet configured.
+    pub fn get_total_voting_power(env: Env) -> u64 {
+        let key = Symbol::new(&env, "total_vp");
+        env.storage().persistent().get::<Symbol, u64>(&key).unwrap_or(0)
+    }
+
+    /// Finalize a proposal after its voting deadline, enforcing quorum.
+    ///
+    /// Requires `(yes_votes + no_votes) * 100 / total_supply >= quorum_percent`.
+    /// Panics if quorum is not met, voting is still open, or total supply is 0.
+    pub fn finalize_proposal(env: Env, proposal_id: u64) -> bool {
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
+        let mut proposal = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
+            .expect("Proposal not found");
+
+        assert!(
+            env.ledger().timestamp() >= proposal.voting_deadline,
+            "Voting still in progress"
+        );
+        let pending = String::from_str(&env, "pending");
+        assert!(proposal.status == pending, "Proposal not pending");
+
+        let total_supply = Self::get_total_voting_power(env.clone());
+        assert!(total_supply > 0, "Total voting power not configured");
+
+        let participation = (proposal.yes_votes + proposal.no_votes)
+            .saturating_mul(100)
+            / total_supply;
+        let quorum = Self::get_quorum_percent(env.clone());
+
+        assert!(participation >= quorum, "QuorumNotMet");
+
+        proposal.status = if proposal.yes_votes > proposal.no_votes {
+            String::from_str(&env, "approved")
+        } else {
+            String::from_str(&env, "rejected")
+        };
+
+        env.storage().persistent().set(&proposal_key, &proposal);
+        let ledger_ttl = 30 * 24 * 3600 / 5;
+        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("finalized")),
+            (proposal_id, participation, quorum),
+        );
+
+        true
+    }
+
+    // ── Issue #770: Guardian veto & configurable timelock ────────────────
+
+    /// Add a guardian address that can veto queued proposals.
+    /// Only the admin can add guardians.
+    pub fn add_guardian(env: Env, admin: Address, guardian: Address) {
+        admin.require_auth();
+        let config = Self::get_config(env.clone());
+        assert_eq!(admin, config.admin_address, "Only admin can add guardians");
+
+        let guardian_key = (Symbol::new(&env, "guardian"), guardian.clone());
+        env.storage().persistent().set(&guardian_key, &true);
+
+        let ledger_ttl = 30 * 24 * 3600 / 5;
+        env.storage().persistent().extend_ttl(&guardian_key, 4096, ledger_ttl);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("guard_add")),
+            (guardian,),
+        );
+    }
+
+    /// Remove a guardian. Only the admin can remove guardians.
+    pub fn remove_guardian(env: Env, admin: Address, guardian: Address) {
+        admin.require_auth();
+        let config = Self::get_config(env.clone());
+        assert_eq!(admin, config.admin_address, "Only admin can remove guardians");
+
+        let guardian_key = (Symbol::new(&env, "guardian"), guardian.clone());
+        env.storage().persistent().remove(&guardian_key);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("guard_rm")),
+            (guardian,),
+        );
+    }
+
+    /// Check if an address is a guardian.
+    pub fn is_guardian(env: Env, addr: Address) -> bool {
+        let guardian_key = (Symbol::new(&env, "guardian"), addr);
+        env.storage()
+            .persistent()
+            .get::<(Symbol, Address), bool>(&guardian_key)
+            .unwrap_or(false)
+    }
+
+    /// Set the default timelock duration (in seconds). Only admin can change.
+    pub fn set_timelock_duration(env: Env, admin: Address, duration_secs: u64) {
+        admin.require_auth();
+        let config = Self::get_config(env.clone());
+        assert_eq!(admin, config.admin_address, "Only admin can set timelock duration");
+
+        let key = Symbol::new(&env, "tl_duration");
+        env.storage().persistent().set(&key, &duration_secs);
+
+        let ledger_ttl = 30 * 24 * 3600 / 5;
+        env.storage().persistent().extend_ttl(&key, 4096, ledger_ttl);
+    }
+
+    /// Get the current timelock duration. Defaults to 48 hours.
+    pub fn get_timelock_duration(env: Env) -> u64 {
+        let key = Symbol::new(&env, "tl_duration");
+        env.storage()
+            .persistent()
+            .get::<Symbol, u64>(&key)
+            .unwrap_or(DEFAULT_TIMELOCK_SECONDS)
+    }
+
+    /// Queue an approved proposal using the configured default timelock.
+    pub fn queue_execution_default(env: Env, proposal_id: u64) {
+        let duration = Self::get_timelock_duration(env.clone());
+        Self::queue_execution(env, proposal_id, duration);
+    }
+
+    /// Veto a queued proposal. Only guardians can veto.
+    /// Removes the timelock and marks the proposal as rejected.
+    pub fn veto_proposal(env: Env, guardian: Address, proposal_id: u64) {
+        guardian.require_auth();
+        assert!(
+            Self::is_guardian(env.clone(), guardian.clone()),
+            "Only guardians can veto proposals"
+        );
+
+        let tl_key = (Symbol::new(&env, "timelock"), proposal_id);
+        assert!(
+            env.storage().persistent().has(&tl_key),
+            "Proposal is not queued for execution"
+        );
+
+        let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
+        let mut proposal = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), Proposal>(&proposal_key)
+            .expect("Proposal not found");
+
+        let approved = String::from_str(&env, "approved");
+        assert!(proposal.status == approved, "Proposal is not in approved status");
+
+        proposal.status = String::from_str(&env, "vetoed");
+        env.storage().persistent().set(&proposal_key, &proposal);
+        env.storage().persistent().remove(&tl_key);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("vetoed")),
+            (proposal_id, guardian),
+        );
+    }
+
+    // ── Issue #732: Contract upgrade mechanism ────────────────────────────────
+
+    /// Upgrade the contract WASM. Only the governance admin multisig may call this.
+    /// Emits an `upgraded` event with the new wasm hash.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) {
+        admin.require_auth();
+        let config = Self::get_config(env.clone());
+        assert_eq!(admin, config.admin_address, "unauthorized");
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+        env.events().publish(
+            (symbol_short!("contract"), symbol_short!("upgraded")),
+            new_wasm_hash,
+        );
+    }
 }
+
+mod tests;

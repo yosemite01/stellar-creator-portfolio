@@ -10,11 +10,16 @@ function getGitSha() {
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'standalone',
   typescript: {
     ignoreBuildErrors: true,
   },
   images: {
-    unoptimized: true,
+    remotePatterns: [
+      { protocol: 'https', hostname: '*.amazonaws.com' },
+      { protocol: 'https', hostname: 'ipfs.io' },
+      { protocol: 'https', hostname: '*.supabase.co' },
+    ],
   },
   // Use the git SHA as the Next.js build ID so every deployment is traceable
   // and two builds from the same commit produce identical BUILD_ID files.

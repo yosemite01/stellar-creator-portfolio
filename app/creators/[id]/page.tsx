@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import { notFound } from 'next/navigation';
+import type { Metadata } from 'next';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { CreatorProfileSkeleton } from '@/components/ui/skeleton-group';
@@ -8,6 +9,33 @@ import { CreatorHeroSection, CreatorCtaSection } from '@/components/streaming/cr
 import { CreatorBioSection } from '@/components/streaming/creator-bio-section';
 import { CreatorProjectsSection } from '@/components/streaming/creator-projects-section';
 import { fetchCreatorCore } from '@/lib/streaming/chunk-data';
+import { getCreatorById } from '@/lib/services/creators-data';
+
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params;
+  const creator = getCreatorById(id);
+
+  if (!creator) {
+    return { title: 'Creator Not Found' };
+  }
+
+  return {
+    title: `${creator.name} — ${creator.title}`,
+    description: creator.bio || `View ${creator.name}'s portfolio, projects, and skills on Stellar Creator Portfolio.`,
+    openGraph: {
+      title: `${creator.name} — ${creator.title} | Stellar Creator Portfolio`,
+      description: creator.bio,
+      images: creator.avatar
+        ? [{ url: creator.avatar, width: 400, height: 400, alt: creator.name }]
+        : [],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: `${creator.name} — ${creator.title} | Stellar Creator Portfolio`,
+      description: creator.bio,
+    },
+  };
+}
 
 async function CreatorProfileShell({ id }: { id: string }) {
   const creator = await fetchCreatorCore(id);

@@ -14,9 +14,12 @@
  *  - Accessible: progressbar roles, button labels, status announcements
  */
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Animated,
+  Image,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -31,6 +34,11 @@ import { FontSize, FontWeight, Radius, Shadow, Spacing } from '../theme/tokens';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { FileUploadPicker } from '../components/upload/FileUploadPicker';
 import { UploadQueue } from '../components/upload/UploadQueue';
+import { useImageUpscaler } from '../upscaling/useImageUpscaler';
+import { BeforeAfterSlider } from '../components/image/BeforeAfterSlider';
+
+const MIN_HD_DIMENSION = 1080;
+const MAX_UPSCALE_INPUT = 512;
 
 // ─── Animated dashed empty state ──────────────────────────────────────────────
 
@@ -156,15 +164,44 @@ export function PortfolioUploadScreen() {
   const { colors, isDark } = useTheme();
   const upload = useFileUpload();
   const { files, stats, isUploading } = upload;
+  const upscaler = useImageUpscaler();
+  const [upscalePreview, setUpscalePreview] = useState<{
+    originalUri: string;
+    width: number;
+    height: number;
+  } | null>(null);
 
   const [refreshing, setRefreshing] = React.useState(false);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     upload.clearDone();
+    upscaler.reset();
+    setUpscalePreview(null);
     await new Promise((r) => setTimeout(r, 500));
     setRefreshing(false);
-  }, [upload]);
+  }, [upload, upscaler]);
+
+  const handleImageSelected = useCallback((uri: string, width: number, height: number) => {
+    if (width < MIN_HD_DIMENSION || height < MIN_HD_DIMENSION) {
+      Alert.alert(
+        'Enhance image quality?',
+        `This image is ${width}×${height} (below 1080p). Upscaling takes ~5s.`,
+        [
+          { text: 'Skip', style: 'cancel' },
+          {
+            text: 'Enhance',
+            onPress: () => {
+              setUpscalePreview({ originalUri: uri, width, height });
+              const inputW = Math.min(width, MAX_UPSCALE_INPUT);
+              const inputH = Math.min(height, MAX_UPSCALE_INPUT);
+              upscaler.upscale(uri, inputW, inputH);
+            },
+          },
+        ],
+      );
+    }
+  }, [upscaler]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]}>
@@ -207,12 +244,43 @@ export function PortfolioUploadScreen() {
           />
         }
       >
-        {files.length === 0 ? (
+        {/* Image upscaling section */}
+        {upscaler.processing && (
+          <View style={[styles.upscaleCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={[styles.upscaleText, { color: colors.textSecondary }]}>
+              Enhancing image quality...
+            </Text>
+          </View>
+        )}
+
+        {upscaler.result && upscalePreview && (
+          <View style={[styles.upscaleCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.upscaleTitle, { color: colors.text }]}>Before / After</Text>
+            <BeforeAfterSlider
+              beforeUri={upscalePreview.originalUri}
+              afterUri={upscaler.result.uri}
+              width={upscaler.result.outputWidth}
+              height={upscaler.result.outputHeight}
+            />
+            <Text style={[styles.upscaleDimensions, { color: colors.textTertiary }]}>
+              {upscalePreview.width}×{upscalePreview.height} → {upscaler.result.outputWidth}×{upscaler.result.outputHeight}
+            </Text>
+          </View>
+        )}
+
+        {upscaler.error && (
+          <View style={[styles.upscaleCard, { backgroundColor: colors.errorLight, borderColor: colors.error }]}>
+            <Text style={[styles.upscaleText, { color: colors.error }]}>{upscaler.error}</Text>
+          </View>
+        )}
+
+        {files.length === 0 && !upscaler.processing && !upscaler.result ? (
           <EmptyState />
         ) : (
           <>
             {/* Stats card */}
-            <StatsCard {...stats} />
+            {files.length > 0 && <StatsCard {...stats} />}
 
             {/* Upload queue */}
             <View style={styles.queueWrap}>
@@ -362,5 +430,26 @@ const styles = StyleSheet.create({
   queueWrap: {
     flex: 1,
     minHeight: 200,
+  },
+
+  // ── Upscale ─────────────────────────────────────────────────────────────
+  upscaleCard: {
+    borderRadius: Radius.xl,
+    borderWidth:  1,
+    padding:      Spacing.base,
+    gap:          Spacing.sm,
+    alignItems:   'center',
+  },
+  upscaleTitle: {
+    fontSize:   FontSize.lg,
+    fontWeight: FontWeight.semibold,
+    alignSelf:  'flex-start',
+  },
+  upscaleText: {
+    fontSize:  FontSize.sm,
+    marginTop: Spacing.xs,
+  },
+  upscaleDimensions: {
+    fontSize: FontSize.xs,
   },
 });

@@ -1,174 +1,381 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useState, useCallback } from "react";
 import {
-  FlatList,
-  Pressable,
-  SafeAreaView,
-  StatusBar,
-  StyleSheet,
-  Text,
   View,
-} from 'react-native';
-import { useTheme } from '../theme/ThemeProvider';
-import { useMultiSigStore } from '../store/multiSigStore';
-import { FontSize, FontWeight, Radius, Shadow, Spacing } from '../theme/tokens';
+  Text,
+  TouchableOpacity,
+  FlatList,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+} from "react-native";
+import { useMultiAccount } from "../hooks/useMultiAccount";
+import type { StellarAccount } from "../services/MultiAccountService";
 
-export function MultiSigApprovalScreen() {
-  const { colors, isDark } = useTheme();
-  const tasks = useMultiSigStore((state) => state.tasks);
-  const queueApproval = useMultiSigStore((state) => state.queueApproval);
+interface AccountItemProps {
+  account: StellarAccount;
+  isActive: boolean;
+  isSwitching: boolean;
+  onSwitch: (publicKey: string) => void;
+  onRemove: (publicKey: string) => void;
+}
 
-  const renderSigner = useCallback(
-    (taskId: string, signer: { id: string; name: string; role: string; status: string }) => (
-      <View key={signer.id} style={[styles.signerRow, { borderColor: colors.border }]}> 
-        <View>
-          <Text style={[styles.signerName, { color: colors.text }]}>{signer.name}</Text>
-          <Text style={[styles.signerRole, { color: colors.textSecondary }]}>{signer.role}</Text>
+function truncateAddress(address: string): string {
+  if (address.length <= 12) return address;
+  return `${address.slice(0, 6)}...${address.slice(-6)}`;
+}
+
+function AccountItem({
+  account,
+  isActive,
+  isSwitching,
+  onSwitch,
+  onRemove,
+}: AccountItemProps) {
+  return (
+    <View
+      style={[styles.accountCard, isActive && styles.accountCardActive]}
+      accessibilityRole="button"
+      accessibilityLabel={`Account ${account.label}, ${truncateAddress(account.publicKey)}${isActive ? ", currently active" : ""}`}
+    >
+      <TouchableOpacity
+        style={styles.accountInfo}
+        onPress={() => onSwitch(account.publicKey)}
+        disabled={isSwitching || isActive}
+      >
+        <View style={styles.avatarContainer}>
+          <View
+            style={[styles.avatar, isActive && styles.avatarActive]}
+          >
+            <Text style={styles.avatarText}>
+              {account.label.charAt(0).toUpperCase()}
+            </Text>
+          </View>
+          {isActive && <View style={styles.activeDot} />}
         </View>
-        <View style={styles.signerActions}>
-          <Text style={[styles.signerStatus, { color: signer.status === 'approved' ? colors.success : colors.warning }]}>
-            {signer.status.toUpperCase()}
+
+        <View style={styles.accountDetails}>
+          <Text style={styles.accountLabel}>{account.label}</Text>
+          <Text style={styles.accountAddress}>
+            {truncateAddress(account.publicKey)}
           </Text>
-          {signer.status === 'pending' ? (
-            <Pressable
-              onPress={() => queueApproval(taskId, signer.id)}
-              style={({ pressed }) => [
-                styles.approveButton,
-                { backgroundColor: pressed ? colors.primaryLight : colors.primary },
-              ]}
-            >
-              <Text style={[styles.approveText, { color: colors.textInverse }]}>Queue approval</Text>
-            </Pressable>
-          ) : null}
         </View>
-      </View>
-    ),
-    [colors],
-  );
 
-  const content = useMemo(
-    () => (
-      <FlatList
-        data={tasks}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <View style={[styles.taskCard, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-            <Text style={[styles.taskTitle, { color: colors.text }]}>{item.title}</Text>
-            <Text style={[styles.taskSubtitle, { color: colors.textSecondary }]}>{item.description}</Text>
-            <View style={[styles.taskMeta, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}> 
-              <Text style={[styles.taskMetaText, { color: colors.text }]}>{item.amount}</Text>
-              <Text style={[styles.taskMetaText, { color: item.status === 'approved' ? colors.success : colors.warning }]}>
-                {item.status.toUpperCase()}
-              </Text>
-            </View>
-            <View style={styles.signerList}> 
-              {item.signers.map((signer) => renderSigner(item.id, signer))}
-            </View>
-            {item.queuedApprovals.length > 0 ? (
-              <Text style={[styles.queueNote, { color: colors.textSecondary }]}>Queued approvals: {item.queuedApprovals.join(', ')}</Text>
-            ) : null}
+        {isActive && (
+          <View style={styles.activeBadge}>
+            <Text style={styles.activeBadgeText}>Active</Text>
           </View>
         )}
-        contentContainerStyle={styles.listContent}
-      />
-    ),
-    [colors, renderSigner, tasks],
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.removeButton}
+        onPress={() => onRemove(account.publicKey)}
+        accessibilityLabel={`Remove account ${account.label}`}
+      >
+        <Text style={styles.removeButtonText}>Remove</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+export default function MultiSigApprovalScreen() {
+  const {
+    accounts,
+    activeAccount,
+    isLoading,
+    isSwitching,
+    error,
+    switchAccount,
+    addAccount,
+    removeAccount,
+    clearError,
+  } = useMultiAccount();
+
+  const [showAddForm, setShowAddForm] = useState(false);
+
+  const handleSwitch = useCallback(
+    async (publicKey: string) => {
+      try {
+        await switchAccount(publicKey);
+      } catch {
+        // error is set in the hook
+      }
+    },
+    [switchAccount],
   );
 
-  return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]}> 
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      <View style={[styles.container, { backgroundColor: colors.surface }]}> 
-        <Text style={[styles.header, { color: colors.text }]}>Multi-Signature Workflow</Text>
-        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Queue approvals, synchronize signer state, and track pending co-signers in real time.</Text>
+  const handleRemove = useCallback(
+    (publicKey: string) => {
+      const account = accounts.find((a) => a.publicKey === publicKey);
+      Alert.alert(
+        "Remove Account",
+        `Remove "${account?.label ?? "account"}"? This will delete the stored key material.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Remove",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                await removeAccount(publicKey);
+              } catch {
+                // error is set in the hook
+              }
+            },
+          },
+        ],
+      );
+    },
+    [accounts, removeAccount],
+  );
+
+  const handleAddAccount = useCallback(async () => {
+    const placeholder = `G${"A".repeat(55)}`;
+    try {
+      await addAccount(placeholder, "encrypted-placeholder", "New Account");
+      setShowAddForm(false);
+    } catch {
+      // error is set in the hook
+    }
+  }, [addAccount]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: StellarAccount }) => (
+      <AccountItem
+        account={item}
+        isActive={activeAccount?.publicKey === item.publicKey}
+        isSwitching={isSwitching}
+        onSwitch={handleSwitch}
+        onRemove={handleRemove}
+      />
+    ),
+    [activeAccount, isSwitching, handleSwitch, handleRemove],
+  );
+
+  if (isLoading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" />
+        <Text style={styles.loadingText}>Loading accounts...</Text>
       </View>
-      {content}
-    </SafeAreaView>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Stellar Accounts</Text>
+      <Text style={styles.subtitle}>
+        Manage your Stellar accounts. Biometric authentication is required to
+        switch or add accounts.
+      </Text>
+
+      {error && (
+        <TouchableOpacity style={styles.errorBanner} onPress={clearError}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Text style={styles.errorDismiss}>Dismiss</Text>
+        </TouchableOpacity>
+      )}
+
+      {isSwitching && (
+        <View style={styles.switchingBanner}>
+          <ActivityIndicator size="small" color="#fff" />
+          <Text style={styles.switchingText}>
+            Authenticating and switching...
+          </Text>
+        </View>
+      )}
+
+      <FlatList
+        data={accounts}
+        renderItem={renderItem}
+        keyExtractor={(item) => item.publicKey}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyText}>
+              No accounts yet. Add your first Stellar account to get started.
+            </Text>
+          </View>
+        }
+      />
+
+      <TouchableOpacity style={styles.addButton} onPress={handleAddAccount}>
+        <Text style={styles.addButtonText}>Add Account</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
   container: {
-    padding: Spacing.base,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    flex: 1,
+    backgroundColor: "#0a0a0a",
+    paddingTop: 60,
+    paddingHorizontal: 16,
   },
-  header: {
-    fontSize: FontSize['3xl'],
-    fontWeight: FontWeight.extrabold,
-    marginBottom: Spacing.xs,
+  centered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#0a0a0a",
+  },
+  loadingText: {
+    marginTop: 12,
+    color: "#999",
+    fontSize: 14,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#fff",
+    marginBottom: 4,
   },
   subtitle: {
-    fontSize: FontSize.base,
-    lineHeight: 22,
+    fontSize: 14,
+    color: "#888",
+    marginBottom: 20,
+  },
+  errorBanner: {
+    backgroundColor: "#3b1111",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  errorText: {
+    color: "#f87171",
+    fontSize: 13,
+    flex: 1,
+  },
+  errorDismiss: {
+    color: "#f87171",
+    fontSize: 12,
+    fontWeight: "600",
+    marginLeft: 8,
+  },
+  switchingBanner: {
+    backgroundColor: "#1e3a5f",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  switchingText: {
+    color: "#93c5fd",
+    fontSize: 13,
   },
   listContent: {
-    padding: Spacing.base,
-    paddingBottom: Spacing['4xl'],
+    paddingBottom: 100,
   },
-  taskCard: {
-    borderRadius: Radius.xl,
+  accountCard: {
+    backgroundColor: "#1a1a1a",
+    borderRadius: 12,
+    marginBottom: 10,
     borderWidth: 1,
-    padding: Spacing.base,
-    marginBottom: Spacing.lg,
+    borderColor: "#2a2a2a",
+    overflow: "hidden",
   },
-  taskTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
+  accountCardActive: {
+    borderColor: "#3b82f6",
   },
-  taskSubtitle: {
-    fontSize: FontSize.sm,
-    marginTop: Spacing.xs,
-    marginBottom: Spacing.sm,
+  accountInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
   },
-  taskMeta: {
-    borderWidth: 1,
-    borderRadius: Radius.lg,
-    padding: Spacing.sm,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: Spacing.sm,
+  avatarContainer: {
+    position: "relative",
+    marginRight: 12,
   },
-  taskMetaText: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#333",
+    justifyContent: "center",
+    alignItems: "center",
   },
-  signerList: {
-    gap: Spacing.sm,
+  avatarActive: {
+    backgroundColor: "#1e40af",
   },
-  signerRow: {
-    borderWidth: 1,
-    borderRadius: Radius.lg,
-    padding: Spacing.sm,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  avatarText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
   },
-  signerName: {
-    fontSize: FontSize.base,
-    fontWeight: FontWeight.semibold,
+  activeDot: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "#22c55e",
+    borderWidth: 2,
+    borderColor: "#1a1a1a",
   },
-  signerRole: {
-    fontSize: FontSize.xs,
+  accountDetails: {
+    flex: 1,
   },
-  signerActions: {
-    alignItems: 'flex-end',
-    gap: Spacing.xs,
+  accountLabel: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+    marginBottom: 2,
   },
-  signerStatus: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.bold,
+  accountAddress: {
+    color: "#888",
+    fontSize: 13,
+    fontFamily: "monospace",
   },
-  approveButton: {
-    borderRadius: Radius.lg,
-    paddingVertical: Spacing.xs,
-    paddingHorizontal: Spacing.sm,
+  activeBadge: {
+    backgroundColor: "#1e40af",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
   },
-  approveText: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
+  activeBadgeText: {
+    color: "#93c5fd",
+    fontSize: 11,
+    fontWeight: "600",
   },
-  queueNote: {
-    marginTop: Spacing.sm,
-    fontSize: FontSize.xs,
+  removeButton: {
+    borderTopWidth: 1,
+    borderTopColor: "#2a2a2a",
+    padding: 10,
+    alignItems: "center",
+  },
+  removeButtonText: {
+    color: "#f87171",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  emptyState: {
+    padding: 40,
+    alignItems: "center",
+  },
+  emptyText: {
+    color: "#666",
+    fontSize: 14,
+    textAlign: "center",
+  },
+  addButton: {
+    position: "absolute",
+    bottom: 30,
+    left: 16,
+    right: 16,
+    backgroundColor: "#3b82f6",
+    borderRadius: 12,
+    padding: 16,
+    alignItems: "center",
+  },
+  addButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

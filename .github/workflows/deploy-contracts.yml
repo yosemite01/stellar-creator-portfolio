@@ -1,0 +1,252 @@
+name: Deploy Soroban Contracts
+
+on:
+  push:
+    branches: [main]
+
+env:
+  TESTNET_RPC_URL: https://soroban-testnet.stellar.org
+  TESTNET_PASSPHRASE: "Test SDF Network ; September 2015"
+  MAINNET_RPC_URL: https://soroban-mainnet.stellar.org
+  MAINNET_PASSPHRASE: "Public Global Stellar Network ; September 2015"
+
+jobs:
+  test:
+    name: Run Contract Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Run tests
+        run: cd backend && cargo test --workspace
+
+  build:
+    name: Build Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Install Stellar CLI
+        run: |
+          cargo install --locked stellar-cli --features opt 2>/dev/null || \
+          cargo install stellar-cli --features opt
+
+      - name: Build contracts
+        run: |
+          stellar contract build --package bounty --manifest-path backend/Cargo.toml
+          stellar contract build --package escrow --manifest-path backend/Cargo.toml
+          stellar contract build --package freelancer --manifest-path backend/Cargo.toml
+          stellar contract build --package governance --manifest-path backend/Cargo.toml
+          stellar contract build --package oracle --manifest-path backend/Cargo.toml
+          stellar contract build --package identity --manifest-path backend/Cargo.toml
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-wasm-${{ github.sha }}
+          path: backend/target/wasm32-unknown-unknown/release/*.wasm
+          if-no-files-found: error
+
+  deploy-testnet:
+    name: Deploy to Testnet
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    environment: testnet
+    outputs:
+      bounty_contract_id: ${{ steps.deploy.outputs.bounty_contract_id }}
+      escrow_contract_id: ${{ steps.deploy.outputs.escrow_contract_id }}
+      freelancer_contract_id: ${{ steps.deploy.outputs.freelancer_contract_id }}
+      governance_contract_id: ${{ steps.deploy.outputs.governance_contract_id }}
+      oracle_contract_id: ${{ steps.deploy.outputs.oracle_contract_id }}
+      identity_contract_id: ${{ steps.deploy.outputs.identity_contract_id }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: contract-wasm-${{ github.sha }}
+          path: artifacts
+
+      - name: Install Stellar CLI
+        run: |
+          cargo install --locked stellar-cli --features opt 2>/dev/null || \
+          cargo install stellar-cli --features opt
+
+      - name: Deploy contracts to Testnet
+        id: deploy
+        env:
+          STELLAR_NETWORK: testnet
+          STELLAR_RPC_URL: ${{ env.TESTNET_RPC_URL }}
+          STELLAR_NETWORK_PASSPHRASE: ${{ env.TESTNET_PASSPHRASE }}
+          STELLAR_ADMIN_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+          WASM_DIR: artifacts
+        run: node scripts/deploy.js
+
+      - name: Write contracts.json
+        run: |
+          cat > contracts.json <<EOF
+          {
+            "network": "testnet",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "${{ github.sha }}",
+            "contracts": {
+              "bounty": "${{ steps.deploy.outputs.bounty_contract_id }}",
+              "escrow": "${{ steps.deploy.outputs.escrow_contract_id }}",
+              "freelancer": "${{ steps.deploy.outputs.freelancer_contract_id }}",
+              "governance": "${{ steps.deploy.outputs.governance_contract_id }}",
+              "oracle": "${{ steps.deploy.outputs.oracle_contract_id }}",
+              "identity": "${{ steps.deploy.outputs.identity_contract_id }}"
+            }
+          }
+          EOF
+
+      - name: Upload contracts.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: contracts-testnet-${{ github.sha }}
+          path: contracts.json
+
+  deploy-mainnet:
+    name: Deploy to Mainnet
+    runs-on: ubuntu-latest
+    needs: deploy-testnet
+    environment: mainnet
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      bounty_contract_id: ${{ steps.deploy.outputs.bounty_contract_id }}
+      escrow_contract_id: ${{ steps.deploy.outputs.escrow_contract_id }}
+      freelancer_contract_id: ${{ steps.deploy.outputs.freelancer_contract_id }}
+      governance_contract_id: ${{ steps.deploy.outputs.governance_contract_id }}
+      oracle_contract_id: ${{ steps.deploy.outputs.oracle_contract_id }}
+      identity_contract_id: ${{ steps.deploy.outputs.identity_contract_id }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: contract-wasm-${{ github.sha }}
+          path: artifacts
+
+      - name: Install Stellar CLI
+        run: |
+          cargo install --locked stellar-cli --features opt 2>/dev/null || \
+          cargo install stellar-cli --features opt
+
+      - name: Deploy contracts to Mainnet
+        id: deploy
+        env:
+          STELLAR_NETWORK: mainnet
+          STELLAR_RPC_URL: ${{ env.MAINNET_RPC_URL }}
+          STELLAR_NETWORK_PASSPHRASE: ${{ env.MAINNET_PASSPHRASE }}
+          STELLAR_ADMIN_SECRET: ${{ secrets.MAINNET_DEPLOYER_SECRET }}
+          WASM_DIR: artifacts
+        run: node scripts/deploy.js
+
+      - name: Write contracts.json
+        run: |
+          cat > contracts.json <<EOF
+          {
+            "network": "mainnet",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "${{ github.sha }}",
+            "contracts": {
+              "bounty": "${{ steps.deploy.outputs.bounty_contract_id }}",
+              "escrow": "${{ steps.deploy.outputs.escrow_contract_id }}",
+              "freelancer": "${{ steps.deploy.outputs.freelancer_contract_id }}",
+              "governance": "${{ steps.deploy.outputs.governance_contract_id }}",
+              "oracle": "${{ steps.deploy.outputs.oracle_contract_id }}",
+              "identity": "${{ steps.deploy.outputs.identity_contract_id }}"
+            }
+          }
+          EOF
+
+      - name: Upload contracts.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: contracts-mainnet-${{ github.sha }}
+          path: contracts.json
+
+  notify:
+    name: Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [deploy-testnet, deploy-mainnet]
+    if: always()
+    steps:
+      - name: Determine status
+        id: status
+        run: |
+          TESTNET_RESULT="${{ needs.deploy-testnet.result }}"
+          MAINNET_RESULT="${{ needs.deploy-mainnet.result }}"
+          if [[ "$TESTNET_RESULT" == "failure" || "$MAINNET_RESULT" == "failure" ]]; then
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+            echo "emoji=❌" >> "$GITHUB_OUTPUT"
+            echo "color=danger" >> "$GITHUB_OUTPUT"
+          elif [[ "$TESTNET_RESULT" == "success" && ("$MAINNET_RESULT" == "success" || "$MAINNET_RESULT" == "skipped") ]]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            echo "emoji=✅" >> "$GITHUB_OUTPUT"
+            echo "color=good" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=warning" >> "$GITHUB_OUTPUT"
+            echo "emoji=⚠️" >> "$GITHUB_OUTPUT"
+            echo "color=warning" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post to Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+            echo "SLACK_WEBHOOK_URL not set, skipping notification"
+            exit 0
+          fi
+          curl -fsSL -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "text": "${{ steps.status.outputs.emoji }} *Soroban Contract Deployment* — `${{ github.sha }}`",
+              "attachments": [{
+                "color": "${{ steps.status.outputs.color }}",
+                "fields": [
+                  {"title": "Status", "value": "${{ steps.status.outputs.status }}", "short": true},
+                  {"title": "Branch", "value": "`${{ github.ref_name }}`", "short": true},
+                  {"title": "Testnet", "value": "${{ needs.deploy-testnet.result }}", "short": true},
+                  {"title": "Mainnet", "value": "${{ needs.deploy-mainnet.result }}", "short": true},
+                  {"title": "Run", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>", "short": false}
+                ]
+              }]
+            }'
+
+      - name: Create GitHub deployment summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          ## ${{ steps.status.outputs.emoji }} Contract Deployment — `${{ github.sha }}`
+
+          | Stage | Result |
+          |---|---|
+          | Testnet | ${{ needs.deploy-testnet.result }} |
+          | Mainnet | ${{ needs.deploy-mainnet.result }} |
+
+          [View full run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF

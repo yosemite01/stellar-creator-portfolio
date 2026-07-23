@@ -19,7 +19,7 @@ mod ml;
 mod ml_handlers;
 mod reputation;
 mod verification_rewards;
-mod webhook;
+mod webhooks;
 mod websocket;
 
 pub const API_VERSION: &str = "1";
@@ -397,6 +397,17 @@ async fn health(
                 "stellar_rpc": if rpc_connected { "connected" } else { "disconnected" }
             }
         }))
+}
+
+/// Readiness probe — returns 200 when the database is reachable.
+async fn ready(pool: web::Data<PgPool>) -> HttpResponse {
+    match pool.acquire().await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "status": "ready" })),
+        Err(e) => {
+            tracing::error!("Readiness check failed: {}", e);
+            HttpResponse::ServiceUnavailable().json(serde_json::json!({ "status": "not_ready" }))
+        }
+    }
 }
 
 /// Create a new bounty
@@ -1346,6 +1357,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::NormalizePath::trim())
             .wrap(ApiVersionHeader)
             .route("/health", web::get().to(health))
+            .route("/ready", web::get().to(ready))
             .route("/api/versions", web::get().to(api_versions))
             .route("/ws", web::get().to(websocket::ws_handler))
             .route("/api/v1/ws/metrics", web::get().to(websocket::websocket_metrics))
@@ -1367,7 +1379,7 @@ async fn main() -> std::io::Result<()> {
                     .route("/escrow/{id}", web::get().to(get_escrow))
                     .route(
                         "/webhooks/payment",
-                        web::post().to(webhook::payment_webhook),
+                        web::post().to(webhooks::payment_webhook),
                     )
                     .route(
                         "/payments/{id}/status",

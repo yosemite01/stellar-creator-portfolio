@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc-client';
-import type { Bounty } from '@/lib/creators-data';
+import type { Bounty } from '@/lib/services/creators-data';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced', 'expert'] as const;
 
@@ -17,13 +17,15 @@ function ApplyModal({ bounty, onClose }: ApplyModalProps) {
   const [budget, setBudget] = useState(bounty.budget);
   const [timeline, setTimeline] = useState(14);
   const [proposal, setProposal] = useState('');
+  const modalRef = useRef<HTMLDivElement>(null);
+  const previousActiveElement = useRef<HTMLElement | null>(null);
   
   // Use tRPC mutation for escrow creation
   const createEscrowMutation = trpc.escrow.create.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       setSuccess({ txHash: data.txHash, escrowId: data.escrowId });
     },
-    onError: (error) => {
+    onError: (error: any) => {
       setError(error.message);
     },
   });
@@ -31,7 +33,39 @@ function ApplyModal({ bounty, onClose }: ApplyModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<{ txHash: string; escrowId: string } | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  useEffect(() => {
+    previousActiveElement.current = document.activeElement as HTMLElement;
+    if (modalRef.current) {
+      modalRef.current.focus();
+    }
+    return () => {
+      previousActiveElement.current?.focus();
+    };
+  }, []);
+
+  const handleKeyDown = (e: any) => {
+    if (e.key === 'Escape') {
+      onClose();
+    }
+    if (e.key === 'Tab') {
+      const focusableElements = modalRef.current?.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusableElements) {
+        const firstElement = focusableElements[0] as HTMLElement;
+        const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
+        if (e.shiftKey && document.activeElement === firstElement) {
+          e.preventDefault();
+          lastElement.focus();
+        } else if (!e.shiftKey && document.activeElement === lastElement) {
+          e.preventDefault();
+          firstElement.focus();
+        }
+      }
+    }
+  };
+
+  const handleSubmit = async (e: any) => {
     e.preventDefault();
     setError(null);
     if (!proposal.trim()) { setError('Proposal is required.'); return; }
@@ -57,14 +91,23 @@ function ApplyModal({ bounty, onClose }: ApplyModalProps) {
       aria-label={`Apply to ${bounty.title}`}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       onClick={onClose}
+      onKeyDown={handleKeyDown}
     >
       <div
-        className="bg-card border border-border rounded-xl p-6 w-full max-w-lg mx-4 space-y-4"
+        ref={modalRef}
+        tabIndex={-1}
+        className="bg-card border border-border rounded-xl p-6 w-full max-w-lg mx-4 space-y-4 focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-foreground">Apply: {bounty.title}</h2>
-          <button aria-label="Close" onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>
+          <button 
+            aria-label="Close modal" 
+            onClick={onClose} 
+            className="text-muted-foreground hover:text-foreground p-2 rounded hover:bg-secondary/50 focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            ✕
+          </button>
         </div>
 
         <div className="text-xs bg-muted/50 border border-border rounded-md px-3 py-2 text-muted-foreground">
@@ -81,24 +124,59 @@ function ApplyModal({ bounty, onClose }: ApplyModalProps) {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="wallet-address" className="block text-sm font-medium text-foreground mb-1">Stellar Wallet Address</label>
-              <input id="wallet-address" type="text" value={walletAddress} onChange={e => setWalletAddress(e.target.value)} className={inputCls} placeholder="G..." />
+              <input 
+                id="wallet-address" 
+                type="text" 
+                value={walletAddress} 
+                onChange={e => setWalletAddress(e.target.value)} 
+                className={inputCls} 
+                placeholder="G..." 
+                aria-required="true"
+                aria-invalid={!!error && !walletAddress}
+              />
             </div>
             <div>
               <label htmlFor="proposed-budget" className="block text-sm font-medium text-foreground mb-1">Proposed Budget (USD)</label>
-              <input id="proposed-budget" type="number" value={budget} onChange={e => setBudget(Number(e.target.value))} min={1} className={inputCls} />
+              <input 
+                id="proposed-budget" 
+                type="number" 
+                value={budget} 
+                onChange={e => setBudget(Number(e.target.value))} 
+                min={1} 
+                className={inputCls}
+                aria-required="true"
+                aria-invalid={!!error && budget <= 0}
+              />
             </div>
             <div>
               <label htmlFor="delivery-timeline" className="block text-sm font-medium text-foreground mb-1">Delivery Timeline (days)</label>
-              <input id="delivery-timeline" type="number" value={timeline} onChange={e => setTimeline(Number(e.target.value))} min={1} className={inputCls} />
+              <input 
+                id="delivery-timeline" 
+                type="number" 
+                value={timeline} 
+                onChange={e => setTimeline(Number(e.target.value))} 
+                min={1} 
+                className={inputCls}
+                aria-required="true"
+              />
             </div>
             <div>
               <label htmlFor="proposal-text" className="block text-sm font-medium text-foreground mb-1">Proposal</label>
-              <textarea id="proposal-text" value={proposal} onChange={e => setProposal(e.target.value)} rows={4} className={inputCls} placeholder="Describe your approach..." />
+              <textarea 
+                id="proposal-text" 
+                value={proposal} 
+                onChange={e => setProposal(e.target.value)} 
+                rows={4} 
+                className={inputCls} 
+                placeholder="Describe your approach..."
+                aria-required="true"
+                aria-invalid={!!error && !proposal.trim()}
+              />
             </div>
-            {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+            {error && <p role="alert" aria-live="assertive" className="text-sm text-destructive">{error}</p>}
             <div className="flex gap-3 justify-end">
               <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
-              <Button type="submit" disabled={submitting}>
+              <Button type="submit" disabled={submitting} aria-busy={submitting}>
                 {submitting ? 'Submitting...' : 'Submit'}
               </Button>
             </div>
@@ -157,7 +235,13 @@ export default function BountiesClient({ bounties }: { bounties: Bounty[] }) {
           <div className="flex flex-wrap gap-2 items-center">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Difficulty:</span>
             {DIFFICULTIES.map((d) => (
-              <Button key={d} size="sm" variant={difficulty === d ? 'default' : 'outline'} onClick={() => setDifficulty(difficulty === d ? null : d)}>
+              <Button 
+                key={d} 
+                size="sm" 
+                variant={difficulty === d ? 'default' : 'outline'} 
+                onClick={() => setDifficulty(difficulty === d ? null : d)}
+                aria-pressed={difficulty === d}
+              >
                 {d}
               </Button>
             ))}
@@ -165,12 +249,18 @@ export default function BountiesClient({ bounties }: { bounties: Bounty[] }) {
           <div className="flex flex-wrap gap-2 items-center">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Category:</span>
             {categories.map((c) => (
-              <Button key={c} size="sm" variant={category === c ? 'default' : 'outline'} onClick={() => setCategory(category === c ? null : c)}>
+              <Button 
+                key={c} 
+                size="sm" 
+                variant={category === c ? 'default' : 'outline'} 
+                onClick={() => setCategory(category === c ? null : c)}
+                aria-pressed={category === c}
+              >
                 {c}
               </Button>
             ))}
             {(difficulty || category) && (
-              <Button size="sm" variant="ghost" onClick={resetFilters}>Reset Filters</Button>
+              <Button size="sm" variant="ghost" onClick={resetFilters} aria-label="Reset all filters">Reset Filters</Button>
             )}
           </div>
         </div>
@@ -209,7 +299,7 @@ export default function BountiesClient({ bounties }: { bounties: Bounty[] }) {
                   </div>
                   <div className="flex items-center justify-between pt-2">
                     <span className="text-xs text-muted-foreground">{bounty.applicants} applicants</span>
-                    <Button size="sm" onClick={() => setActiveBounty(bounty)}>Apply Now</Button>
+                    <Button size="sm" onClick={() => setActiveBounty(bounty)} aria-label={`Apply to ${bounty.title}`}>Apply Now</Button>
                   </div>
                 </div>
               ))}

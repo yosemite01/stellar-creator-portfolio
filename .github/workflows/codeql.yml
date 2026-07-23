@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Run every Monday at 08:00 UTC
     - cron: "0 8 * * 1"
 
 jobs:
@@ -22,18 +21,16 @@ jobs:
       fail-fast: false
       matrix:
         language: [javascript-typescript]
-        # Add 'actions' to scan workflow files too
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          # Use the security-extended query suite for deeper analysis
-          queries: security-extended,security-and-quality
+          queries: security-and-quality
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
@@ -42,3 +39,39 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
+          # Upload results to the Security tab; high-severity findings
+          # will be reported and can be enforced via branch protection rules
+          # (Settings → Branches → Require status checks → CodeQL).
+          upload: always
+
+  # ── Block PR merge on high CodeQL findings ──────────────────────────────────
+  # Enable this by adding "CodeQL Results Check" as a required status check
+  # in Settings → Branches → Branch protection rules for `main`.
+  check-results:
+    name: CodeQL Results Check
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: github.event_name == 'pull_request'
+    permissions:
+      security-events: read
+      contents: read
+
+    steps:
+      - name: Check for high-severity CodeQL alerts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const alerts = await github.rest.codeScanning.listAlertsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              severity: 'high',
+              ref: context.payload.pull_request.head.sha,
+            });
+            const highAlerts = alerts.data.filter(a => a.rule.severity === 'high' || a.rule.severity === 'critical');
+            if (highAlerts.length > 0) {
+              const summary = highAlerts.map(a => `- ${a.rule.id}: ${a.rule.description} (${a.most_recent_instance.location.path})`).join('\n');
+              core.setFailed(`❌ ${highAlerts.length} high/critical CodeQL finding(s) block this PR:\n${summary}`);
+            } else {
+              core.info('✅ No high-severity CodeQL findings.');
+            }

@@ -1,0 +1,30 @@
+{
+  "ci": {
+    "collect": {
+      "url": [
+        "http://localhost:3000",
+        "http://localhost:3000/creators",
+        "http://localhost:3000/bounties"
+      ],
+      "startServerCommand": "pnpm run start",
+      "startServerReadyPattern": "ready on",
+      "startServerReadyTimeout": 30000,
+      "numberOfRuns": 3,
+      "settings": {
+        "preset": "desktop"
+      }
+    },
+    "assert": {
+      "assertions": {
+        "categories:performance": ["warn", { "minScore": 0.85 }],
+        "categories:accessibility": ["error", { "minScore": 0.90 }],
+        "first-contentful-paint": ["warn", { "maxNumericValue": 2000 }],
+        "largest-contentful-paint": ["warn", { "maxNumericValue": 3000 }],
+        "cumulative-layout-shift": ["warn", { "maxNumericValue": 0.1 }]
+      }
+    },
+    "upload": {
+      "target": "temporary-public-storage"
+    }
+  }
+}

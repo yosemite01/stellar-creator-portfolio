@@ -1,1 +1,6 @@
 target
+
+# Never commit real env files — use .env.example templates instead
+.env
+.env.*
+!**/.env.example

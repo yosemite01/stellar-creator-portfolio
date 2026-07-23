@@ -6,6 +6,8 @@
  *  - Double Ratchet encrypt / decrypt
  *  - Key rotation: signed pre-key rotated every 7 days,
  *    one-time pre-keys replenished when supply drops below threshold
+ *  - Sealed sender: hides sender identity at the transport layer
+ *  - Delivery receipts: confirm message arrival to sender
  *
  * Deps: @signalapp/libsignal-client, expo-secure-store
  */
@@ -35,7 +37,7 @@ import {
   generateOneTimePreKeys,
   consumeOneTimePreKey,
 } from './key-store';
-import type { EncryptedMessage, DecryptedMessage, KeyBundle } from '../types';
+import type { EncryptedMessage, DecryptedMessage, KeyBundle, SealedSenderMessage, DeliveryReceipt } from '../types';
 
 // ─── Key rotation constants ───────────────────────────────────────────────────
 
@@ -205,6 +207,87 @@ export class SignalSessionManager {
       senderId:  msg.senderId,
       body:      plaintext.toString('utf8'),
       timestamp: msg.timestamp,
+    };
+  }
+
+  // ── Sealed sender ──────────────────────────────────────────────────────────
+
+  async encryptSealedSender(remoteUserId: string, plaintext: string): Promise<SealedSenderMessage> {
+    const { identityKeyPair, registrationId } = await getOrCreateIdentity();
+    const address = ProtocolAddress.new(remoteUserId, 1);
+    const msgBuffer = Buffer.from(plaintext, 'utf8');
+    const ciphertext = await signalEncrypt(msgBuffer, address, this.sessionStore, this.identityStore);
+
+    const envelope = Buffer.concat([
+      Buffer.from([0x01]), // sealed sender version
+      Buffer.from(identityKeyPair.publicKey.serialize()),
+      Buffer.from(ciphertext.serialize()),
+    ]);
+
+    const signature = identityKeyPair.privateKey.sign(envelope);
+
+    return {
+      id: crypto.randomUUID(),
+      envelope: new Uint8Array(envelope),
+      signature: new Uint8Array(signature),
+      messageType: ciphertext.type() as 1 | 3,
+      timestamp: Date.now(),
+    };
+  }
+
+  async decryptSealedSender(msg: SealedSenderMessage): Promise<DecryptedMessage> {
+    const envelope = Buffer.from(msg.envelope);
+    const version = envelope[0];
+    if (version !== 0x01) throw new Error(`Unsupported sealed sender version: ${version}`);
+
+    const senderIdentityKey = PublicKey.deserialize(envelope.subarray(1, 34));
+    const ciphertextBytes = envelope.subarray(34);
+
+    const signature = Buffer.from(msg.signature);
+    const valid = senderIdentityKey.verify(envelope, signature);
+    if (!valid) throw new Error('Sealed sender signature verification failed');
+
+    const senderAddress = ProtocolAddress.new('sealed-sender', 1);
+    let plaintext: Buffer;
+
+    if (msg.messageType === CiphertextMessageType.PreKey) {
+      plaintext = await signalDecryptPreKey(
+        ciphertextBytes,
+        senderAddress,
+        this.sessionStore,
+        this.identityStore,
+        this.preKeyStore,
+        this.signedPreKeyStore,
+      );
+    } else {
+      plaintext = await signalDecrypt(ciphertextBytes, senderAddress, this.sessionStore, this.identityStore);
+    }
+
+    return {
+      id: msg.id,
+      senderId: 'sealed',
+      body: plaintext.toString('utf8'),
+      timestamp: msg.timestamp,
+    };
+  }
+
+  // ── Delivery receipts ─────────────────────────────────────────────────────
+
+  createDeliveryReceipt(messageId: string, recipientId: string): DeliveryReceipt {
+    return {
+      messageId,
+      recipientId,
+      status: 'delivered',
+      timestamp: Date.now(),
+    };
+  }
+
+  createReadReceipt(messageId: string, recipientId: string): DeliveryReceipt {
+    return {
+      messageId,
+      recipientId,
+      status: 'read',
+      timestamp: Date.now(),
     };
   }
 

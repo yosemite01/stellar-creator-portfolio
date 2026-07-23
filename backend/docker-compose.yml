@@ -38,6 +38,57 @@ services:
     volumes:
       - ./services/api/src:/app/src
     command: cargo run --bin stellar-api
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Auth Service
+  auth:
+    build:
+      context: .
+      dockerfile: Dockerfile.auth
+    container_name: stellar-auth
+    ports:
+      - "3002:3002"
+    environment:
+      AUTH_HOST: "0.0.0.0"
+      AUTH_PORT: "3002"
+      JWT_SECRET: "dev-jwt-secret-change-in-production"
+      RUST_LOG: "info,stellar_auth=debug"
+    volumes:
+      - ./services/auth/src:/app/src
+    command: cargo run --bin stellar-auth
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3002/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Notifications Service
+  notifications:
+    build:
+      context: .
+      dockerfile: Dockerfile.notifications
+    container_name: stellar-notifications
+    ports:
+      - "3003:3003"
+    environment:
+      NOTIFICATIONS_HOST: "0.0.0.0"
+      NOTIFICATIONS_PORT: "3003"
+      RUST_LOG: "info,stellar_notifications=debug"
+    volumes:
+      - ./services/notifications/src:/app/src
+    command: cargo run --bin stellar-notifications
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3003/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # Blockchain Indexer
   indexer:
@@ -45,9 +96,13 @@ services:
       context: .
       dockerfile: Dockerfile.indexer
     container_name: stellar-indexer
+    ports:
+      - "9000:9000"
     environment:
       DATABASE_URL: "postgres://stellar:stellar_dev_password@postgres:5432/stellar_db"
       STELLAR_NETWORK: "testnet"
+      INDEXER_HOST: "0.0.0.0"
+      INDEXER_PORT: "9000"
       RUST_LOG: "info,stellar_indexer=debug"
     depends_on:
       postgres:
@@ -55,6 +110,12 @@ services:
     volumes:
       - ./services/indexer/src:/app/src
     command: cargo run --bin stellar-indexer
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # Redis Cache
   redis:

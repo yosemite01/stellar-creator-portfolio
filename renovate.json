@@ -9,7 +9,7 @@
     "group:recommended"
   ],
   "timezone": "Africa/Lagos",
-  "schedule": ["every weekend"],
+  "schedule": ["before 6am on Monday"],
   "prHourlyLimit": 5,
   "prConcurrentLimit": 15,
   "labels": ["dependencies"],
@@ -29,9 +29,9 @@
       "platformAutomerge": true
     },
     {
-      "description": "Auto-merge patch updates for production deps",
+      "description": "Auto-merge patch and minor updates for production deps if CI passes",
       "matchDepTypes": ["dependencies"],
-      "matchUpdateTypes": ["patch"],
+      "matchUpdateTypes": ["patch", "minor"],
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
@@ -42,9 +42,10 @@
       "minimumReleaseAge": "3 days"
     },
     {
-      "description": "Group all Stellar SDK packages",
-      "matchPackagePatterns": ["^@stellar/", "^stellar-"],
-      "groupName": "Stellar SDK"
+      "description": "Group and label Stellar/Soroban packages for smart-contract review",
+      "matchPackagePatterns": ["^@stellar/", "^stellar-", "soroban"],
+      "groupName": "Stellar SDK",
+      "labels": ["dependencies", "smart-contract"]
     },
     {
       "description": "Group all Radix UI packages",
@@ -55,6 +56,11 @@
       "description": "Group all React Native / Expo packages",
       "matchPackagePatterns": ["^react-native", "^expo", "^@expo/"],
       "groupName": "React Native & Expo"
+    },
+    {
+      "description": "Group all OpenTelemetry packages",
+      "matchPackagePatterns": ["^@opentelemetry/", "^opentelemetry"],
+      "groupName": "OpenTelemetry"
     },
     {
       "description": "Group TypeScript ESLint",

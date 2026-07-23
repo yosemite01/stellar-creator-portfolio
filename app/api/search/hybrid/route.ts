@@ -16,15 +16,21 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { hybridSearch, checkClusterHealth } from '@/backend/services/search';
+import { hybridSearch, bountyViewSearch, checkClusterHealth } from '@/backend/services/search';
 
 export const runtime = 'nodejs';
 
+/**
+ * POST /api/search/hybrid
+ *
+ * type = "creator" (default) — Elasticsearch + semantic RRF over creator profiles.
+ * type = "bounty"            — Postgres materialized-view search over bounty_search_view
+ *                              (issue #744). Bypasses the write DB entirely.
+ */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Validate required fields
     if (!body?.query || typeof body.query !== 'string') {
       return NextResponse.json(
         { error: 'Missing or invalid "query" field' },
@@ -33,6 +39,29 @@ export async function POST(req: NextRequest) {
     }
 
     const limit = Math.min(parseInt(body.limit ?? '10'), 50);
+    const searchType: string = body.type ?? 'creator';
+
+    // Route bounty searches to the read-optimised materialized view.
+    if (searchType === 'bounty') {
+      const results = await bountyViewSearch({
+        query: body.query.trim(),
+        limit,
+        minBudget: body.minBudget,
+        maxBudget: body.maxBudget,
+        status: body.status,
+        tags: Array.isArray(body.tags) ? body.tags : undefined,
+      });
+
+      return NextResponse.json({
+        results,
+        meta: {
+          query: body.query,
+          limit,
+          count: results.length,
+          engine: 'bounty-search-view-v1',
+        },
+      });
+    }
 
     const results = await hybridSearch({
       query: body.query.trim(),
@@ -56,7 +85,6 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const message = (err as Error).message ?? 'Unknown error';
 
-    // Degrade gracefully if Elasticsearch is unavailable
     if (message.includes('ECONNREFUSED') || message.includes('ENOTFOUND')) {
       return NextResponse.json(
         {

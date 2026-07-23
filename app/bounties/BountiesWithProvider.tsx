@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import type { Bounty } from '@/lib/creators-data';
+import type { Bounty } from '@/lib/services/creators-data';
 
 // Dynamic import for tRPC provider
 const TRPCProvider = dynamic(

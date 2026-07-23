@@ -14,6 +14,12 @@ export type RootStackParamList = {
   ImageEditor: { imageUri: string; imageWidth?: number; imageHeight?: number; fileSize?: number; mode?: string };
   Messaging: { conversationId?: string; recipientName?: string };
   BiometricAuth: undefined;
+  StreamHost: { roomId: string; signalingServerUrl?: string };
+  StreamViewer: { roomId: string; creatorName?: string; signalingServerUrl?: string };
+  NotificationSettings: undefined;
+  BountyDetail: { bountyId: string };
+  EmailVerification: { token?: string };
+  PaymentComplete: { paymentId?: string; status?: string };
 };
 
 export type MainTabParamList = {
@@ -87,6 +93,25 @@ export interface SessionRecord {
   lastUsed: number;
 }
 
+// ─── Sealed Sender ────────────────────────────────────────────────────────────
+
+export interface SealedSenderMessage {
+  id: string;
+  envelope: Uint8Array;
+  signature: Uint8Array;
+  messageType: 1 | 3;
+  timestamp: number;
+}
+
+// ─── Delivery Receipts ───────────────────────────────────────────────────────
+
+export interface DeliveryReceipt {
+  messageId: string;
+  recipientId: string;
+  status: 'delivered' | 'read';
+  timestamp: number;
+}
+
 // ─── Upscaling ────────────────────────────────────────────────────────────────
 
 export interface UpscaleOptions {
@@ -142,4 +167,20 @@ export interface FocusSession {
   phase: 'focus' | 'short-break' | 'long-break';
   durationSeconds: number;
   completedAt: string; // ISO 8601
+}
+
+// ─── Offline / Network ────────────────────────────────────────────────────────
+
+export type NetworkState = 'unknown' | 'online' | 'offline';
+export type SyncStatus = 'synced' | 'syncing' | 'error';
+
+export interface QueuedOperation {
+  id: string;
+  type: 'create' | 'update' | 'delete';
+  endpoint: string;
+  payload?: Record<string, unknown>;
+  retries: number;
+  createdAt: string;
+  /** Epoch ms — op is not retried until Date.now() >= nextRetryAt */
+  nextRetryAt: number;
 }

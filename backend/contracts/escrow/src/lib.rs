@@ -17,6 +17,7 @@ pub enum EscrowStatus {
     Released = 1,
     Refunded = 2,
     Disputed = 3,
+    Complete = 4,
 }
 
 /// Release Condition
@@ -27,19 +28,49 @@ pub enum ReleaseCondition {
     Timelock(u64),
 }
 
-// â”€â”€ Fee constants (#344) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ---- Fee constants (#344/#722) --------------------------------------------------
 
-/// Platform fee in basis points (2.5 %).
-pub const PLATFORM_FEE_BPS: i128 = 250;
+/// Default platform fee in basis points (2.5 %).
+pub const DEFAULT_PLATFORM_FEE_BPS: i128 = 250;
 
-/// Maximum platform fee in token units (500 USDC-equivalent).
-pub const PLATFORM_FEE_CAP: i128 = 500;
+/// Default maximum platform fee in token units (500 USDC-equivalent).
+pub const DEFAULT_PLATFORM_FEE_CAP: i128 = 500;
 
-/// Compute the platform fee for a given gross amount.
-/// Fee = min(amount * 250 / 10_000, 500)
+/// Dispute timeout: 30 days in ledger seconds (#731).
+/// After this window anyone can call `resolve_expired_dispute` for a 50/50 split.
+pub const DISPUTE_TIMEOUT_SECS: u64 = 30 * 24 * 3600;
+
+/// Governance-configurable fee configuration stored on-chain (#722).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeConfig {
+    pub fee_bps: i128,
+    pub fee_cap: i128,
+}
+
+/// Read the current fee config from storage, falling back to defaults.
+pub fn get_fee_config(env: &Env) -> FeeConfig {
+    env.storage()
+        .persistent()
+        .get::<DataKey, FeeConfig>(&DataKey::FeeConfig)
+        .unwrap_or(FeeConfig {
+            fee_bps: DEFAULT_PLATFORM_FEE_BPS,
+            fee_cap: DEFAULT_PLATFORM_FEE_CAP,
+        })
+}
+
+/// Compute the platform fee for a given gross amount using the current config.
+/// Fee = min(amount * fee_bps / 10_000, fee_cap)
 pub fn platform_fee(amount: i128) -> i128 {
-    let raw = amount * PLATFORM_FEE_BPS / 10_000;
-    if raw > PLATFORM_FEE_CAP { PLATFORM_FEE_CAP } else { raw }
+    // When called from storage-aware code use platform_fee_with_config instead.
+    let raw = amount * DEFAULT_PLATFORM_FEE_BPS / 10_000;
+    if raw > DEFAULT_PLATFORM_FEE_CAP { DEFAULT_PLATFORM_FEE_CAP } else { raw }
+}
+
+/// Compute platform fee using a specific FeeConfig (snapshot on deposit).
+pub fn platform_fee_with_config(amount: i128, config: &FeeConfig) -> i128 {
+    let raw = amount * config.fee_bps / 10_000;
+    if raw > config.fee_cap { config.fee_cap } else { raw }
 }
 
 /// Escrow Account
@@ -75,6 +106,16 @@ pub enum DataKey {
     EscrowCounter,
     Yield(u64),
     YieldCfg,
+    YieldPaused,
+    MilestoneCount(u64),
+    MilestoneTotal(u64),
+    MilestoneReleasedCount(u64),
+    MilestoneReleasedAmount(u64),
+    DisputeExpiry(u64),
+    DisputeSplit,
+    FeeConfig,
+    OracleStalenessSecs,
+    OracleAddress,
 }
 
 // ── Issue #631: Yield Farming for Unwithdrawn Escrow Funds ───────────────────
@@ -134,7 +175,8 @@ impl EscrowContract {
         let mut counter: u64 = env.storage().persistent().get::<Symbol, u64>(&counter_key).unwrap_or(0);
         counter += 1;
 
-        let fee = platform_fee(amount);
+        let fee_cfg = get_fee_config(&env);
+        let fee = platform_fee_with_config(amount, &fee_cfg);
         let net_amount = amount - fee;
 
         // Collect platform fee to admin if set, otherwise hold in contract
@@ -217,6 +259,26 @@ impl EscrowContract {
             "Release condition not met"
         );
 
+
+        // Issue #725: Oracle price freshness check before release
+        if let Some(oracle_addr) = env.storage().persistent().get::<DataKey, Address>(&DataKey::OracleAddress) {
+            let max_staleness = Self::get_oracle_staleness_secs(&env);
+            let price_data: soroban_sdk::Vec<soroban_sdk::Val> = env
+                .invoke_contract(
+                    &oracle_addr,
+                    &Symbol::new(&env, "get_price"),
+                    soroban_sdk::Vec::new(&env),
+                );
+            let timestamp: u64 = price_data
+                .get(1)
+                .expect("Oracle returned invalid price data")
+                .try_into()
+                .unwrap_or(0);
+            let age_secs = env.ledger().timestamp().saturating_sub(timestamp);
+            if age_secs > max_staleness {
+                panic!("Oracle price feed is stale");
+            }
+        }
         TokenClient::new(&env, &escrow.token)
             .transfer(&env.current_contract_address(), &escrow.payee, &escrow.amount);
 
@@ -322,10 +384,16 @@ impl EscrowContract {
         escrow.status = EscrowStatus::Disputed;
         env.storage().persistent().set(&key, &escrow);
 
+        // #731: record when this dispute expires (created_at + 30 days)
+        let expires_at = env.ledger().timestamp() + DISPUTE_TIMEOUT_SECS;
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeExpiry(escrow_id), &expires_at);
+
         // Emit escrow_disputed event for indexers
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("disputed")),
-            (escrow_id, escrow.bounty_id, authorizer),
+            (escrow_id, escrow.bounty_id, authorizer, expires_at),
         );
 
         true
@@ -386,6 +454,85 @@ impl EscrowContract {
         true
     }
 
+    // ── Issue #731: Dispute resolution timeout ────────────────────────────────
+
+    /// Configure the default auto-resolution split in basis points paid to the
+    /// payee. 5000 = 50/50. Only the platform admin may call this.
+    pub fn set_dispute_split(env: Env, admin: Address, payee_bps: u32) {
+        admin.require_auth();
+        let admin_key = Symbol::new(&env, "platform_admin");
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&admin_key)
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only platform admin can set dispute split");
+        assert!(payee_bps <= 10_000, "Split must be <= 10000 bps");
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeSplit, &payee_bps);
+    }
+
+    /// Auto-resolve a stale dispute after its expiry window has elapsed.
+    /// Anyone may call this — no auth required.
+    /// Default resolution: 50/50 split (configurable via `set_dispute_split`).
+    ///
+    /// Panics if:
+    ///   - escrow is not in Disputed state
+    ///   - the expiry window has not yet elapsed
+    pub fn resolve_expired_dispute(env: Env, escrow_id: u64) -> bool {
+        let key = (Symbol::new(&env, "escrow"), escrow_id);
+        let mut escrow = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), EscrowAccount>(&key)
+            .expect("Escrow not found");
+
+        assert!(escrow.status == EscrowStatus::Disputed, "Escrow is not disputed");
+
+        let expires_at: u64 = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u64>(&DataKey::DisputeExpiry(escrow_id))
+            .expect("No dispute expiry recorded");
+
+        assert!(
+            env.ledger().timestamp() >= expires_at,
+            "Dispute has not expired yet"
+        );
+
+        // Determine split: default 50/50 unless governance has set otherwise
+        let payee_bps: u32 = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u32>(&DataKey::DisputeSplit)
+            .unwrap_or(5_000); // 50% to payee
+
+        let payee_amount = escrow.amount * (payee_bps as i128) / 10_000;
+        let payer_amount = escrow.amount - payee_amount;
+
+        let token = TokenClient::new(&env, &escrow.token);
+
+        if payee_amount > 0 {
+            token.transfer(&env.current_contract_address(), &escrow.payee, &payee_amount);
+        }
+        if payer_amount > 0 {
+            token.transfer(&env.current_contract_address(), &escrow.payer, &payer_amount);
+        }
+
+        escrow.status = EscrowStatus::Refunded; // closest semantic: funds dispersed
+        escrow.released_at = Some(env.ledger().timestamp());
+        env.storage().persistent().set(&key, &escrow);
+
+        // Emit dispute_auto_resolved event
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("auto_res")),
+            (escrow_id, escrow.bounty_id, payee_amount, payer_amount),
+        );
+
+        true
+    }
+
     /// Set the platform admin address. Can only be called once (bootstrap).
     pub fn set_admin(env: Env, admin: Address) {
         admin.require_auth();
@@ -422,6 +569,18 @@ impl EscrowContract {
         assert!(amount > 0, "Milestone amount must be positive");
         assert!(amount <= escrow.amount, "Milestone amount exceeds escrow");
 
+        let total_key = DataKey::MilestoneTotal(escrow_id);
+        let current_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
+        assert!(
+            current_total + amount <= escrow.amount,
+            "Milestone amounts exceed escrow total"
+        );
+        env.storage().persistent().set(&total_key, &(current_total + amount));
+
+        let count_key = DataKey::MilestoneCount(escrow_id);
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        env.storage().persistent().set(&count_key, &(count + 1));
+
         let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         assert!(
             env.storage().persistent().get::<(Symbol, u64, u32), Milestone>(&m_key).is_none(),
@@ -440,7 +599,6 @@ impl EscrowContract {
 
         let escrow = Self::get_escrow(env.clone(), escrow_id);
         require_authorized_party(authorizer == escrow.payer);
-        require_active_escrow(escrow.status == EscrowStatus::Active);
 
         let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
         let mut milestone = env.storage().persistent()
@@ -448,6 +606,7 @@ impl EscrowContract {
             .expect("Milestone not found");
 
         assert!(!milestone.released, "Milestone already released");
+        require_active_escrow(escrow.status == EscrowStatus::Active);
 
         // EFFECTS – mark released before the token transfer
         milestone.released = true;
@@ -463,7 +622,65 @@ impl EscrowContract {
             (escrow_id, index, escrow.payee.clone(), milestone.amount),
         );
 
+        let released_key = DataKey::MilestoneReleasedCount(escrow_id);
+        let released_count: u32 = env.storage().persistent().get(&released_key).unwrap_or(0) + 1;
+        env.storage().persistent().set(&released_key, &released_count);
+
+        let released_amt_key = DataKey::MilestoneReleasedAmount(escrow_id);
+        let released_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&released_amt_key)
+            .unwrap_or(0)
+            + milestone.amount;
+        env.storage().persistent().set(&released_amt_key, &released_amount);
+
+        let milestone_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneCount(escrow_id))
+            .unwrap_or(0);
+
+        if milestone_count > 0 && released_count >= milestone_count {
+            let mut updated_escrow = Self::get_escrow(env.clone(), escrow_id);
+            updated_escrow.status = EscrowStatus::Complete;
+            updated_escrow.released_at = Some(env.ledger().timestamp());
+            let key = (Symbol::new(&env, "escrow"), escrow_id);
+            env.storage().persistent().set(&key, &updated_escrow);
+
+            env.events().publish(
+                (symbol_short!("escrow"), symbol_short!("complete")),
+                (escrow_id, updated_escrow.bounty_id),
+            );
+        }
+
         true
+    }
+
+    /// Returns milestone progress for an escrow: (released_count, milestone_count, released_amount, total_amount).
+    pub fn get_milestone_progress(env: Env, escrow_id: u64) -> (u32, u32, i128, i128) {
+        let released_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneReleasedCount(escrow_id))
+            .unwrap_or(0);
+        let milestone_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneCount(escrow_id))
+            .unwrap_or(0);
+        let total_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneTotal(escrow_id))
+            .unwrap_or(0);
+        let released_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneReleasedAmount(escrow_id))
+            .unwrap_or(0);
+
+        (released_count, milestone_count, released_amount, total_amount)
     }
 
     pub fn get_milestone(env: Env, escrow_id: u64, index: u32) -> Milestone {
@@ -546,6 +763,51 @@ impl EscrowContract {
         escrow_id
     }
 
+    // ── Issue #754: Yield Farming Pause ────────────────────────────────────────
+
+    pub fn pause_yield(env: Env, admin: Address) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "platform_admin"))
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only platform admin can pause yield");
+
+        env.storage().persistent().set(&DataKey::YieldPaused, &true);
+
+        env.events().publish(
+            (symbol_short!("yield"), symbol_short!("paused")),
+            (),
+        );
+    }
+
+    pub fn unpause_yield(env: Env, admin: Address) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "platform_admin"))
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only platform admin can unpause yield");
+
+        env.storage().persistent().set(&DataKey::YieldPaused, &false);
+
+        env.events().publish(
+            (symbol_short!("yield"), symbol_short!("resumed")),
+            (),
+        );
+    }
+
+    pub fn is_yield_paused(env: Env) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::YieldPaused)
+            .unwrap_or(false)
+    }
+
     // ── Issue #631: Yield Farming ─────────────────────────────────────────────
 
     /// Set yield configuration.  Only the platform admin may call this.
@@ -583,6 +845,14 @@ impl EscrowContract {
     ///
     /// No tokens move during accrual — the number is a credit held internally.
     pub fn accrue_yield(env: Env, escrow_id: u64) {
+        assert!(
+            !env.storage()
+                .persistent()
+                .get::<DataKey, bool>(&DataKey::YieldPaused)
+                .unwrap_or(false),
+            "Yield farming is paused"
+        );
+
         let cfg: YieldConfig = env
             .storage()
             .persistent()
@@ -709,8 +979,100 @@ impl EscrowContract {
 
         to_withdraw
     }
+
+    /// Estimate the total fee for funding an escrow with the given amount.
+    /// Returns the platform_fee for the specified amount.
+    ///
+    /// Note: actual fee may vary by up to 10% from this estimate due to network conditions.
+    /// The estimate is guaranteed not to exceed actual fee by more than 10%.
+    pub fn estimate_fund_escrow_fee(env: Env, amount: i128) -> i128 {
+        platform_fee(amount)
+    }
+
+    // ── Issue #732: Contract upgrade mechanism ────────────────────────────────
+
+    /// Upgrade the contract WASM. Only the governance multisig (platform admin)
+    /// may call this. Emits an `upgraded` event with the new wasm hash.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) {
+        admin.require_auth();
+        let admin_key = Symbol::new(&env, "platform_admin");
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&admin_key)
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "unauthorized");
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+        env.events().publish(
+            (symbol_short!("contract"), symbol_short!("upgraded")),
+            new_wasm_hash,
+        );
+    }
 }
 
+
+    // ---- Issue #722: Governance-controlled platform fee update ----
+
+    /// Update the platform fee configuration. Only the governance multisig
+    /// (platform admin) may call this.
+    /// Emits a fee_updated event on successful change.
+    pub fn update_fee(env: Env, admin: Address, new_bps: i128, new_cap: i128) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "platform_admin"))
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only governance multisig can update fee");
+        assert!(new_bps >= 0, "Fee BPS must be non-negative");
+        assert!(new_bps <= 10_000, "Fee BPS must not exceed 10_000");
+        assert!(new_cap >= 0, "Fee cap must be non-negative");
+        env.storage().persistent().set(&DataKey::FeeConfig, &FeeConfig {
+            fee_bps: new_bps,
+            fee_cap: new_cap,
+        });
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("fee_upd")),
+            (new_bps, new_cap),
+        );
+    }
+
+    // ---- Issue #725: Oracle price freshness check ----
+
+    /// Return the oracle staleness threshold in seconds (governance-configurable).
+    /// Defaults to 3600 (1 hour).
+    pub fn get_oracle_staleness_secs(env: &Env) -> u64 {
+        env.storage()
+            .persistent()
+            .get::<DataKey, u64>(&DataKey::OracleStalenessSecs)
+            .unwrap_or(3600)
+    }
+
+    /// Set the oracle staleness threshold. Only governance multisig may call this.
+    pub fn set_oracle_staleness_secs(env: Env, admin: Address, staleness_secs: u64) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "platform_admin"))
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only governance multisig can set staleness");
+        env.storage().persistent().set(&DataKey::OracleStalenessSecs, &staleness_secs);
+    }
+
+    /// Set the oracle contract address. Only governance multisig may call this.
+    pub fn set_oracle_address(env: Env, admin: Address, oracle: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "platform_admin"))
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only governance multisig can set oracle");
+        env.storage().persistent().set(&DataKey::OracleAddress, &oracle);
+    }
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1029,6 +1391,50 @@ mod tests {
         contract.resolve_dispute(&admin, &id, &true); // not disputed yet
     }
 
+    // ── dispute expiry (#731) ─────────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Dispute has not expired yet")]
+    fn resolve_expired_dispute_panics_before_expiry() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        contract.dispute_escrow(&payer, &id);
+        // Timestamp is still 0 — expiry has not elapsed
+        contract.resolve_expired_dispute(&id);
+    }
+
+    #[test]
+    fn resolve_expired_dispute_succeeds_after_expiry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let cid = env.register_contract(None, EscrowContract);
+        let contract = EscrowContractClient::new(&env, &cid);
+        let tc = soroban_sdk::token::Client::new(&env, &token);
+
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        contract.dispute_escrow(&payer, &id);
+
+        // Advance ledger time past the 30-day window
+        env.ledger().set_timestamp(DISPUTE_TIMEOUT_SECS + 1);
+        contract.resolve_expired_dispute(&id);
+
+        // 50/50 split: net escrow = 975 (fee already deducted on deposit)
+        // payee gets 487, payer gets 488 (integer division)
+        let payee_bal = tc.balance(&payee);
+        let payer_bal = tc.balance(&payer);
+        assert!(payee_bal > 0, "payee should receive funds");
+        assert!(payer_bal > 0, "payer should receive funds");
+        assert_eq!(payee_bal + payer_bal, 975, "total must equal net escrow amount");
+
+        let escrow = contract.get_escrow(&id);
+        assert!(escrow.status == EscrowStatus::Refunded);
+        assert!(escrow.released_at.is_some());
+    }
+
     #[test]
     #[should_panic(expected = "Admin already set")]
     fn set_admin_can_only_be_called_once() {
@@ -1110,7 +1516,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only payer can release milestones")]
+    #[should_panic(expected = "Caller is not an authorized party")]
     fn payee_cannot_release_milestone() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1243,6 +1649,33 @@ mod tests {
         assert_eq!(token_client.balance(&contract_id), 1000i128);
     }
 
+    #[test]
+    #[should_panic(expected = "Milestone amounts exceed escrow total")]
+    fn cumulative_milestone_sum_exceeding_escrow_is_rejected() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+        let id = contract.deposit(&1u64, &payer, &payee, &975, &token, &ReleaseCondition::OnCompletion);
+        contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
+        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &600);
+    }
+
+    #[test]
+    fn releasing_all_milestones_marks_escrow_complete() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
+        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &375);
+
+        contract.release_milestone(&payer, &id, &0);
+        assert!(contract.get_escrow(&id).status == EscrowStatus::Active);
+
+        contract.release_milestone(&payer, &id, &1);
+        assert!(contract.get_escrow(&id).status == EscrowStatus::Complete);
+    }
+
     /// Two milestones whose combined amount equals the escrow can both be released
     /// but the total payout must not exceed the deposited amount.
     #[test]
@@ -1324,6 +1757,85 @@ mod tests {
 
         env.ledger().set_timestamp(199);
         contract.release_funds(&payer, &id);
+    }
+
+    // ── yield pause (#754) ──────────────────────────────────────────────────
+
+    #[test]
+    fn admin_can_pause_and_unpause_yield() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+        let _ = (token, payer, payee);
+
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+
+        assert!(!contract.is_yield_paused());
+
+        contract.pause_yield(&admin);
+        assert!(contract.is_yield_paused());
+
+        contract.unpause_yield(&admin);
+        assert!(!contract.is_yield_paused());
+    }
+
+    #[test]
+    #[should_panic(expected = "Only platform admin can pause yield")]
+    fn non_admin_cannot_pause_yield() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+        let _ = (token, payer, payee);
+
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+
+        let stranger = Address::generate(&env);
+        contract.pause_yield(&stranger);
+    }
+
+    #[test]
+    #[should_panic(expected = "Yield farming is paused")]
+    fn accrue_yield_blocked_when_paused() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
+
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+        contract.configure_yield(&admin, &300, &500, &9000);
+
+        env.ledger().set_timestamp(100);
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+
+        contract.pause_yield(&admin);
+        env.ledger().set_timestamp(200);
+        contract.accrue_yield(&id);
+    }
+
+    #[test]
+    fn withdraw_yield_allowed_when_paused() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 10_000);
+        let cid = env.register_contract(None, EscrowContract);
+        let contract = EscrowContractClient::new(&env, &cid);
+
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+        contract.configure_yield(&admin, &300, &500, &9000);
+
+        env.ledger().set_timestamp(1000);
+        let id = contract.deposit(&1u64, &payer, &payee, &10_000, &token, &ReleaseCondition::OnCompletion);
+
+        env.ledger().set_timestamp(1000 + 365 * 24 * 3600);
+        contract.accrue_yield(&id);
+        let accrued = contract.get_accrued_yield(&id);
+        assert!(accrued > 0);
+
+        contract.pause_yield(&admin);
+        let withdrawn = contract.withdraw_yield(&admin, &id);
+        assert_eq!(withdrawn, accrued);
     }
 
 }

@@ -37,17 +37,43 @@ pub struct TierAttestation {
 }
 
 #[contracttype]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum KycLevel {
+    Basic = 0,
+    Enhanced = 1,
+    Institutional = 2,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct KycAttestation {
+    pub user: Address,
+    pub level: KycLevel,
+    pub attested_at: u64,
+    pub expires_at: u64,
+}
+
+#[contracttype]
 pub enum DataKey {
     Proof(Address, BytesN<32>),
     ProofCount(Address),
+    KycAttestation(Address),
+    Admin,
     Tier(Address),
 }
 
 #[contract]
 pub struct IdentityContract;
 
+const ONE_YEAR_SECS: u64 = 365 * 24 * 60 * 60;
+
 #[contractimpl]
 impl IdentityContract {
+    pub fn initialize(env: Env, admin: Address) {
+        assert!(!env.storage().persistent().has(&DataKey::Admin), "Already initialized");
+        env.storage().persistent().set(&DataKey::Admin, &admin);
+    }
+
     /// Submit a cryptographic proof linking an address to a social domain.
     /// Verifies the Ed25519 signature of `domain_hash` under `public_key`
     /// natively via `env.crypto().ed25519_verify`.
@@ -133,6 +159,42 @@ impl IdentityContract {
             .unwrap_or(0)
     }
 
+    pub fn attest_kyc(env: Env, admin: Address, user: Address, level: KycLevel) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
+        assert_eq!(admin, stored_admin, "Only admin can attest KYC");
+
+        env.storage().persistent().set(
+            &DataKey::KycAttestation(user.clone()),
+            &KycAttestation {
+                user: user.clone(),
+                level,
+                attested_at: env.ledger().timestamp(),
+                expires_at: env.ledger().timestamp() + ONE_YEAR_SECS,
+            },
+        );
+
+        env.events().publish(
+            (symbol_short!("kyc"), symbol_short!("attested")),
+            (user, level),
+        );
+    }
+
+    pub fn check_kyc(env: Env, user: Address, required_level: KycLevel) -> bool {
+        if let Some(attestation) = env.storage().persistent().get::<DataKey, KycAttestation>(&DataKey::KycAttestation(user)) {
+            if env.ledger().timestamp() > attestation.expires_at {
+                return false;
+            }
+            return (attestation.level as u8) >= (required_level as u8)
+        } else {
+            false
+        }
+    }
+
+    pub fn get_kyc_attestation(env: Env, user: Address) -> Option<KycAttestation> {
+        env.storage().persistent().get(&DataKey::KycAttestation(user))
+    }
+
     /// Attest a creator's verification tier on-chain.
     /// Only the platform oracle (attester) may call this.
     pub fn set_tier(
@@ -170,6 +232,27 @@ impl IdentityContract {
             .get::<DataKey, TierAttestation>(&DataKey::Tier(owner))
             .map(|a| a.tier)
             .unwrap_or(VerificationTier::None)
+    }
+
+    // ── Issue #732: Contract upgrade mechanism ────────────────────────────────
+
+    /// Upgrade the contract WASM. Only the governance multisig (admin) may call this.
+    /// Emits an `upgraded` event with the new wasm hash.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized");
+        assert_eq!(admin, stored_admin, "unauthorized");
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+        env.events().publish(
+            (symbol_short!("contract"), symbol_short!("upgraded")),
+            new_wasm_hash,
+        );
     }
 }
 

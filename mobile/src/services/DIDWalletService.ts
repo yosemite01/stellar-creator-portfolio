@@ -488,10 +488,103 @@ export class DIDWallet {
   }
 }
 
+// ─── Key Backup ──────────────────────────────────────────────────────────────
+
+export interface EncryptedKeyBackup {
+  version: '1.0';
+  ownerDID: string;
+  encryptedPayload: string; // base64 AES-256-GCM encrypted
+  iv: string; // base64
+  salt: string; // base64
+  createdAt: string; // ISO 8601
+}
+
+export class KeyBackupService {
+  private static readonly PBKDF2_ITERATIONS = 100_000;
+  private static readonly KEY_LENGTH = 256;
+
+  static async createBackup(
+    ownerDID: string,
+    keyMaterial: Record<string, string>,
+    passphrase: string,
+  ): Promise<EncryptedKeyBackup> {
+    const encoder = new TextEncoder();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+
+    const baseKey = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(passphrase),
+      'PBKDF2',
+      false,
+      ['deriveKey'],
+    );
+
+    const derivedKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: this.PBKDF2_ITERATIONS, hash: 'SHA-256' },
+      baseKey,
+      { name: 'AES-GCM', length: this.KEY_LENGTH },
+      false,
+      ['encrypt'],
+    );
+
+    const plaintext = encoder.encode(JSON.stringify(keyMaterial));
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      derivedKey,
+      plaintext,
+    );
+
+    return {
+      version: '1.0',
+      ownerDID,
+      encryptedPayload: Buffer.from(ciphertext).toString('base64'),
+      iv: Buffer.from(iv).toString('base64'),
+      salt: Buffer.from(salt).toString('base64'),
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  static async restoreBackup(
+    backup: EncryptedKeyBackup,
+    passphrase: string,
+  ): Promise<Record<string, string>> {
+    const encoder = new TextEncoder();
+    const salt = new Uint8Array(Buffer.from(backup.salt, 'base64'));
+    const iv = new Uint8Array(Buffer.from(backup.iv, 'base64'));
+    const ciphertext = Buffer.from(backup.encryptedPayload, 'base64');
+
+    const baseKey = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(passphrase),
+      'PBKDF2',
+      false,
+      ['deriveKey'],
+    );
+
+    const derivedKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: this.PBKDF2_ITERATIONS, hash: 'SHA-256' },
+      baseKey,
+      { name: 'AES-GCM', length: this.KEY_LENGTH },
+      false,
+      ['decrypt'],
+    );
+
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      derivedKey,
+      ciphertext,
+    );
+
+    return JSON.parse(new TextDecoder().decode(plaintext));
+  }
+}
+
 // ─── DIDWalletService ─────────────────────────────────────────────────────────
 
 /**
  * Top-level service that manages multiple DID wallets keyed by owner DID.
+ * Supports encrypted key backup to iCloud / Google Drive.
  */
 export class DIDWalletService {
   private wallets: Map<string, DIDWallet> = new Map();
@@ -523,5 +616,28 @@ export class DIDWalletService {
   /** Total number of managed wallets. */
   get walletCount(): number {
     return this.wallets.size;
+  }
+
+  /**
+   * Create an encrypted backup of all Signal protocol keys for a wallet.
+   * The backup is encrypted with the user's passphrase using AES-256-GCM
+   * with PBKDF2 key derivation — safe to store in iCloud or Google Drive.
+   */
+  async createKeyBackup(
+    ownerDID: string,
+    keyMaterial: Record<string, string>,
+    passphrase: string,
+  ): Promise<EncryptedKeyBackup> {
+    return KeyBackupService.createBackup(ownerDID, keyMaterial, passphrase);
+  }
+
+  /**
+   * Restore Signal protocol keys from an encrypted backup.
+   */
+  async restoreKeyBackup(
+    backup: EncryptedKeyBackup,
+    passphrase: string,
+  ): Promise<Record<string, string>> {
+    return KeyBackupService.restoreBackup(backup, passphrase);
   }
 }

@@ -3,17 +3,19 @@
 import { useRouter } from 'next/navigation';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
-import { CreatorCard } from '@/components/creator-card';
+import { CreatorCard } from '@/components/cards/creator-card';
 import { Button } from '@/components/ui/button';
 import { ArrowRight, Sparkles, Users, Target } from 'lucide-react';
-import { creators } from '@/lib/creators-data';
+import { trpc } from '@/lib/trpc-client';
+import { creators } from '@/lib/services/creators-data';
 import { TestimonialsSection } from '@/components/testimonials';
 import { FeaturedBounties } from '@/components/featured-bounties';
 import { AnimatedCounter } from '@/components/animated-counter';
+import { CardSkeletonGrid } from '@/components/skeletons/card-skeleton';
 
 export default function Home() {
   const router = useRouter();
-  const featuredCreators = creators.slice(0, 3);
+  const featuredQuery = trpc.creators.featured.useQuery({ limit: 3 });
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -93,14 +95,18 @@ export default function Home() {
             </div>
 
             {/* Creators Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-              {featuredCreators.map((creator) => (
-                <CreatorCard key={creator.id} creator={creator} />
-              ))}
-            </div>
+            {featuredQuery.isLoading ? (
+              <CardSkeletonGrid count={3} />
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+                {(featuredQuery.data ?? []).map((creator) => (
+                  <CreatorCard key={creator.id} creator={creator as any} />
+                ))}
+              </div>
+            )}
 
             {/* View All CTA */}
-            <div className="text-center">
+            <div className="text-center mt-12">
               <Button size="lg" variant="outline" className="group" onClick={() => router.push('/creators')}>
                 View All Creators
                 <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />

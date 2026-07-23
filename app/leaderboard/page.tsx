@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { LeaderboardClient, type CreatorLeaderboardItem } from "@/components/leaderboard-client";
 import { getServerSession } from "next-auth/next";
 
+export const dynamic = 'force-dynamic';
 export const revalidate = 3600; // Refreshed hourly with Cache-Control: max-age=3600
 
 export default async function LeaderboardPage() {

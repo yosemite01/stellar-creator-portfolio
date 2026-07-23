@@ -23,7 +23,7 @@ vi.mock('@/lib/api-client', async (importOriginal) => {
 });
 
 import BountiesPage from './page';
-import { bounties } from '@/lib/creators-data';
+import { bounties } from '@/lib/services/creators-data';
 
 describe('BountiesPage', () => {
   it('renders all bounties by default', () => {

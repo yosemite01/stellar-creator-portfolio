@@ -560,3 +560,34 @@ export const getBountiesByDifficulty = (difficulty: string): Bounty[] => {
 export function getBountyById(id: string): Bounty | undefined {
   return bounties.find((b) => b.id === id);
 }
+
+export type MilestoneStatus = 'pending' | 'in-review' | 'accepted' | 'released' | 'rejected';
+
+export interface MilestoneComment {
+  id: string;
+  author: 'freelancer' | 'client';
+  text: string;
+  createdAt: string;
+}
+
+export interface Milestone {
+  id: string;
+  title: string;
+  description: string;
+  amount: number;
+  status: MilestoneStatus;
+  dueDate?: string;
+  comments: MilestoneComment[];
+}
+
+export const formatAvailability = (availability?: Creator['availability']): string => {
+  switch (availability) {
+    case 'available': return 'Available';
+    case 'limited': return 'Limited Availability';
+    case 'unavailable': return 'Unavailable';
+    default: return 'Unknown';
+  }
+};
+
+export const formatBudget = (budget: number, currency = 'USD'): string =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(budget);

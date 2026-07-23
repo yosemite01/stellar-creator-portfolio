@@ -4,6 +4,7 @@ import {
   submitApplication,
   getApplicantCountsForBounties,
 } from '@/lib/services/bounty-service'
+import { getReviewsForCreatorsBatch } from '@/lib/services/review-service'
 
 describe('bounty applications performance', () => {
   beforeEach(() => {
@@ -28,5 +29,23 @@ describe('bounty applications performance', () => {
     const ms = performance.now() - t0
     expect(counts['bounty-1']).toBe(n)
     expect(ms).toBeLessThan(200)
+  })
+})
+
+describe('batch reputation query count', () => {
+  it('executes a single batch call regardless of input size', () => {
+    const creatorIds = Array.from({ length: 100 }, (_, i) => `creator-${i}`)
+
+    const t0 = performance.now()
+    const results = getReviewsForCreatorsBatch(creatorIds)
+    const ms = performance.now() - t0
+
+    expect(Object.keys(results)).toHaveLength(100)
+    for (const id of creatorIds) {
+      expect(results[id]).toBeDefined()
+      expect(results[id].reviews).toBeInstanceOf(Array)
+      expect(typeof results[id].total).toBe('number')
+    }
+    expect(ms).toBeLessThan(50)
   })
 })

@@ -1,62 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { Star, Loader, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { z } from 'zod';
-
-const reviewSchema = z.object({
-  rating: z.number().min(1).max(5),
-  text: z.string().min(20, 'Review must be at least 20 characters').max(500),
-});
-
-type ReviewFormData = z.infer<typeof reviewSchema>;
-
-interface ReviewFormProps {
-  creatorId: string;
-  onClose: () => void;
-  onSubmit: (review: any) => void;
-}
-
-export function ReviewForm({ creatorId, onClose, onSubmit }: ReviewFormProps) {
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [formData, setFormData] = useState<ReviewFormData>({
-    rating: 5,
-    text: '',
-  });
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setIsLoading(true);
-
-    try {
-      const validated = reviewSchema.parse(formData);
-
-      const response = await fetch('/api/reviews', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          creatorId,
-          ...validated,
-        }),
-      });
-
-      if (!response.ok) throw new Error('Failed to submit review');
-
-      const review = await response.json();
-      onSubmit(review);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        setError(err.errors[0].message);
-      } else {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
 import { Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
