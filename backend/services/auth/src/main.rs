@@ -187,7 +187,7 @@ fn generate_secret() -> Result<String, MfaError> {
     hasher.update(random_data.as_bytes());
     let hash = hasher.finalize();
     
-    let secret = base32::encode(base32::Alphabet::RFC4648 { padding: false }, &hash[..20]);
+    let secret = base32::encode(base32::Alphabet::Rfc4648 { padding: false }, &hash[..20]);
     Ok(secret)
 }
 
@@ -209,7 +209,7 @@ fn rand_string(len: usize) -> String {
 
 /// Generate TOTP code from secret
 fn generate_totp(secret: &str, time_step: u64) -> Result<String, MfaError> {
-    let decoded = base32::decode(base32::Alphabet::RFC4648 { padding: false }, secret)
+    let decoded = base32::decode(base32::Alphabet::Rfc4648 { padding: false }, secret)
         .ok_or(MfaError::Base32DecodeError)?;
     
     let code = totp_custom::<Sha1>(30, 6, &decoded, time_step);
