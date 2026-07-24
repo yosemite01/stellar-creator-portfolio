@@ -120,6 +120,10 @@ pub enum DataKey {
 
 // ── Issue #631: Yield Farming for Unwithdrawn Escrow Funds ───────────────────
 
+/// Default maximum acceptable slippage (bps) for yield-protocol deposits,
+/// applied until governance explicitly sets one via `configure_slippage`.
+const DEFAULT_MAX_SLIPPAGE_BPS: u32 = 100; // 1 %
+
 /// Platform-level yield configuration set by the admin.
 ///
 /// `rate_bps`           — annual yield rate in basis points (e.g. 300 = 3 %)
@@ -127,11 +131,15 @@ pub enum DataKey {
 ///                        (e.g. 500 = 5 % cap; protects against runaway accrual)
 /// `min_liquidity_bps`  — minimum principal that must remain liquid, in bps of
 ///                        total locked (e.g. 9000 = 90 % must stay withdrawable)
+/// `max_slippage_bps`   — maximum acceptable slippage for yield-protocol
+///                        deposits, in bps (e.g. 100 = 1 %); governance-
+///                        configurable via `configure_slippage`
 #[contracttype]
 pub struct YieldConfig {
     pub rate_bps: u32,
     pub max_yield_ratio: u32,
     pub min_liquidity_bps: u32,
+    pub max_slippage_bps: u32,
 }
 
 /// Per-escrow yield accrual tracking.  Yield is held internally in the
@@ -830,11 +838,54 @@ impl EscrowContract {
         assert!(max_yield_ratio <= 10_000, "Max yield ratio must be <= 100 %");
         assert!(min_liquidity_bps <= 10_000, "Min liquidity must be <= 100 %");
 
+        // Preserve any existing slippage tolerance rather than resetting it —
+        // slippage is configured independently via `configure_slippage`.
+        let max_slippage_bps = env
+            .storage()
+            .persistent()
+            .get::<DataKey, YieldConfig>(&DataKey::YieldCfg)
+            .map(|c| c.max_slippage_bps)
+            .unwrap_or(DEFAULT_MAX_SLIPPAGE_BPS);
+
         env.storage().persistent().set(&DataKey::YieldCfg, &YieldConfig {
             rate_bps,
             max_yield_ratio,
             min_liquidity_bps,
+            max_slippage_bps,
         });
+    }
+
+    /// Update the maximum acceptable slippage (bps) for yield-protocol
+    /// deposits. Only the platform admin may call this. Defaults to
+    /// `DEFAULT_MAX_SLIPPAGE_BPS` (1 %) until explicitly configured.
+    pub fn configure_slippage(env: Env, admin: Address, max_slippage_bps: u32) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "platform_admin"))
+            .expect("Platform admin not set");
+        assert_eq!(admin, stored_admin, "Only platform admin can configure slippage");
+        assert!(max_slippage_bps <= 10_000, "Slippage must be <= 100 %");
+
+        let mut cfg: YieldConfig = env
+            .storage()
+            .persistent()
+            .get::<DataKey, YieldConfig>(&DataKey::YieldCfg)
+            .unwrap_or(YieldConfig {
+                rate_bps: 0,
+                max_yield_ratio: 0,
+                min_liquidity_bps: 0,
+                max_slippage_bps: DEFAULT_MAX_SLIPPAGE_BPS,
+            });
+        cfg.max_slippage_bps = max_slippage_bps;
+        env.storage().persistent().set(&DataKey::YieldCfg, &cfg);
+
+        env.events().publish(
+            (symbol_short!("yield"), symbol_short!("slippage")),
+            max_slippage_bps,
+        );
     }
 
     /// Accrue yield for an active escrow strictly within the contract.
