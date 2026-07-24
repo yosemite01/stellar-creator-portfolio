@@ -195,6 +195,34 @@ impl IdentityContract {
         env.storage().persistent().get(&DataKey::KycAttestation(user))
     }
 
+    /// Mark a user as KYC-verified following off-chain OCR document review
+    /// and admin approval (see `KYCSubmission` in the application database).
+    /// Only the platform admin may call this. Records a `Basic`-level
+    /// `KycAttestation` and emits an event carrying `kyc_submission_id` so
+    /// on-chain activity can be traced back to the reviewed document.
+    pub fn verify_kyc(env: Env, admin: Address, user: Address, kyc_submission_id: BytesN<32>) -> bool {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
+        assert_eq!(admin, stored_admin, "Only admin can verify KYC");
+
+        env.storage().persistent().set(
+            &DataKey::KycAttestation(user.clone()),
+            &KycAttestation {
+                user: user.clone(),
+                level: KycLevel::Basic,
+                attested_at: env.ledger().timestamp(),
+                expires_at: env.ledger().timestamp() + ONE_YEAR_SECS,
+            },
+        );
+
+        env.events().publish(
+            (symbol_short!("kyc"), symbol_short!("verified")),
+            (user, kyc_submission_id),
+        );
+
+        true
+    }
+
     /// Attest a creator's verification tier on-chain.
     /// Only the platform oracle (attester) may call this.
     pub fn set_tier(
