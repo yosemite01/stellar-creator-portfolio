@@ -15,6 +15,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+stellar-contract-test-utils = { path = "../test-utils" }
 
 [profile.release]
 opt-level = "z"

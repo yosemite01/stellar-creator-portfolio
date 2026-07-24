@@ -3,24 +3,17 @@ mod tests {
     extern crate std;
     use std::panic;
 
-    use soroban_sdk::testutils::{Address as _, Ledger};
-    use soroban_sdk::token::TokenClient;
+    use soroban_sdk::testutils::Ledger;
     use soroban_sdk::{Address, Env};
+    use stellar_contract_test_utils::{new_address, setup_funded_token, test_env};
 
     // Helper to setup test environment
     fn setup_env(budget: i128) -> (Env, Address, Address, Address) {
-        let env = Env::default();
-        env.mock_all_auths();
+        let env = test_env();
 
-        let admin = Address::generate(&env);
-        let sac = env.register_stellar_asset_contract_v2(admin);
-        let token = sac.address();
-
-        let creator = Address::generate(&env);
-        let applicant = Address::generate(&env);
-
-        let token_client = TokenClient::new(&env, &token);
-        token_client.mint(&creator, &budget);
+        let creator = new_address(&env);
+        let applicant = new_address(&env);
+        let token = setup_funded_token(&env, &creator, budget);
 
         (env, token, creator, applicant)
     }
