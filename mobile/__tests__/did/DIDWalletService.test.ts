@@ -17,7 +17,10 @@ import {
 
 const VALID_DID = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
 const VALID_DID_WEB = 'did:web:example.com';
-const VALID_DID_STELLAR = 'did:stellar:GXXXXXXXXXXXXXXXXXXXXXX';
+// Realistic, validly-formatted example Stellar public key (56 chars, G + base32),
+// not a placeholder, so this actually exercises the Stellar-address-shaped
+// portion of DID validation rather than a degenerate all-X case.
+const VALID_DID_STELLAR = 'did:stellar:GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RRXECPKDW2HZC7ANOQ4S';
 
 const makeVC = (overrides: Partial<VerifiableCredential> = {}): VerifiableCredential => ({
   '@context': [VC_CONTEXT_URL],
