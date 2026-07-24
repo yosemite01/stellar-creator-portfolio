@@ -15,6 +15,7 @@ import {
   deleteUser,
   getUsersSummary,
 } from '@/app/admin/actions';
+import { KYCReviewPanel } from '@/components/admin/kyc-review-panel';
 import { Role } from '@prisma/client';
 
 const ROLES: Role[] = ['ADMIN', 'CLIENT', 'CREATOR', 'USER'];
@@ -284,6 +285,8 @@ export default function AdminUsersPage() {
           </div>
         </CardContent>
       </Card>
+
+      <KYCReviewPanel />
     </div>
   );
 }
