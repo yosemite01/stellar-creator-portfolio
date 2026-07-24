@@ -43,9 +43,22 @@ Network passphrase: `Test SDF Network ; September 2015`
 │   ├── analytics/    # On-chain event analytics
 │   └── core/         # Dispute arbitration, storage TTL, simulation
 ├── backend/          # Rust API services
+│   └── contracts/    # Canonical Soroban contracts (see note below)
 ├── mobile/           # React Native app (Expo)
 └── .husky/           # Git hooks (TS check, secret scan, size limit)
 ```
+
+> **Note on the two `contracts/` directories:** this repo has Soroban contract
+> code in both the top-level `contracts/` and `backend/contracts/`, including
+> overlapping names (`core`, `escrow`). **`backend/contracts/` is canonical.**
+> It's the workspace declared in `backend/Cargo.toml`, it's what CI actually
+> builds and tests (`cd backend && cargo test --all-features`), and its
+> implementations are substantially more complete — e.g. `backend/contracts/escrow`
+> is ~1,800 lines vs. ~430 in the top-level equivalent, and `backend/contracts/core`
+> is a full contract vs. a 5-line stub at the top level. The top-level `contracts/`
+> tree is not referenced by any workspace member list or CI job; treat it as
+> legacy/scaffold code pending removal or migration, not as a second deployment
+> target.
 
 ## Getting Started
 
