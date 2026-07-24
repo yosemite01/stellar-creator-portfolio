@@ -1,16 +1,17 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Env, String};
+use soroban_sdk::testutils::Ledger;
+use soroban_sdk::{Env, String};
+use stellar_contract_test_utils::{new_address, test_env};
 
 fn setup() -> (Env, GovernanceContractClient<'static>, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = test_env();
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
 
     // Bootstrap: set admin via initial config storage
-    let admin = Address::generate(&env);
+    let admin = new_address(&env);
     let config_key = soroban_sdk::Symbol::new(&env, "governance_config");
     env.as_contract(&contract_id, || {
         env.storage().persistent().set(
@@ -48,7 +49,7 @@ fn create_and_close_voting(
 #[test]
 fn test_quorum_met_passes() {
     let (env, client, admin) = setup();
-    let proposer = Address::generate(&env);
+    let proposer = new_address(&env);
 
     // 1000 total VP, need 10% = 100 votes participating
     client.set_total_voting_power(&admin, &1000_u64);
@@ -59,7 +60,7 @@ fn test_quorum_met_passes() {
     // Cast 200 yes-votes (20% participation — quorum met)
     // We reuse the same address but in a real scenario these would differ;
     // for the quorum test what matters is the accumulated yes_votes value.
-    env.as_contract(client.address.as_ref().unwrap_or(&client.address), || {
+    env.as_contract(&client.address, || {
         let key = (soroban_sdk::Symbol::new(&env, "proposal"), proposal_id);
         let mut p: Proposal = env.storage().persistent().get(&key).unwrap();
         p.yes_votes = 200;
@@ -78,7 +79,7 @@ fn test_quorum_met_passes() {
 #[should_panic(expected = "QuorumNotMet")]
 fn test_quorum_not_met_panics() {
     let (env, client, admin) = setup();
-    let proposer = Address::generate(&env);
+    let proposer = new_address(&env);
 
     // 1000 total VP, 10% quorum = 100 votes needed
     client.set_total_voting_power(&admin, &1000_u64);
@@ -86,7 +87,7 @@ fn test_quorum_not_met_panics() {
     let proposal_id = create_and_close_voting(&env, &client, &proposer);
 
     // Only 50 votes cast (5% participation — below quorum)
-    env.as_contract(client.address.as_ref().unwrap_or(&client.address), || {
+    env.as_contract(&client.address, || {
         let key = (soroban_sdk::Symbol::new(&env, "proposal"), proposal_id);
         let mut p: Proposal = env.storage().persistent().get(&key).unwrap();
         p.yes_votes = 30;

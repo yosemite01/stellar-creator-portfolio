@@ -3823,7 +3823,15 @@ name = "stellar-bounty-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-contract-test-utils",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "stellar-contract-test-utils"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]
@@ -3854,6 +3862,7 @@ name = "stellar-governance-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-contract-test-utils",
  "thiserror 2.0.18",
 ]
 
@@ -3862,6 +3871,7 @@ name = "stellar-identity-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-contract-test-utils",
 ]
 
 [[package]]

@@ -9,6 +9,7 @@ members = [
     "contracts/identity",
     "contracts/referral",
     "contracts/stellar_insights",
+    "contracts/test-utils",
     "services/api",
     "services/auth",
     "tests",
