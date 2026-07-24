@@ -127,6 +127,7 @@ The app uses `output: 'standalone'` (Next.js) and can be deployed to:
 1. Fork → feature branch → PR against `main`
 2. The pre-commit hook runs TypeScript check (warning), secret scan (gitleaks, if installed), and a 10 MB file-size guard
 3. Soroban contracts require `overflow-checks = true` in `[profile.release]`
+4. Looking for open work? [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md) tracks partially-scoped backlog items (e.g. STT integration, escrow slippage protection, OCR KYC) with implementation specs already written out
 
 ## License
 
