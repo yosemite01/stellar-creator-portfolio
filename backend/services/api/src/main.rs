@@ -30,6 +30,16 @@ pub const API_PREFIX: &str = "/api/v1";
 
 // ==================== Startup Configuration ====================
 
+pub fn parse_host_ip(host_str: &str) -> Result<std::net::IpAddr, std::io::Error> {
+    host_str.parse::<std::net::IpAddr>().map_err(|e| {
+        tracing::error!("HOST must be a valid IP address, e.g. 0.0.0.0 (got '{}'): {}", host_str, e);
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("HOST must be a valid IP address, e.g. 0.0.0.0: got '{}'", host_str),
+        )
+    })
+}
+
 fn parse_u16_env_with_range(name: &str, default: u16, min: u16, max: u16) -> u16 {
     let raw = std::env::var(name).unwrap_or_else(|_| default.to_string());
     let parsed = raw.parse::<u16>().unwrap_or_else(|_| {
@@ -1411,9 +1421,12 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("ML model initialised");
 
     let port = parse_u16_env_with_range("API_PORT", 3001, 1, 65535);
-    let host = std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let host = std::env::var("API_HOST")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let host_ip = parse_host_ip(&host)?;
 
-    tracing::info!("Server starting on {}:{}", host, port);
+    tracing::info!("Server starting on {}:{}", host_ip, port);
     let ws_limiter = websocket::WsConnectionLimiter::from_env();
 
     let (prometheus_middleware, business_metrics) = metrics::setup_metrics()
@@ -1502,7 +1515,7 @@ async fn main() -> std::io::Result<()> {
                     .route("/api/escrow/{id}/refund", web::post().to(refund_escrow)),
             )
     })
-    .bind((host.parse::<std::net::IpAddr>().unwrap(), port))?
+    .bind((host_ip, port))?
     .run()
     .await
 }
@@ -1516,6 +1529,34 @@ mod tests {
         std::env::remove_var("SLOW_QUERY_THRESHOLD_MS");
         let value = parse_u64_env_with_range("SLOW_QUERY_THRESHOLD_MS", 1000, 10, 300_000);
         assert_eq!(value, 1000);
+    }
+
+    #[test]
+    fn test_parse_host_ip_valid_ipv4() {
+        let ip = parse_host_ip("127.0.0.1").unwrap();
+        assert_eq!(ip, std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
+
+        let zero_ip = parse_host_ip("0.0.0.0").unwrap();
+        assert_eq!(zero_ip, std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn test_parse_host_ip_valid_ipv6() {
+        let ip = parse_host_ip("::1").unwrap();
+        assert_eq!(ip, std::net::IpAddr::V6(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)));
+    }
+
+    #[test]
+    fn test_parse_host_ip_invalid_format() {
+        let err = parse_host_ip("invalid-ip").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("HOST must be a valid IP address"));
+
+        let err2 = parse_host_ip("999.999.999.999").unwrap_err();
+        assert_eq!(err2.kind(), std::io::ErrorKind::InvalidInput);
+
+        let err3 = parse_host_ip("localhost").unwrap_err();
+        assert_eq!(err3.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
