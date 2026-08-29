@@ -4,34 +4,173 @@
  * Handles indexing of Stellar PathPayment operations and aggregation
  * into corridor_payments table for cross-border payment analytics.
  *
- * TODO: Integrate with Stellar Horizon API to fetch PathPaymentStrictSend
+ * Integrates with Stellar Horizon API to fetch PathPaymentStrictSend
  * and PathPaymentStrictReceive operations from the network.
  */
 
 import { prisma } from '@/lib/prisma';
 
-interface PathPaymentEvent {
+export interface PathPaymentEvent {
   sourceCurrency: string;
   destCurrency: string;
   amount: bigint;
   timestamp: Date;
 }
 
+export interface HorizonOperationRecord {
+  id?: string;
+  paging_token?: string;
+  type: string;
+  type_i?: number;
+  created_at: string;
+  transaction_successful?: boolean;
+  source_asset_type?: string;
+  source_asset_code?: string;
+  source_asset_issuer?: string;
+  asset_type?: string;
+  asset_code?: string;
+  asset_issuer?: string;
+  destination_asset_type?: string;
+  destination_asset_code?: string;
+  destination_asset_issuer?: string;
+  amount?: string;
+  source_amount?: string;
+  dest_amount?: string;
+  destination_amount?: string;
+  [key: string]: unknown;
+}
+
+export interface HorizonOperationsResponse {
+  _embedded?: {
+    records: HorizonOperationRecord[];
+  };
+  records?: HorizonOperationRecord[];
+}
+
 /**
- * Placeholder for fetching PathPayment operations from Stellar Horizon API.
- * This should be implemented once Horizon API integration is set up.
+ * Parse a decimal string (e.g. "100.5000000") into stroops (bigint) with 7 decimal places.
+ */
+export function parseStroops(amountStr: string | number): bigint {
+  if (typeof amountStr === 'number') {
+    return BigInt(Math.round(amountStr * 10_000_000));
+  }
+  const str = (amountStr || '0').trim();
+  const [whole, fraction = ''] = str.split('.');
+  const paddedFraction = fraction.padEnd(7, '0').slice(0, 7);
+  return BigInt(whole || '0') * 10_000_000n + BigInt(paddedFraction);
+}
+
+/**
+ * Resolve an asset code from Horizon asset type and code.
+ * "native" -> "XLM", credit_alphanum -> code.
+ */
+function resolveAssetCurrency(type?: string, code?: string): string {
+  if (!type || type === 'native') {
+    return 'XLM';
+  }
+  return code || 'UNKNOWN';
+}
+
+/**
+ * Parse a raw Horizon operation record into a PathPaymentEvent.
+ * Returns null if the operation is not a successful path payment.
+ */
+export function parsePathPaymentOperation(
+  op: HorizonOperationRecord
+): PathPaymentEvent | null {
+  if (op.transaction_successful === false) {
+    return null;
+  }
+
+  if (
+    op.type !== 'path_payment_strict_send' &&
+    op.type !== 'path_payment_strict_receive'
+  ) {
+    return null;
+  }
+
+  const sourceCurrency = resolveAssetCurrency(
+    op.source_asset_type,
+    op.source_asset_code
+  );
+
+  const destType = op.asset_type || op.destination_asset_type;
+  const destCode = op.asset_code || op.destination_asset_code;
+  const destCurrency = resolveAssetCurrency(destType, destCode);
+
+  const rawAmount =
+    op.amount ||
+    op.destination_amount ||
+    op.dest_amount ||
+    op.source_amount ||
+    '0';
+  const amount = parseStroops(rawAmount);
+  const timestamp = op.created_at ? new Date(op.created_at) : new Date();
+
+  return {
+    sourceCurrency,
+    destCurrency,
+    amount,
+    timestamp,
+  };
+}
+
+/**
+ * Fetch PathPayment operations from Stellar Horizon API.
  *
- * @param since Unix timestamp to fetch operations after
+ * @param since Unix timestamp (in seconds) to fetch operations after. If omitted, defaults to 0.
+ * @param customHorizonUrl Optional Horizon base URL override (used for testing or custom endpoints).
  * @returns Array of PathPayment events
  */
-async function fetchPathPaymentOperations(_since: number): Promise<PathPaymentEvent[]> {
-  // TODO: Implement Horizon API integration
-  // Example structure:
-  // const response = await fetch(
-  //   `${HORIZON_URL}/operations?type=path_payment_strict_send,path_payment_strict_receive&order=asc`
-  // );
-  // Parse and extract source/dest currencies, amounts, timestamps
-  return [];
+export async function fetchPathPaymentOperations(
+  since?: number,
+  customHorizonUrl?: string
+): Promise<PathPaymentEvent[]> {
+  const baseUrl = (
+    customHorizonUrl ||
+    process.env.STELLAR_HORIZON_URL ||
+    process.env.HORIZON_URL ||
+    'https://horizon-testnet.stellar.org'
+  ).replace(/\/$/, '');
+
+  const url = `${baseUrl}/payments?order=desc&limit=200`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(
+        `Stellar Horizon API responded with status ${response.status}: ${response.statusText}`
+      );
+      return [];
+    }
+
+    const data = (await response.json()) as HorizonOperationsResponse;
+    const records = data._embedded?.records || data.records || [];
+
+    const sinceMs = since !== undefined ? since * 1000 : 0;
+    const events: PathPaymentEvent[] = [];
+
+    for (const record of records) {
+      const event = parsePathPaymentOperation(record);
+      if (!event) continue;
+
+      if (sinceMs > 0 && event.timestamp.getTime() < sinceMs) {
+        continue;
+      }
+
+      events.push(event);
+    }
+
+    return events;
+  } catch (error) {
+    console.error('Failed to fetch PathPayment operations from Horizon API:', error);
+    return [];
+  }
 }
 
 /**

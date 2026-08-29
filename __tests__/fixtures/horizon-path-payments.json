@@ -1,0 +1,110 @@
+{
+  "_links": {
+    "self": {
+      "href": "https://horizon.stellar.org/payments?limit=200&order=desc"
+    },
+    "next": {
+      "href": "https://horizon.stellar.org/payments?cursor=275648200740343809&limit=200&order=desc"
+    },
+    "prev": {
+      "href": "https://horizon.stellar.org/payments?cursor=275648200740343809&limit=200&order=asc"
+    }
+  },
+  "_embedded": {
+    "records": [
+      {
+        "id": "275648200740343809",
+        "paging_token": "275648200740343809",
+        "transaction_successful": true,
+        "source_account": "GCY7AY7OOO2XKZUCKLOZL3MJ62DW5UNL3ISFWDEDEEJM7JFGYZEUS55Z",
+        "type": "path_payment_strict_send",
+        "type_i": 13,
+        "created_at": "2026-08-29T13:39:27Z",
+        "transaction_hash": "db68c4cc5412df9bb40e374aa3dcf7e09704a0f5bc6bc1475e85f0541d5fa8eb",
+        "asset_type": "native",
+        "from": "GCY7AY7OOO2XKZUCKLOZL3MJ62DW5UNL3ISFWDEDEEJM7JFGYZEUS55Z",
+        "to": "GCY7AY7OOO2XKZUCKLOZL3MJ62DW5UNL3ISFWDEDEEJM7JFGYZEUS55Z",
+        "amount": "5.7549696",
+        "path": [
+          {
+            "asset_type": "credit_alphanum12",
+            "asset_code": "Komodo",
+            "asset_issuer": "GAJLMWY7GMOYW55BY3MEUIXXTEQ7UTRRKWRVQFZBJMPQI7MODXLKI7WJ"
+          }
+        ],
+        "source_amount": "5.0000000",
+        "destination_min": "5.0000000",
+        "source_asset_type": "credit_alphanum4",
+        "source_asset_code": "yXLM",
+        "source_asset_issuer": "GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55"
+      },
+      {
+        "id": "275648200740343810",
+        "paging_token": "275648200740343810",
+        "transaction_successful": true,
+        "source_account": "GBOMCO5L5YFTTOHUCISCHMM6HYSPCTA7YBBJDCKU3Y4RQUAPHBMIVFM3",
+        "type": "path_payment_strict_receive",
+        "type_i": 2,
+        "created_at": "2026-08-29T13:39:40Z",
+        "transaction_hash": "39b2e066c8caf383a14639ab9fcf58b51d03fcc801fd0e0cdb001a1ed66fd101",
+        "asset_type": "native",
+        "from": "GBOMCO5L5YFTTOHUCISCHMM6HYSPCTA7YBBJDCKU3Y4RQUAPHBMIVFM3",
+        "to": "GBOMCO5L5YFTTOHUCISCHMM6HYSPCTA7YBBJDCKU3Y4RQUAPHBMIVFM3",
+        "amount": "24.5557509",
+        "path": [],
+        "source_amount": "24.5170179",
+        "source_max": "24.5557509",
+        "source_asset_type": "credit_alphanum4",
+        "source_asset_code": "yXLM",
+        "source_asset_issuer": "GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55"
+      },
+      {
+        "id": "275648200740343811",
+        "paging_token": "275648200740343811",
+        "transaction_successful": true,
+        "source_account": "GBEXAMPLE123456",
+        "type": "path_payment_strict_send",
+        "type_i": 13,
+        "created_at": "2026-08-29T13:35:00Z",
+        "transaction_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "asset_type": "credit_alphanum4",
+        "asset_code": "USDC",
+        "asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "from": "GBEXAMPLE123456",
+        "to": "GCRECIPIENT12345",
+        "amount": "100.0000000",
+        "path": [],
+        "source_amount": "800.0000000",
+        "destination_min": "99.5000000",
+        "source_asset_type": "native"
+      },
+      {
+        "id": "275648200740343812",
+        "paging_token": "275648200740343812",
+        "transaction_successful": false,
+        "source_account": "GBFAILEDPAYMENT",
+        "type": "path_payment_strict_send",
+        "type_i": 13,
+        "created_at": "2026-08-29T13:38:00Z",
+        "transaction_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "asset_type": "native",
+        "amount": "10.0000000",
+        "source_amount": "10.0000000",
+        "source_asset_type": "credit_alphanum4",
+        "source_asset_code": "USDC"
+      },
+      {
+        "id": "275648200740343813",
+        "paging_token": "275648200740343813",
+        "transaction_successful": true,
+        "source_account": "GBSTANDARDPAYMENT",
+        "type": "payment",
+        "type_i": 1,
+        "created_at": "2026-08-29T13:39:00Z",
+        "transaction_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "asset_type": "native",
+        "amount": "50.0000000"
+      }
+    ]
+  }
+}
