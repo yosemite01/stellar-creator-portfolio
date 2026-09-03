@@ -1,315 +1,119 @@
-# N+1 Query Optimization Guide
+# N+1 Query Optimization (Creator Reviews/Reputation)
 
-## Problem Statement
+Single canonical doc — replaces `OPTIMIZATION_SUMMARY.md` (repo root) and
+`docs/INTEGRATION_GUIDE.md`, which covered the same feature at different
+levels of detail.
 
-The application was experiencing N+1 query deadlocks where nested relational fetching spawned thousands of distinct queries, freezing PostgreSQL instances globally.
+## Problem
 
-**Example**: When rendering a list of 20 creators with their reviews, the system would:
+Rendering a list of creators alongside their reviews issued one fetch per
+creator: 20 creators on screen meant 20 separate review requests (plus one
+for the creator list itself), and the pattern got worse under concurrent
+users.
 
-1. Fetch all creators (1 query)
-2. Fetch reviews for creator 1 (1 query)
-3. Fetch reviews for creator 2 (1 query)
-4. ... repeat for all 20 creators (20 queries)
-5. **Total: 21 queries instead of 2**
+## Solution
 
-## Solution Architecture
+### DataLoader pattern — [`lib/dataloader.ts`](../lib/dataloader.ts)
 
-### 1. DataLoader Pattern (`lib/dataloader.ts`)
-
-Implements the DataLoader pattern to batch requests automatically:
+Collects `.load(id)` calls made within a batching window (10ms default)
+and issues one batched request instead of one per call, with in-memory
+caching so a repeated `.load()` for the same id doesn't refetch.
 
 ```typescript
-// Before: N+1 queries
+// Before: one request per creator
 for (const creator of creators) {
-  const reviews = await fetchCreatorReviews(creator.id); // 20 queries
+  const reviews = await fetchCreatorReviews(creator.id);
 }
 
-// After: 1 batch query
-const loader = createCreatorReviewsLoader();
-const reviews = await Promise.all(
-  creators.map((c) => loader.load(c.id)), // Automatically batched into 1 query
-);
+// After: automatically batched into one request
+const reviews = await Promise.all(creators.map((c) => loader.load(c.id)));
 ```
 
-**Key Features**:
+### Batch endpoints
 
-- Automatic request batching within a time window (10ms default)
-- In-memory caching to prevent duplicate requests
-- Error handling per item
-- Configurable batch size and timing
+- `POST /api/creators/reviews/batch` — [`app/api/creators/reviews/batch/route.ts`](../app/api/creators/reviews/batch/route.ts)
+- `POST /api/creators/reputation/batch` — [`app/api/creators/reputation/batch/route.ts`](../app/api/creators/reputation/batch/route.ts)
 
-### 2. Batch API Endpoints
+Both accept `{ "creatorIds": [...] }` (up to 100 per request) and return an
+object keyed by creator id.
 
-#### `POST /api/creators/reviews/batch`
+### Request deduplication — [`lib/api-client.ts`](../lib/api-client.ts)
 
-Fetch reviews for multiple creators in a single request.
+Concurrent calls for the same resource share one in-flight HTTP request
+rather than each firing independently.
 
-```bash
-curl -X POST http://localhost:3000/api/creators/reviews/batch \
-  -H "Content-Type: application/json" \
-  -d '{"creatorIds": ["creator-1", "creator-2", "creator-3"]}'
-```
+### React integration
 
-Response:
-
-```json
-{
-  "creator-1": { "reviews": [...], "total": 5 },
-  "creator-2": { "reviews": [...], "total": 3 },
-  "creator-3": { "reviews": [...], "total": 8 }
-}
-```
-
-#### `POST /api/creators/reputation/batch`
-
-Fetch aggregated reputation stats for multiple creators.
-
-```bash
-curl -X POST http://localhost:3000/api/creators/reputation/batch \
-  -H "Content-Type: application/json" \
-  -d '{"creatorIds": ["creator-1", "creator-2"]}'
-```
-
-Response:
-
-```json
-{
-  "creator-1": {
-    "totalReviews": 5,
-    "averageRating": 4.8,
-    "ratingDistribution": { "5": 4, "4": 1, "3": 0, "2": 0, "1": 0 },
-    "recentReviews": [...]
-  }
-}
-```
-
-### 3. Request Deduplication (`lib/api-client.ts`)
-
-Prevents duplicate in-flight requests:
+- [`app/providers/DataLoaderProvider.tsx`](../app/providers/DataLoaderProvider.tsx)
+  — already wraps the app in [`app/layout.tsx`](../app/layout.tsx).
+- [`lib/hooks/useCreatorReviews.ts`](../lib/hooks/useCreatorReviews.ts) —
+  `useCreatorReviews(creatorId)` and `useCreatorReputation(creatorId)`,
+  both automatically batched through the provider.
 
 ```typescript
-// Multiple components requesting the same data
-const creator1 = fetchCreator("alex-studio"); // Starts request
-const creator2 = fetchCreator("alex-studio"); // Reuses same request
-// Only 1 actual HTTP request made
-```
-
-### 4. React Hooks for DataLoader Integration
-
-#### `useCreatorReviews(creatorId)`
-
-```typescript
-function CreatorCard({ creatorId }) {
-  const { data, loading, error } = useCreatorReviews(creatorId);
-
-  if (loading) return <Skeleton />;
-  if (error) return <Error />;
-
-  return <ReviewsList reviews={data.reviews} />;
-}
-```
-
-#### `useCreatorReputation(creatorId)`
-
-```typescript
-function CreatorReputation({ creatorId }) {
-  const { data, loading } = useCreatorReputation(creatorId);
-
-  return (
-    <div>
-      <Rating value={data.averageRating} />
-      <ReviewCount count={data.totalReviews} />
-    </div>
-  );
-}
-```
-
-### 5. Performance Monitoring
-
-#### Query Monitor (`lib/performance/query-monitor.ts`)
-
-Tracks all queries and detects N+1 patterns:
-
-```typescript
-import { queryMonitor } from "@/lib/performance/query-monitor";
-
-// Automatically logs suspicious patterns
-queryMonitor.logReport();
-// Output:
-// 📊 Query Performance Report
-// Total Queries: 45
-// Avg Duration: 12ms
-// Total Duration: 540ms
-// ⚠️ Potential N+1 Patterns Detected
-// /api/creators/reviews: 20 queries in 1s (15ms avg)
-```
-
-#### Benchmarking (`lib/performance/benchmark.ts`)
-
-Compare performance before and after optimization:
-
-```typescript
-import { benchmark, benchmarkN1Queries } from "@/lib/performance/benchmark";
-
-await benchmarkN1Queries();
-// Output:
-// ✅ N+1 Query Pattern (20 creators)
-//    Duration: 200.45ms
-//    Queries: 20
-//    Avg/Query: 10.02ms
-//
-// ✅ Batch Query Pattern (20 creators)
-//    Duration: 15.32ms
-//    Queries: 1
-//    Avg/Query: 15.32ms
-//
-// 📊 Benchmark Comparison
-//    Duration: 200.45ms → 15.32ms (+92.4%)
-//    Queries: 20 → 1 (+95.0%)
-```
-
-## Implementation Checklist
-
-- [x] DataLoader implementation with batching
-- [x] Batch API endpoints for creators/reviews and reputation
-- [x] Request deduplication in API client
-- [x] React hooks for DataLoader integration
-- [x] DataLoaderProvider for context management
-- [x] Query performance monitoring
-- [x] Benchmarking utilities
-- [ ] Database indexes on `creator_id`, `bounty_id`
-- [ ] Supabase query optimization with eager loading
-- [ ] GraphQL layer (optional, for flexible nested queries)
-
-## Performance Improvements
-
-### Expected Results
-
-| Metric                  | Before | After | Improvement   |
-| ----------------------- | ------ | ----- | ------------- |
-| Queries for 20 creators | 21     | 2     | 90% reduction |
-| Response time           | 200ms  | 15ms  | 92% faster    |
-| Database load           | High   | Low   | Significant   |
-| Memory usage            | High   | Low   | Reduced       |
-
-### Real-World Impact
-
-- **Prevents deadlocks**: Reduces concurrent query load on PostgreSQL
-- **Faster page loads**: 20 creators load in ~15ms instead of ~200ms
-- **Better UX**: Smoother interactions and faster data fetching
-- **Scalability**: Supports 10x more concurrent users
-
-## Usage Examples
-
-### In Components
-
-```typescript
-'use client';
-
 import { useCreatorReputation } from '@/lib/hooks/useCreatorReviews';
 
 export function CreatorCard({ creator }) {
   const { data: reputation, loading } = useCreatorReputation(creator.id);
-
+  if (loading) return <Skeleton />;
   return (
-    <div>
-      <h3>{creator.name}</h3>
-      {loading ? (
-        <Skeleton />
-      ) : (
-        <>
-          <Rating value={reputation.averageRating} />
-          <p>{reputation.totalReviews} reviews</p>
-        </>
-      )}
-    </div>
+    <>
+      <Rating value={reputation.averageRating} />
+      <p>{reputation.totalReviews} reviews</p>
+    </>
   );
 }
 ```
 
-### In API Routes
+### Performance tooling
+
+- [`lib/performance/query-monitor.ts`](../lib/performance/query-monitor.ts)
+  — `queryMonitor.logReport()` / `queryMonitor.detectN1Patterns()`, dev-only.
+- [`lib/performance/benchmark.ts`](../lib/performance/benchmark.ts) —
+  `benchmarkN1Queries()`, runnable from the browser console.
+
+## Migrating a component
+
+Replace a direct per-creator fetch with the hook — no other wiring needed,
+`DataLoaderProvider` is already in place:
 
 ```typescript
-import { fetchCreatorReviewsBatch } from "@/lib/api-client";
+// Before
+const [payload, setPayload] = useState(null);
+useEffect(() => {
+  fetch(`/api/v1/creators/${creatorId}/reviews`).then((r) => r.json()).then(setPayload);
+}, [creatorId]);
 
-export async function GET(request: Request) {
-  const creatorIds = ["creator-1", "creator-2", "creator-3"];
-
-  // Fetch all reviews in one batch
-  const reviews = await fetchCreatorReviewsBatch(creatorIds);
-
-  return Response.json(reviews);
-}
+// After
+const { data: payload, loading } = useCreatorReputation(creatorId);
 ```
 
-## Monitoring & Debugging
+## Verifying it worked
 
-### Enable Query Logging
-
-Set `NODE_ENV=development` to enable query monitoring:
-
-```typescript
-import { queryMonitor } from "@/lib/performance/query-monitor";
-
-// In your component or API route
-queryMonitor.logReport();
-```
-
-### Detect N+1 Patterns
-
-```typescript
-const suspicious = queryMonitor.detectN1Patterns();
-if (suspicious.length > 0) {
-  console.warn("N+1 patterns detected:", suspicious);
-}
-```
-
-## Database Optimization (Next Steps)
-
-### Add Indexes
-
-```sql
--- Supabase SQL
-CREATE INDEX idx_reviews_creator_id ON reviews(creator_id);
-CREATE INDEX idx_applications_bounty_id ON applications(bounty_id);
-CREATE INDEX idx_timeline_bounty_id ON timeline(bounty_id);
-```
-
-### Eager Loading with Supabase
-
-```typescript
-// Instead of separate queries
-const creator = await supabase
-  .from("creators")
-  .select("*, reviews(*)")
-  .eq("id", creatorId)
-  .single();
-```
+1. DevTools → Network tab → filter "batch" → load the creators page. Expect
+   1–2 batch requests instead of one-per-creator.
+2. `queryMonitor.logReport()` from any component to see a query count/timing
+   summary and flagged N+1 patterns.
+3. `await benchmarkN1Queries()` in the browser console for a direct
+   before/after comparison run against live data.
 
 ## Troubleshooting
 
-### DataLoader not batching requests
+| Symptom | Check |
+|---|---|
+| `useDataLoaders must be used within DataLoaderProvider` | Confirm the component tree is inside `app/layout.tsx`'s provider |
+| Still seeing individual requests | Hard refresh; confirm the component actually calls the hook, not a direct `fetch` |
+| Batch endpoint 404 | Confirm the two `route.ts` files above still exist at those paths |
+| DataLoader not batching | Confirm multiple `.load()` calls happen in the same render tick |
 
-- Ensure `DataLoaderProvider` wraps your component tree
-- Check that components are rendering within the same tick
-- Verify batch schedule time (default 10ms)
+## Not yet done
 
-### Still seeing N+1 queries
-
-- Check browser DevTools Network tab
-- Use `queryMonitor.logReport()` to identify patterns
-- Ensure batch endpoints are being called
-- Verify request deduplication is working
-
-### Performance not improving
-
-- Check database indexes exist
-- Monitor PostgreSQL query logs
-- Verify batch size limits (max 100 per request)
-- Profile with Chrome DevTools
+- A GraphQL layer for more flexible nested queries — noted as a future
+  option, not started. (A `creatorId` index on `Review` already exists —
+  `prisma/schema.prisma`'s `Review` model has `@@index([creatorId])` — so
+  that's not the remaining bottleneck if query time is still an issue.)
 
 ## References
 
-- [DataLoader Pattern](https://github.com/graphql/dataloader)
-- [Supabase Query Optimization](https://supabase.com/docs/guides/database/query-optimization)
-- [PostgreSQL Performance](https://www.postgresql.org/docs/current/performance.html)
+- [DataLoader pattern](https://github.com/graphql/dataloader)
+- [PostgreSQL performance](https://www.postgresql.org/docs/current/performance.html)
