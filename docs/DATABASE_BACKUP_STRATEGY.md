@@ -38,14 +38,18 @@ WAL-G is configured via the following environment variables (stored securely in 
 
 ```bash
 WALG_S3_PREFIX=s3://stellar-db-backups/postgres
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+AWS_ACCESS_KEY_ID=<redacted — provided via the Kubernetes secret named in Values.secretName>
+AWS_SECRET_ACCESS_KEY=<redacted — provided via the Kubernetes secret named in Values.secretName>
 AWS_REGION=us-east-1
-PGHOST=localhost
-PGUSER=postgres
-PGPASSWORD=stellar_secure_pass
-PGDATABASE=stellar_creator_portfolio
+PGHOST=<postgres host>
+PGUSER=<postgres user>
+PGPASSWORD=<redacted — provided via the Kubernetes secret named in Values.secretName>
+PGDATABASE=<database name>
 ```
+
+See [`infrastructure/k8s/helm/postgres/templates/backup-cronjob.yaml`](../infrastructure/k8s/helm/postgres/templates/backup-cronjob.yaml)
+for how these are actually wired in — via `envFrom.secretRef`, not committed
+literals.
 
 ### 2. postgresql.conf Parameters
 To enable continuous archiving in PostgreSQL:
@@ -61,29 +65,29 @@ archive_timeout = 3600 # Force a WAL segment switch every hour
 
 ## Automation & Scheduling
 
-We run the backups inside our Kubernetes cluster using CronJobs:
+Implemented as two Kubernetes CronJobs in
+[`infrastructure/k8s/helm/postgres/templates/backup-cronjob.yaml`](../infrastructure/k8s/helm/postgres/templates/backup-cronjob.yaml):
 
-1.  **Daily Full Backup (Basebackup):** Runs at 02:00 UTC daily.
-2.  **Backup Retention Policy:** Configured via a `wal-g delete` command run after every backup, pruning backups older than 30 days.
-3.  **Monthly Restore Drill:** Runs at 04:00 UTC on the 1st of every month. It spins up a test PostgreSQL instance, restores the latest backup, runs a smoke test suite, logs the outcome to `AuditLog`, and terminates the test instance.
+1.  **Daily Full Backup (Basebackup):** `0 2 * * *` (02:00 UTC daily) — `wal-g backup-push`, then `wal-g delete before FIND_FULL <30 days ago> --confirm` to prune.
+2.  **Monthly Restore Drill:** `0 4 1 * *` (04:00 UTC on the 1st) — posts a result to the `AuditLog` API.
+
+**Current limitation**: the restore drill CronJob's own comment says its
+smoke-test result is "simulated for this implementation" — it currently
+POSTs a hardcoded `{"status": "SUCCESS", "smokeTests": "passed"}` rather
+than actually spinning up a test instance, restoring into it, and running
+real checks. Treat this drill as a placeholder for the real thing, not as
+evidence restores have actually been verified to work.
 
 ---
 
 ## Monitoring & Alerts
 
 ### 1. Slack Alert on Failure
-Backup scripts monitor WAL-G return codes. Any non-zero exit status triggers an immediate webhook to Slack within 1 hour:
-
-```bash
-#!/bin/bash
-# scripts/db-backup-alert.sh
-WEBHOOK_URL=""
-
-if [ $? -ne 0 ]; then
-  payload="{\"text\": \"🚨 *CRITICAL*: PostgreSQL database backup failed on production cluster! Reason: $1. RPO is at risk.\"}"
-  curl -X POST -H 'Content-type: application/json' --data "$payload" "$WEBHOOK_URL"
-fi
-```
+The alert isn't a separate script — it's inlined directly in the backup
+CronJob's shell command (see the `if wal-g backup-push ...; then ... else
+... curl ... fi` block in `backup-cronjob.yaml`): a non-zero exit from
+`wal-g backup-push` posts to `$SLACK_WEBHOOK_URL` (sourced from the
+`stellar-alerts-secret` Kubernetes secret) before the job exits non-zero.
 
 ### 2. Admin Dashboard Visibility
 The admin dashboard fetches the latest backup status and age directly from the database's `AuditLog` table. A warning state is triggered if the last backup is older than 24 hours.
