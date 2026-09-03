@@ -4,9 +4,22 @@ A full-stack platform connecting non-technical tech professionals (designers, wr
 
 ## Live Contracts — Stellar Testnet
 
+The canonical contracts (`backend/contracts/`: `bounty`, `escrow`, `freelancer`,
+`governance`, `oracle`, `identity`) are built, tested, and deployed to testnet
+automatically by CI on every push to `main`
+([`deploy-contracts.yml`](.github/workflows/deploy-contracts.yml)). Their
+addresses are generated per deploy and published as that run's
+`contracts-testnet-<sha>` GitHub Actions artifact rather than pinned here —
+check the latest successful run of that workflow for the current addresses.
+
+The table below is a one-time manual testnet deployment of the **legacy
+top-level** `contracts/` tree (see the note below) — still live as of this
+writing, but not what CI builds or what the rest of the platform integrates
+against:
+
 | Contract | Address |
 |---|---|
-| Escrow | `CDDVR4DXPPYYH43OVBVUVK2V7A4NPNN6DAJJ7QFPRB53LMK3XK4U4D76` |
+| Escrow (`contracts/escrow`, legacy) | `CDDVR4DXPPYYH43OVBVUVK2V7A4NPNN6DAJJ7QFPRB53LMK3XK4U4D76` |
 | Vault | `CA23KXIQGCGMBITUT7IZCTQWMMO3A2PDIZXCL4FS7KZHS6FEMGUY4Y6U` |
 | AMM | `CD2733NB3EKZQFS7BDFWVS4W7QOQ4IX5EVY5PTPCHLPMRBW7UBSPWFHD` |
 | Analytics | `CAZNWED5SCKMPIOSU274DCHLFRGGFZLQNMCWXWNAO3HF5RY2PMPIODWA` |
@@ -19,10 +32,10 @@ Network passphrase: `Test SDF Network ; September 2015`
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 15 (App Router), TypeScript, Tailwind CSS v4, shadcn/ui |
+| Frontend | Next.js 16 (App Router), TypeScript, Tailwind CSS v4, shadcn/ui |
 | Auth | NextAuth.js |
 | Database | PostgreSQL via Prisma ORM (Supabase recommended) |
-| Smart Contracts | Rust + Soroban SDK 21.7.7 |
+| Smart Contracts | Rust + Soroban SDK 23.5.3 (`backend/contracts/`, canonical); the legacy top-level `contracts/` tree still pins 21.7.7 |
 | Rust API | Actix-web |
 | Mobile | React Native (Expo) |
 | Payments | Stripe |
@@ -70,8 +83,8 @@ Network passphrase: `Test SDF Network ; September 2015`
 ### Prerequisites
 
 - Node.js 20+
-- pnpm 9+
-- Rust 1.70+ + `wasm32v1-none` target:
+- pnpm 10+ (the repo pins `pnpm@10.33.0` via `packageManager`; `corepack enable` picks it up automatically)
+- Rust 1.74+ (the workspace MSRV pinned in `backend/Cargo.toml`) + `wasm32v1-none` target:
   ```bash
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   rustup target add wasm32v1-none
