@@ -48,19 +48,40 @@ if (!RPC_URL) {
 
 const WASM_DIR = process.env.WASM_DIR || "backend/target/wasm32-unknown-unknown/release";
 
-// wasm filenames are cargo's package names with hyphens turned to
-// underscores (e.g. stellar-bounty-contract -> stellar_bounty_contract.wasm)
-// — verified directly against each contract's Cargo.toml `name` field and a
-// real `cargo build --target wasm32-unknown-unknown --release` run. `oracle`
-// is the one package whose Cargo name has no `stellar-*-contract` prefix.
+// Two build paths feed WASM_DIR to this script, and they name their output
+// files differently:
+//   - A direct `cargo build --package <name>` (deploy-contracts.yml,
+//     deploy-mainnet.yml's simulate-contracts job) produces cargo's package
+//     name with hyphens turned to underscores, e.g.
+//     stellar-bounty-contract -> stellar_bounty_contract.wasm.
+//   - The Docker-based reproducible build (scripts/build-reproducible.sh,
+//     used by deploy-mainnet.yml's deploy-contracts job via scripts/verify.sh)
+//     extracts and renames to short names, e.g. bounty.wasm.
+// Each contract below lists both candidate filenames; resolveWasm() picks
+// whichever actually exists so this script works from either build path
+// without the caller needing to know which one populated WASM_DIR. `oracle`
+// is the one package whose Cargo name has no `stellar-*-contract` prefix, so
+// both candidates are identical for it.
 const CONTRACTS = [
-  { name: "bounty",     wasm: `${WASM_DIR}/stellar_bounty_contract.wasm`,     outputKey: "bounty_contract_id" },
-  { name: "escrow",     wasm: `${WASM_DIR}/stellar_escrow_contract.wasm`,     outputKey: "escrow_contract_id" },
-  { name: "freelancer", wasm: `${WASM_DIR}/stellar_freelancer_contract.wasm`, outputKey: "freelancer_contract_id" },
-  { name: "governance", wasm: `${WASM_DIR}/stellar_governance_contract.wasm`, outputKey: "governance_contract_id" },
-  { name: "oracle",     wasm: `${WASM_DIR}/oracle.wasm`,                      outputKey: "oracle_contract_id" },
-  { name: "identity",   wasm: `${WASM_DIR}/stellar_identity_contract.wasm`,   outputKey: "identity_contract_id" },
+  { name: "bounty",     wasmCandidates: ["stellar_bounty_contract.wasm", "bounty.wasm"],         outputKey: "bounty_contract_id" },
+  { name: "escrow",     wasmCandidates: ["stellar_escrow_contract.wasm", "escrow.wasm"],          outputKey: "escrow_contract_id" },
+  { name: "freelancer", wasmCandidates: ["stellar_freelancer_contract.wasm", "freelancer.wasm"],  outputKey: "freelancer_contract_id" },
+  { name: "governance", wasmCandidates: ["stellar_governance_contract.wasm", "governance.wasm"],  outputKey: "governance_contract_id" },
+  { name: "oracle",     wasmCandidates: ["oracle.wasm"],                                          outputKey: "oracle_contract_id" },
+  { name: "identity",   wasmCandidates: ["stellar_identity_contract.wasm", "identity.wasm"],      outputKey: "identity_contract_id" },
 ];
+
+/** Resolves a contract's wasm file to whichever candidate filename actually
+ * exists in WASM_DIR. Throws with both attempted paths if neither does. */
+function resolveWasm(contract) {
+  for (const filename of contract.wasmCandidates) {
+    const candidate = path.resolve(WASM_DIR, filename);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  const attempted = contract.wasmCandidates.map((f) => path.resolve(WASM_DIR, f)).join(", ");
+  console.error(`❌ No WASM found for ${contract.name}. Tried: ${attempted}`);
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -84,11 +105,7 @@ function setOutput(key, value) {
 // ---------------------------------------------------------------------------
 
 function simulateContract(contract) {
-  const wasmPath = path.resolve(contract.wasm);
-  if (!fs.existsSync(wasmPath)) {
-    console.error(`❌ WASM not found: ${wasmPath}`);
-    process.exit(1);
-  }
+  const wasmPath = resolveWasm(contract);
 
   console.log(`  Simulating ${contract.name}…`);
   // stellar contract upload --simulate validates the wasm against the RPC
@@ -108,11 +125,7 @@ function simulateContract(contract) {
 // ---------------------------------------------------------------------------
 
 function deployContract(contract) {
-  const wasmPath = path.resolve(contract.wasm);
-  if (!fs.existsSync(wasmPath)) {
-    console.error(`❌ WASM not found: ${wasmPath}`);
-    process.exit(1);
-  }
+  const wasmPath = resolveWasm(contract);
 
   console.log(`  Uploading ${contract.name}…`);
   const wasmHash = run(
