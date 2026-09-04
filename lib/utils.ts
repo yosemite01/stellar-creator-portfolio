@@ -31,7 +31,7 @@ export function formatCurrency(amount: number, currency = 'USD', maximumFraction
  */
 export function formatDate(
   date: string | Date,
-  type: 'default' | 'month-day' | 'month-year' | 'date-time' = 'full'
+  type: 'default' | 'month-day' | 'month-year' | 'date-time' | 'full' = 'full'
 ): string {
   const dateObj = new Date(date);
 
@@ -84,6 +84,32 @@ export function formatRelativeDate(date: string | Date): string {
   if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
   if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
   return `${Math.floor(diffDays / 365)} years ago`;
+}
+
+/**
+ * Return a compact, granular relative-time label: "just now" under a
+ * minute, then "Xm ago" / "Xh ago" / "Xd ago" up to a week, falling back to
+ * a locale date string beyond that. Distinct from {@link formatRelativeDate}
+ * above, which buckets by day/week/month/year with no minute/hour
+ * granularity - use this one for timestamps where recency matters (activity
+ * feeds, notifications, comments).
+ * @example formatRelativeTime(new Date(Date.now() - 5 * 60_000)) // "5m ago"
+ */
+export function formatRelativeTime(date: string | Date): string {
+  const dateObj = new Date(date);
+  const diffMs = Date.now() - dateObj.getTime();
+  const diffMinutes = Math.floor(diffMs / 60_000);
+
+  if (diffMinutes < 1) return 'just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+
+  return dateObj.toLocaleDateString();
 }
 
 /**
