@@ -147,3 +147,31 @@ pnpm 8 cannot read a v9 lockfile at all. All 6 bumped to `version: 10`
 - Fix: move it to `app/api/notifications/push/route.ts` (or re-export it
   from a thin file there), then verify the curl examples in
   `backend/services/notifications/README.md` actually work.
+
+## mobile/: `npm install` cannot succeed as currently pinned (needs a dependency decision)
+
+Verified directly by running `npm install` (and `npm install --legacy-peer-deps`) in
+`mobile/`, not inferred from reading `package.json`. Two separate, stacked problems:
+
+1. `expo: "~56.1.0"` requested a version that never existed on the npm registry (SDK 56
+   only ever published through `56.0.21` before jumping to `57.0.0`) — this alone failed
+   every install outright. **Already fixed** in this session, pinned to `~56.0.21`.
+2. With that fixed, install still fails on a real peer-dependency conflict:
+   `@shopify/react-native-skia@^1.3.0`'s peer range is `react-native ">=0.64 <0.78.0"`,
+   but `mobile/package.json` pins `"react-native": "0.85.0"`. This is not a simple bump:
+   - The latest skia (`2.11.2`) does support `react-native >=0.78`, but its own peers
+     require `react-native-reanimated >=4.0.0` and a new `react-native-worklets >=0.7.0`
+     peer that isn't declared at all today.
+   - `mobile/package.json` currently pins `react-native-reanimated: "~3.10.0"` — a major
+     version behind what skia 2.x needs — and reanimated 3→4 is itself a breaking
+     upgrade (new worklets architecture) that can affect `react-native-gesture-handler`
+     compatibility too.
+   - Skia is genuinely used for real features, not vestigially: `src/components/FinancialChart.tsx`,
+     `src/canvas/skia-renderer.ts`, and `src/canvas/CollaborativeCanvas.tsx`. A 1.x→2.x
+     bump has real API surface changes worth checking against those three files, not a
+     drop-in version-number edit.
+
+This needs someone to actually pick a target `react-native`/`expo`/skia/reanimated
+combination and verify the three skia call sites against it (there's no toolchain in
+this environment to build/run the RN app end-to-end to verify blind). Left undone here
+rather than forcing a major dependency bump without being able to verify it.
