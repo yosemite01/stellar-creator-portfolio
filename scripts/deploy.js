@@ -48,13 +48,18 @@ if (!RPC_URL) {
 
 const WASM_DIR = process.env.WASM_DIR || "backend/target/wasm32-unknown-unknown/release";
 
+// wasm filenames are cargo's package names with hyphens turned to
+// underscores (e.g. stellar-bounty-contract -> stellar_bounty_contract.wasm)
+// — verified directly against each contract's Cargo.toml `name` field and a
+// real `cargo build --target wasm32-unknown-unknown --release` run. `oracle`
+// is the one package whose Cargo name has no `stellar-*-contract` prefix.
 const CONTRACTS = [
-  { name: "bounty",     wasm: `${WASM_DIR}/bounty.wasm`,     outputKey: "bounty_contract_id" },
-  { name: "escrow",     wasm: `${WASM_DIR}/escrow.wasm`,     outputKey: "escrow_contract_id" },
-  { name: "freelancer", wasm: `${WASM_DIR}/freelancer.wasm`, outputKey: "freelancer_contract_id" },
-  { name: "governance", wasm: `${WASM_DIR}/governance.wasm`, outputKey: "governance_contract_id" },
-  { name: "oracle",     wasm: `${WASM_DIR}/oracle.wasm`,     outputKey: "oracle_contract_id" },
-  { name: "identity",   wasm: `${WASM_DIR}/identity.wasm`,   outputKey: "identity_contract_id" },
+  { name: "bounty",     wasm: `${WASM_DIR}/stellar_bounty_contract.wasm`,     outputKey: "bounty_contract_id" },
+  { name: "escrow",     wasm: `${WASM_DIR}/stellar_escrow_contract.wasm`,     outputKey: "escrow_contract_id" },
+  { name: "freelancer", wasm: `${WASM_DIR}/stellar_freelancer_contract.wasm`, outputKey: "freelancer_contract_id" },
+  { name: "governance", wasm: `${WASM_DIR}/stellar_governance_contract.wasm`, outputKey: "governance_contract_id" },
+  { name: "oracle",     wasm: `${WASM_DIR}/oracle.wasm`,                      outputKey: "oracle_contract_id" },
+  { name: "identity",   wasm: `${WASM_DIR}/stellar_identity_contract.wasm`,   outputKey: "identity_contract_id" },
 ];
 
 // ---------------------------------------------------------------------------
