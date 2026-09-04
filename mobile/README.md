@@ -203,48 +203,25 @@ function ChatComponent() {
 
 ## Project Structure
 
+`mobile/src/` has grown substantially past what earlier revisions of this
+README described — it now has top-level areas for AI/ML (`ai/`,
+`upscaling/`), real-time collaboration (`canvas/`, `messaging/`), offline
+storage (`database/`, `offline/`, `cache/`), OTA updates (`ota/`),
+telemetry, subtitling, tipping, and more, alongside the
+onboarding/forms/messaging/WebSocket work called out above. Current
+top-level directories under `mobile/src/`:
+
 ```
-mobile/
-├── src/
-│   ├── components/
-│   │   ├── dashboard/          # Dashboard components (existing)
-│   │   ├── forms/              # Form components (Issue #562)
-│   │   │   └── ValidatedInput.tsx
-│   │   ├── offline/            # Offline support (existing)
-│   │   └── onboarding/         # Onboarding components (Issue #563)
-│   │       └── OnboardingWalkthrough.tsx
-│   ├── hooks/
-│   │   ├── useOfflineData.ts   # Offline data hook (existing)
-│   │   └── useWebSocketConnection.ts  # WebSocket hooks (Issue #559)
-│   ├── navigation/
-│   │   ├── AppNavigator.tsx    # Main navigation (existing)
-│   │   └── transitions.ts      # Screen transitions (existing)
-│   ├── offline/
-│   │   ├── NetworkProvider.tsx # Network state management (existing)
-│   │   ├── OfflineQueue.ts     # Offline operation queue (existing)
-│   │   └── OfflineStore.ts     # Offline storage (existing)
-│   ├── screens/
-│   │   ├── DashboardScreen.tsx # Analytics dashboard (existing)
-│   │   ├── MessagingScreen.tsx # Direct messaging (Issue #558)
-│   │   ├── OnboardingScreen.tsx # Onboarding wrapper (Issue #563)
-│   │   ├── OfflineScreen.tsx   # Offline mode (existing)
-│   │   └── ThemeSettingsScreen.tsx # Theme settings (existing)
-│   ├── services/
-│   │   └── WebSocketService.ts # WebSocket service (Issue #559)
-│   ├── theme/
-│   │   ├── ThemeProvider.tsx   # Theme context (existing)
-│   │   └── tokens.ts           # Design tokens (existing)
-│   ├── types/
-│   │   └── index.ts            # TypeScript types (existing)
-│   ├── utils/
-│   │   └── formValidation.ts   # Form validation (Issue #562)
-│   └── index.tsx               # App entry point
-├── app.json                    # Expo configuration
-├── babel.config.js             # Babel configuration
-├── package.json                # Dependencies
-├── tsconfig.json               # TypeScript configuration
-└── README.md                   # This file
+ai/  animation/  cache/  canvas/  components/  config/  constants/
+context/  database/  examples/  haptics/  hooks/  i18n/  media/
+messaging/  navigation/  offline/  ota/  screens/  services/  store/
+subtitling/  telemetry/  theme/  tipping/  types/  upscaling/  utils/
 ```
+
+This list will drift again as the app grows — treat `mobile/src/`'s actual
+directory listing as the source of truth over any snapshot committed here.
+`mobile/INFINITE_SCROLLING.md` documents the infinite-scroll/memory-
+optimization subsystem specifically.
 
 ## Installation
 
@@ -260,69 +237,47 @@ yarn install
 ### Development
 
 ```bash
-# Start Expo dev server
-npm start
-
-# Run on iOS simulator
-npm run ios
-
-# Run on Android emulator
-npm run android
-
-# Run in web browser
-npm run web
+npm start          # Start the Expo dev server (Metro bundler + QR code)
+npm run ios        # expo run:ios — build and run on the iOS simulator
+npm run android    # expo run:android — build and run on the Android emulator
 ```
+
+There is no `npm run web` script — this app does not currently support
+running in a browser.
 
 ### Production Build
 
 ```bash
-# Build for iOS
-eas build --platform ios
-
-# Build for Android
-eas build --platform android
+npm run build:ios      # eas build --platform ios
+npm run build:android  # eas build --platform android
 ```
 
 ## Dependencies
 
-### Core
-- `expo` ~51.0.0 - Expo framework
-- `react` 18.2.0 - React library
-- `react-native` 0.74.1 - React Native framework
+Notable ones (see `package.json` for the full, current list — this app has
+grown well past navigation/forms/offline into real-time collaboration,
+E2E-encrypted messaging, and on-device ML, none of which the original
+version of this section mentioned):
 
-### Navigation
-- `@react-navigation/native` ^6.1.17
-- `@react-navigation/native-stack` ^6.9.26
-- `@react-navigation/bottom-tabs` ^6.5.20
-- `react-native-screens` 3.31.1
-- `react-native-safe-area-context` 4.10.1
-
-### UI & Gestures
-- `react-native-gesture-handler` ~2.16.1
-- `react-native-reanimated` ~3.10.1
-- `react-native-svg` 15.2.0
-- `expo-haptics` ~13.0.1 - Haptic feedback
-
-### Storage & Network
-- `@react-native-async-storage/async-storage` ^1.23.1
-- `@react-native-community/netinfo` ^11.3.1
-- `expo-network` ~6.0.1
-
-### Localization
-- `expo-localization` ~15.0.3
-
-### Build
-- `expo-build-properties` ~0.12.0
+- **Core**: `expo` ~56.1.0, `react` 18.2.0, `react-native` 0.85.0, `expo-router` (file-based routing, the app's `main` entry point)
+- **Real-time collaboration**: `yjs`, `y-websocket`, `lib0` (CRDT sync)
+- **Messaging security**: `@signalapp/libsignal-client` (Signal protocol E2E encryption), `expo-secure-store`
+- **Offline storage**: `@nozbe/watermelondb`
+- **Media/AV**: `react-native-webrtc`, `react-native-video`, `ffmpeg-kit-react-native`, `expo-av`
+- **Graphics/animation**: `@shopify/react-native-skia`, `react-native-reanimated`, `react-native-gesture-handler`
+- **On-device ML**: `onnxruntime-react-native`
+- **Navigation**: `@react-navigation/native`, `@react-navigation/native-stack`, `@react-navigation/bottom-tabs` (alongside `expo-router`)
 
 ## Testing
 
 ```bash
-# Run type checking
-npm run type-check
-
-# Run linting
-npm run lint
+npm test          # jest
+npm run test:watch
 ```
+
+There is no `type-check` or `lint` npm script in this package — TypeScript
+errors surface via your editor or `tsc` run directly; there's no
+dedicated lint config here either.
 
 ## Features
 
@@ -367,7 +322,7 @@ EXPO_PUBLIC_STELLAR_NETWORK=testnet
 
 1. Create a feature branch
 2. Implement changes
-3. Run type checking and linting
+3. Run `npm test` (there's no separate type-check/lint script here — see Testing above)
 4. Test on iOS and Android
 5. Submit pull request
 
