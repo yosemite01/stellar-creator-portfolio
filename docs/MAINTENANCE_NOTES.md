@@ -1,8 +1,8 @@
-# Maintenance Notes: Dependency & Tooling Drift
+# Maintenance Notes: Dependency, Tooling & Wiring Drift
 
 Notes on the current state for a few open maintenance chores, so whoever picks up the
 code change doesn't have to re-derive this context. These are notes only — none of the
-three items below have been implemented here.
+items below have been implemented here.
 
 ## zod minor bump (issue #1194)
 
@@ -41,3 +41,26 @@ three items below have been implemented here.
   pins `node-version: '22'`, out of step with every other workflow in the repo (20). Not
   in scope for #1195, but worth a separate ticket — it means the "one Node version"
   story isn't fully true yet even after #1195/#1196 land.
+
+## backend/limit's test:unit / test:integration / test:e2e / test:security scripts are broken
+
+- [`backend/limit/package.json`](../backend/limit/package.json) declares
+  `test:unit`, `test:integration`, `test:e2e`, and `test:security`, each
+  pointing at `tests/<suite>/runner.ts`. None of those per-suite runner
+  files exist — only the combined `tests/runner.ts` does (which is what
+  plain `npm test` in that directory runs, and it works).
+- Fix is either: add the four missing runner files, or simplify the four
+  broken scripts down to just re-running `tests/runner.ts` (possibly with
+  a suite-name filter argument) so the documented commands actually work.
+
+## backend/services/notifications/push-route.ts isn't mounted anywhere
+
+- The file exists and is a complete Next.js route handler (`POST`/`PUT`/`GET`
+  for `/api/notifications/push`), but it sits in
+  `backend/services/notifications/`, not under `app/api/`. Next.js App
+  Router only serves a route from a file literally at
+  `app/api/<path>/route.ts`, so this endpoint does not currently exist in
+  the running app.
+- Fix: move it to `app/api/notifications/push/route.ts` (or re-export it
+  from a thin file there), then verify the curl examples in
+  `backend/services/notifications/README.md` actually work.
