@@ -27,6 +27,15 @@ to it directly instead of duplicating the details here.
    path + failure/rejection path) is scoped alongside it in
    `__tests__/sep24-flow.e2e.test.ts` (currently `it.todo`) so the tests land
    in the same PR as the real implementation rather than as a follow-up.
+4. **Soroban sequence-number management: finish wiring it in** — the
+   building blocks exist (`lib/soroban/sequence-manager.ts` +
+   `transaction-queue.ts`, and a newer `sequence-manager-v2.ts` +
+   `transaction-queue-drainer.ts` from Issue #838), and there's already a
+   load test for it (`load-tests/sequence-collision.test.js`, targeting
+   `/api/soroban/enqueue`), but nothing calls either generation from the
+   app's real transaction-submission path, and `/api/soroban/enqueue`
+   doesn't exist yet. See `docs/SOROBAN_SEQUENCE_MANAGEMENT.md` for the
+   full picture and what specifically is left to wire up.
 
 ## Process notes
 
