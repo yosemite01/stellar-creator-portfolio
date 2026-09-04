@@ -14,9 +14,10 @@ workflow, code style, testing, and the PR/merge process for this repo.
 
 ### Prerequisites
 
-- Node.js 18+ or 20+
-- pnpm
-- Rust 1.70+ (for backend/contract work)
+- Node.js 20 (matches `.github/workflows/cli-checks.yml`'s pinned `node-version: 20` — there's
+  no `.nvmrc` yet, see `docs/MAINTENANCE_NOTES.md`)
+- pnpm 10+ (pinned via `packageManager` in `package.json`)
+- Rust 1.74+ (for backend/contract work — matches `backend/Cargo.toml`'s `rust-version`)
 - Git
 
 ### Setup Development Environment
@@ -82,8 +83,8 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`
 ### Frontend (TypeScript/React)
 
 ```bash
-pnpm lint         # ESLint
-pnpm check:types  # tsc --noEmit
+pnpm lint            # ESLint
+pnpm run check-frontend  # lint + `next build` (surfaces TypeScript errors — there's no standalone tsc --noEmit script)
 ```
 
 - Use `const` by default, avoid `var`
@@ -102,10 +103,15 @@ cargo test
 
 ```bash
 pnpm run cli-checks     # frontend lint/i18n + backend clippy + contract clippy — run before pushing
-pnpm test               # unit tests (vitest)
-pnpm run test:e2e       # E2E tests (vitest, *.e2e.test.ts)
-pnpm run test:ci        # both
+pnpm test               # vitest — unit tests AND the *.e2e.test.ts files under __tests__/
+                        # (vitest's default include pattern picks up both; there's no separate
+                        # command for just the *.e2e.test.ts subset)
+pnpm run test:e2e       # Playwright — testDir is ./tests (currently just tests/auth.e2e.ts),
+                        # a different suite from the vitest *.e2e.test.ts files above despite
+                        # the similar naming
 ```
+
+There is no `test:ci` script — run `pnpm test` and `pnpm run test:e2e` separately.
 
 - Write tests as you code — happy path and edge cases
 - New frontend features that call out to an external flow (anchors, payment
