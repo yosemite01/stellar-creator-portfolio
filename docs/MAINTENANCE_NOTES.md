@@ -83,6 +83,59 @@ items below have been implemented here.
   not attempted here since it needs real iteration against the dependency
   graph, not a one-line change.
 
+## `pnpm run build`'s TypeScript check: ~149 real errors remain after fixing the build-blockers
+
+Fixed in this pass: `pnpm run build` used to fail before it could even bundle
+(missing `stripe`/`ioredis`/`graphql` deps, a stale generated Prisma client,
+a `tsconfig.json` with no `exclude` so the project-wide typecheck pulled in
+`mobile/`'s React Native code, `backend/limit/`'s standalone sub-project, and
+every `*.test.ts(x)` file — none of which are part of this app's own build).
+Turbopack now reports "Compiled successfully" and the typecheck step is
+correctly scoped to just this app's real code. What's left, `npx tsc --noEmit
+-p tsconfig.json` reports ~149 errors, categorized (counts from `error TSxxxx`
+codes at the time of writing — will drift):
+
+- **Prisma schema/code drift (~50 errors, TS2339/TS2322/TS2353)**: real code
+  references fields/models that don't exist in `prisma/schema.prisma` at all
+  — confirmed by grepping the schema directly, not just a stale generated
+  client. Two concrete examples: `app/admin/actions.ts` reads/writes a
+  `suspendedAt` field on `User` (for a user-suspension admin action) that
+  the `User` model doesn't have; `app/api/analytics/corridors/route.ts`
+  queries `prisma.corridorPayment`, but no `CorridorPayment` model exists.
+  These aren't just type errors — calling either at runtime would throw,
+  since Prisma validates queries against the schema. Needs someone who
+  knows the intended data model to add the missing fields/models and a
+  migration, not a type-only fix.
+- **`services/api/stellar/contract.ts` (4 errors)**: `ScVal`/`LedgerEntryData`
+  conversion, a private `Account.sequence` access, `GetTransactionStatus`
+  missing `PENDING`. Likely a `@stellar/stellar-sdk` version drift (the
+  types this file was written against no longer match what's installed).
+- **`backend/src/graphql/*` and `backend/src/router.ts`/`trpc-setup.ts`**:
+  a tRPC + GraphQL server layer living under `backend/src/` (confusingly
+  alongside the unrelated Rust workspace also called `backend/`) that's
+  real and reachable from `app/api/trpc/[trpc]/route.ts` and
+  `app/api/graphql/route.ts` — not dead code, has its own real type errors.
+  Worth its own dedicated pass; not attempted here beyond confirming it's
+  live code, not noise.
+- **Missing `@types/ws`** (`app/api/collab/route.ts`, TS7016): add it as a
+  dev dependency.
+- **`error TS2737` (10, BigInt literals not available below ES2020)**:
+  `tsconfig.json`'s `target` is `ES6` — likely wants bumping, but do that as
+  its own change and re-verify the whole app against the new target rather
+  than folding it into an unrelated fix.
+- **The rest**: scattered `any`-typed callback parameters (`TS7006`),
+  `Promise<ReadonlyRequestCookies>` used without `await` (Next 15+ made
+  `cookies()` async - `app/admin/analytics/page.tsx`), and similar
+  one-off issues — see a fresh `npx tsc --noEmit -p tsconfig.json` for the
+  current exact list.
+
+Also fixed as part of this: 6 GitHub Actions steps across `ci.yml`,
+`cli-checks.yml`, and `deploy-mainnet.yml` pinned `pnpm/action-setup` to
+`version: 8`, while this repo's lockfile is `lockfileVersion: '9.0'` (pnpm
+9+) and `package.json`'s own `packageManager` field pins `pnpm@10.33.0` —
+pnpm 8 cannot read a v9 lockfile at all. All 6 bumped to `version: 10`
+(matching `nightly-tier-upgrade.yml`, which already had it right).
+
 ## backend/services/notifications/push-route.ts isn't mounted anywhere
 
 - The file exists and is a complete Next.js route handler (`POST`/`PUT`/`GET`
