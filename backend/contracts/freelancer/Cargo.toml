@@ -10,8 +10,11 @@ license.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
+soroban-sdk.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.release]
 opt-level = "z"
