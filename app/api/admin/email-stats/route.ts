@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { prisma } from '@/lib/db';
 
 async function isAdmin(request: NextRequest): Promise<boolean> {
@@ -10,7 +11,19 @@ async function isAdmin(request: NextRequest): Promise<boolean> {
 
   if (!adminSecret) return false;
 
-  return token === adminSecret;
+  // Constant-time comparison (mirrors the pattern in
+  // app/api/admin/cron/kyc-cleanup/route.ts and
+  // app/api/admin/cron/corridor-aggregation/route.ts): a plain ===
+  // comparison leaks timing information about how many leading characters
+  // of a guess match, letting the secret be recovered incrementally.
+  try {
+    const a = Buffer.from(token);
+    const b = Buffer.from(adminSecret);
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 export async function GET(request: NextRequest) {
