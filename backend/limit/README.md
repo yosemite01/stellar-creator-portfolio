@@ -2,6 +2,11 @@
 
 Enterprise-grade API security middleware for Express.js with comprehensive rate limiting, authentication, input validation, monitoring, and DDoS protection.
 
+**This is a standalone sub-project** (its own `package.json`/`tsconfig.json`,
+independent of the root Next.js app and the Rust `backend/`) — every
+command below (`npm install`, `npm test`, etc.) must be run from inside
+`backend/limit/`, not the repo root.
+
 ## 🎯 Features
 
 ### Security
@@ -257,46 +262,32 @@ errors.forEach((log) => {
 
 ## 🧪 Testing
 
+Tests use a small hand-rolled runner (`tests/runner.ts`), not Jest/vitest.
+
 ### Run All Tests
 
 ```bash
 npm test
 ```
 
-### Run Specific Test Suites
+This runs `tests/runner.ts`, which imports and runs all three suites below
+directly (`tests/unit/rate-limit.test.ts`,
+`tests/integration/security.test.ts`, `tests/e2e/api-abuse.test.ts`) and
+prints a combined pass/fail summary.
 
-```bash
-npm run test:unit        # Unit tests
-npm run test:integration # Integration tests
-npm run test:e2e         # End-to-end tests
-```
+**`npm run test:unit` / `test:integration` / `test:e2e` / `test:security`
+are declared in `package.json` but currently broken** — they point at
+`tests/unit/runner.ts`, `tests/integration/runner.ts`, `tests/e2e/runner.ts`,
+and `tests/security/runner.ts`, none of which exist (only the combined
+`tests/runner.ts` does, and there is no `tests/security/` directory at
+all). Use plain `npm test` until those are added or the scripts are fixed
+to point at the right files.
 
 ### Test Coverage
 
-**Unit Tests** (80+ tests)
-
-- Rate limiting logic
-- Sliding window algorithm
-- Input validation
-- Security utilities
-- API key management
-
-**Integration Tests** (12+ tests)
-
-- Middleware stack integration
-- CORS enforcement
-- Security headers
-- Error handling
-- Request ID generation
-
-**E2E Tests** (20+ tests)
-
-- DDoS attack prevention
-- SQL injection prevention
-- XSS prevention
-- Brute force detection
-- Rate limiting bypass prevention
-- Attack scenario simulation
+- `tests/unit/rate-limit.test.ts` — rate limiting logic, sliding window algorithm
+- `tests/integration/security.test.ts` — middleware stack integration, CORS enforcement, security headers
+- `tests/e2e/api-abuse.test.ts` — DDoS/rate-limit-bypass/attack-scenario simulation
 
 ## 📋 Environment Variables
 
@@ -326,7 +317,7 @@ MONITORING_ENABLED=true
 ## 🏗️ Project Structure
 
 ```
-.
+backend/limit/
 ├── middleware/
 │   └── rate-limit.ts          # Rate limiting implementation
 ├── lib/
@@ -334,13 +325,18 @@ MONITORING_ENABLED=true
 │   └── api-monitoring.ts      # Logging and monitoring
 ├── app/
 │   └── api/
-│       └── middleware.ts      # Unified middleware configuration
-├── config/
-│   └── (configuration files)
+│       └── middleware.ts      # Unified middleware configuration (createSecureApp)
+├── routes/
+│   └── estimate.ts
 ├── tests/
-│   ├── unit/                  # Unit tests
-│   ├── integration/           # Integration tests
-│   └── e2e/                   # End-to-end tests
+│   ├── runner.ts               # The only working test entry point (npm test)
+│   ├── unit/rate-limit.test.ts
+│   ├── integration/security.test.ts
+│   └── e2e/api-abuse.test.ts
+├── index.ts
+├── endpoints.ts
+├── setup.sh
+├── .env.example
 ├── package.json
 ├── tsconfig.json
 └── README.md
@@ -388,11 +384,11 @@ MONITORING_ENABLED=true
 
 ## 📈 Performance Characteristics
 
-Rate limiting checks: **< 0.01ms per request**
-Input validation: **< 1ms per request**
-Monitoring overhead: **< 0.5ms per request**
-
-Handles **10,000+ requests/second** with < 2% CPU overhead.
+The specific numbers previously here (sub-millisecond per-request overhead,
+10,000+ req/s, <2% CPU) have no benchmark in this directory backing them —
+there's no load-test script or recorded result to point to. Until a real
+benchmark exists, treat this middleware's overhead as unmeasured rather
+than quoting a number nothing here can reproduce.
 
 ## 🚨 Attack Prevention
 
