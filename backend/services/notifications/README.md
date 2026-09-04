@@ -25,7 +25,7 @@ A production-grade, multi-channel push notification system for modern web and mo
 
 ### Developer Experience
 - ✅ TypeScript with full type safety
-- ✅ Comprehensive test suite
+- ⚠️ Test suite: not written yet (see Testing below)
 - ✅ API documentation with examples
 - ✅ Quick start guide
 - ✅ Production-ready code
@@ -33,20 +33,32 @@ A production-grade, multi-channel push notification system for modern web and mo
 ## 📁 File Structure
 
 ```
-outputs/
-├── push-service.ts                    # Core notification service (345 lines)
-├── push-route.ts                      # Next.js API routes (220 lines)
+backend/services/notifications/
+├── push-service.ts                    # Core notification service (PushNotificationService, pushService singleton)
+├── push-route.ts                      # Next.js route handler source — NOT currently mounted, see below
 ├── notification-center.tsx            # React notification center component
 ├── notification-settings-page.tsx     # User preferences page
 ├── notification-validators.ts         # Validation & sanitization utilities
 ├── notification-logger.ts             # Logging and audit trail
-├── rate-limiter.ts                    # Rate limiting implementation
+├── rate-limiter.ts                    # Token-bucket rate limiting
 ├── notification-types.ts              # TypeScript type definitions
-├── notification-service.test.ts       # Comprehensive test suite
-├── IMPLEMENTATION_GUIDE.md            # Detailed implementation guide
-├── QUICKSTART.md                      # 5-minute setup guide
 └── README.md                          # This file
 ```
+
+There is no `IMPLEMENTATION_GUIDE.md` or `QUICKSTART.md` in this directory
+despite this doc referencing them below — those were never created (or
+were removed). Treat this README as the only doc for this service until
+that's fixed.
+
+**`push-route.ts` is not wired into the app.** Next.js App Router only
+serves a route handler from a file literally at `app/api/<path>/route.ts`;
+this file lives in `backend/services/notifications/` instead, so
+`/api/notifications/push` does not currently exist as a live endpoint. The
+real routes under `app/api/notifications/` today are `route.ts`,
+`read-all/route.ts`, and `[id]/read/route.ts` — none of them this one. The
+curl examples below describe the intended contract, not something you can
+run against this repo as-is until `push-route.ts` (or a re-export of it) is
+moved under `app/api/notifications/push/route.ts`.
 
 ## 🏗️ Architecture
 
@@ -87,7 +99,7 @@ ONESIGNAL_API_KEY=your-api-key
 
 ### 3. Add to Your App
 ```typescript
-import { pushService } from '@/lib/push-service';
+import { pushService } from '@/backend/services/notifications/push-service';
 
 // Start queue processor
 pushService.startQueueProcessor();
@@ -105,8 +117,6 @@ await pushService.sendNotification(
   userPreferences,
 );
 ```
-
-See [QUICKSTART.md](./QUICKSTART.md) for detailed setup instructions.
 
 ## 📖 API Examples
 
@@ -144,22 +154,13 @@ curl http://localhost:3000/api/notifications/push?action=health
 
 ## 🧪 Testing
 
-### Run Tests
-```bash
-npm test notification-service.test.ts
-
-# With coverage
-npm test -- --coverage
-
-# Performance tests
-npm test -- --testNamePattern="10k"
-```
-
-### Test Coverage
-- Unit tests: Validators, sanitizers, utilities
-- Integration tests: Service methods, API routes
-- Performance tests: 10,000+ notification handling
-- Security tests: Input validation, XSS prevention
+**There is currently no test file for this service** — no
+`notification-service.test.ts` or equivalent exists in this directory.
+This repo runs tests with vitest (`npm test`, `npm run test:watch`), not
+Jest, so the previous Jest-style examples here (`--testNamePattern`) never
+matched this project's tooling even as a template. Writing real coverage
+for `push-service.ts`, `notification-validators.ts`, and `rate-limiter.ts`
+is open work, not something already done.
 
 ## 📊 Performance
 
@@ -223,8 +224,7 @@ REDIS_URL=
 
 ## 📚 Documentation
 
-- [QUICKSTART.md](./QUICKSTART.md) - 5-minute setup guide
-- [IMPLEMENTATION_GUIDE.md](./IMPLEMENTATION_GUIDE.md) - Complete reference
+- This README is currently the only doc for this service.
 - Inline code comments for all functions
 - TypeScript types for all interfaces
 
@@ -288,8 +288,6 @@ Response: { queueSize: 0, processedToday: 1234, ... }
 3. Increase batch processor interval
 4. Monitor memory usage
 
-See [IMPLEMENTATION_GUIDE.md](./IMPLEMENTATION_GUIDE.md) for detailed troubleshooting.
-
 ## 📈 Roadmap
 
 - [ ] Rich notifications (buttons, images)
@@ -307,17 +305,20 @@ MIT
 
 Contributions welcome! Please ensure:
 - Tests pass: `npm test`
-- Code is TypeScript: `npm run type-check`
-- Follows formatting: `npm run format`
+- Lint is clean: `npm run lint`
+- The Next.js build succeeds (surfaces TypeScript errors): `npm run build`
+
+(This repo has no dedicated `type-check`/`format` npm scripts — those
+referenced here previously don't exist in `package.json`.)
 
 ## 📞 Support
 
-- Check documentation in IMPLEMENTATION_GUIDE.md
 - Review test cases for usage examples
 - Check provider documentation (Firebase, OneSignal)
 
 ---
 
-**Version**: 1.0.0  
-**Last Updated**: January 2024  
-**Status**: Production Ready ✅
+**Status**: The service and UI layers exist and match this doc; the API
+route (`push-route.ts`) is not yet mounted under `app/api/`, and there is
+no test coverage. Not ready to treat as production-live until both of
+those are addressed.
