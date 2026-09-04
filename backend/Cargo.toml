@@ -10,7 +10,6 @@ members = [
     "contracts/referral",
     "contracts/stellar_insights",
     "contracts/insurance",
-    "contracts/insurance",
     "contracts/test-utils",
     "services/api",
     "services/auth",
@@ -88,3 +87,4 @@ tracing-opentelemetry = "0.23"
 opt-level = 3
 lto = true
 codegen-units = 1
+overflow-checks = true
