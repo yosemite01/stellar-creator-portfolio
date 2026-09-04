@@ -52,13 +52,28 @@ jobs:
           cargo install stellar-cli --features opt
 
       - name: Build contracts
+        # Uses `cargo build` directly (not `stellar contract build`, whose
+        # default target on current stellar-cli is wasm32v1-none — a
+        # std-less target this workspace's contracts aren't compatible
+        # with) targeting wasm32-unknown-unknown, matching deploy-mainnet.yml
+        # and the toolchain installed above. Package names are the real
+        # Cargo package names (see backend/contracts/*/Cargo.toml), not the
+        # short directory names — only `oracle`'s package happens to match
+        # its directory name.
         run: |
-          stellar contract build --package bounty --manifest-path backend/Cargo.toml
-          stellar contract build --package escrow --manifest-path backend/Cargo.toml
-          stellar contract build --package freelancer --manifest-path backend/Cargo.toml
-          stellar contract build --package governance --manifest-path backend/Cargo.toml
-          stellar contract build --package oracle --manifest-path backend/Cargo.toml
-          stellar contract build --package identity --manifest-path backend/Cargo.toml
+          cd backend && cargo build --release --target wasm32-unknown-unknown \
+            --package stellar-bounty-contract \
+            --package stellar-escrow-contract \
+            --package stellar-freelancer-contract \
+            --package stellar-governance-contract \
+            --package oracle \
+            --package stellar-identity-contract
+
+      - name: Optimize WASM
+        run: |
+          for f in backend/target/wasm32-unknown-unknown/release/*.wasm; do
+            stellar contract optimize --wasm "$f" --wasm-out "$f"
+          done
 
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4
