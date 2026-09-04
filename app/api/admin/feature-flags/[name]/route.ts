@@ -35,12 +35,13 @@ const patchSchema = z.object({
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { name: string } },
+  { params }: { params: Promise<{ name: string }> },
 ) {
   const auth = await requireAdmin(req);
   if (auth) return auth;
 
-  const flag = await getFlagWithAnalytics(params.name);
+  const { name } = await params;
+  const flag = await getFlagWithAnalytics(name);
   if (!flag) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
   return NextResponse.json(flag);
@@ -48,30 +49,32 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { name: string } },
+  { params }: { params: Promise<{ name: string }> },
 ) {
   const auth = await requireAdmin(req);
   if (auth) return auth;
 
+  const { name } = await params;
   const body = await req.json().catch(() => null);
   const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const flag = await upsertFlag({ name: params.name, ...parsed.data });
+  const flag = await upsertFlag({ name, ...parsed.data });
   return NextResponse.json(flag);
 }
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { name: string } },
+  { params }: { params: Promise<{ name: string }> },
 ) {
   const auth = await requireAdmin(req);
   if (auth) return auth;
 
-  await prisma.featureFlag.delete({ where: { name: params.name } });
-  await invalidateFlagCache(params.name);
+  const { name } = await params;
+  await prisma.featureFlag.delete({ where: { name } });
+  await invalidateFlagCache(name);
 
   return NextResponse.json({ deleted: true });
 }
