@@ -16,7 +16,7 @@ today and what would feel more polished/complete. Low effort, but the kind of de
 notice.
 
 ### Current Behavior (as found in code)
-[mobile/src/components/onboarding/OnboardingWalkthrough.tsx](mobile/src/components/onboarding/OnboardingWalkthrough.tsx#L101-L113)
+[mobile/src/components/onboarding/OnboardingWalkthrough.tsx](../../mobile/src/components/onboarding/OnboardingWalkthrough.tsx#L101-L113)
 already fires a haptic on every step transition, including the final one:
 
 - `handleNext` (line 101) fires `Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)` for
@@ -31,18 +31,18 @@ finishes.
 The app already has a shared haptics abstraction with a pattern built for exactly this kind of
 "meaningful completion" moment, which other screens use instead of calling `expo-haptics`
 directly:
-- [mobile/src/haptics/HapticEngine.ts](mobile/src/haptics/HapticEngine.ts) — `trigger('success')`
+- [mobile/src/haptics/HapticEngine.ts](../../mobile/src/haptics/HapticEngine.ts) — `trigger('success')`
   maps to `NotificationFeedbackType.Success` (three pulses), documented as the pattern for
   moments like "payment sent"; also respects the user's haptics-enabled setting, which the
   direct `expo-haptics` calls in `OnboardingWalkthrough` currently do not
-- [mobile/src/hooks/useHapticSettings.ts](mobile/src/hooks/useHapticSettings.ts) — hook for
+- [mobile/src/hooks/useHapticSettings.ts](../../mobile/src/hooks/useHapticSettings.ts) — hook for
   reading/writing the haptics-enabled preference
 
 ### Files Involved
-- [mobile/src/components/onboarding/OnboardingWalkthrough.tsx](mobile/src/components/onboarding/OnboardingWalkthrough.tsx) —
+- [mobile/src/components/onboarding/OnboardingWalkthrough.tsx](../../mobile/src/components/onboarding/OnboardingWalkthrough.tsx) —
   `handleNext`'s `onComplete()` branch (line 103–104) is where a distinct completion haptic
   belongs
-- [mobile/src/haptics/HapticEngine.ts](mobile/src/haptics/HapticEngine.ts) — reuse
+- [mobile/src/haptics/HapticEngine.ts](../../mobile/src/haptics/HapticEngine.ts) — reuse
   `trigger('success')` instead of a raw `expo-haptics` call
 
 ### Action Items

@@ -5,15 +5,15 @@
 ---
 
 ### Description
-New contributors following [README.md](README.md#L529-L548) ("Running Full Backend Stack") run into ambiguity around the Docker Compose local-dev flow. The section lists `cd backend && docker-compose up` and the services it exposes, but leaves out details a first-time reader needs:
+New contributors following [README.md](../../README.md#L529-L548) ("Running Full Backend Stack") run into ambiguity around the Docker Compose local-dev flow. The section lists `cd backend && docker-compose up` and the services it exposes, but leaves out details a first-time reader needs:
 
-- [backend/docker-compose.yml](backend/docker-compose.yml) also starts an `indexer` service that isn't mentioned in the README's service list (only API, pgAdmin, PostgreSQL, Redis are called out).
+- [backend/docker-compose.yml](../../backend/docker-compose.yml) also starts an `indexer` service that isn't mentioned in the README's service list (only API, pgAdmin, PostgreSQL, Redis are called out).
 - The first `docker-compose up` builds Rust images (`Dockerfile.api`, `Dockerfile.indexer`) from source, which can take several minutes — the README doesn't set that expectation, so it looks "stuck" to a new contributor.
 - There's no example of what a successful startup looks like (expected log lines / how to confirm the API is actually up), and no mention of default credentials already baked into the compose file (`stellar` / `stellar_dev_password`, pgAdmin `admin@stellar.dev` / `admin`).
 
 ### Files Involved
-- [README.md](README.md#L529-L548)
-- [backend/docker-compose.yml](backend/docker-compose.yml) (source of truth for services/ports/credentials)
+- [README.md](../../README.md#L529-L548)
+- [backend/docker-compose.yml](../../backend/docker-compose.yml) (source of truth for services/ports/credentials)
 
 ### Action Items
 - [ ] Add the `indexer` service to the README's service list alongside API/pgAdmin/PostgreSQL/Redis

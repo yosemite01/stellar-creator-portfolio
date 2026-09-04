@@ -569,7 +569,7 @@ error!("Failed to process payment: {}", error);
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for development guidelines.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for development guidelines.
 
 ## License
 

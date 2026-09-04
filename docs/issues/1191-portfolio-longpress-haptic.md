@@ -16,22 +16,22 @@ today and what would feel more polished/complete. Low effort, but the kind of de
 notice.
 
 ### Current Behavior (as found in code)
-[mobile/src/components/portfolio/OptimizedPortfolioGrid.tsx](mobile/src/components/portfolio/OptimizedPortfolioGrid.tsx)
+[mobile/src/components/portfolio/OptimizedPortfolioGrid.tsx](../../mobile/src/components/portfolio/OptimizedPortfolioGrid.tsx)
 renders each portfolio item as a `TouchableOpacity` wired only to `onPress` (line 108–110) —
 there is no `onLongPress` handler at all, so there's nothing to attach haptics to yet.
 
 The app already has a shared haptics abstraction that other screens use for exactly this kind of
 interaction, so this doesn't need a new pattern:
-- [mobile/src/haptics/HapticEngine.ts](mobile/src/haptics/HapticEngine.ts) — `trigger(pattern)`
+- [mobile/src/haptics/HapticEngine.ts](../../mobile/src/haptics/HapticEngine.ts) — `trigger(pattern)`
   with `light` / `medium` / `success` / `heavy` / `error` / `selection` patterns, already
   respects the user's haptics-enabled setting
-- [mobile/src/hooks/useHapticSettings.ts](mobile/src/hooks/useHapticSettings.ts) — hook for
+- [mobile/src/hooks/useHapticSettings.ts](../../mobile/src/hooks/useHapticSettings.ts) — hook for
   reading/writing the haptics-enabled preference
 
 ### Files Involved
-- [mobile/src/components/portfolio/OptimizedPortfolioGrid.tsx](mobile/src/components/portfolio/OptimizedPortfolioGrid.tsx) —
+- [mobile/src/components/portfolio/OptimizedPortfolioGrid.tsx](../../mobile/src/components/portfolio/OptimizedPortfolioGrid.tsx) —
   add an `onLongPress` handler to the item `TouchableOpacity`
-- [mobile/src/haptics/HapticEngine.ts](mobile/src/haptics/HapticEngine.ts) — reuse `trigger()`
+- [mobile/src/haptics/HapticEngine.ts](../../mobile/src/haptics/HapticEngine.ts) — reuse `trigger()`
   rather than calling `expo-haptics` directly
 
 ### Action Items

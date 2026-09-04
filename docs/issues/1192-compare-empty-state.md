@@ -15,19 +15,19 @@ Copy and empty states are easy to overlook during feature work because the happy
 gets tested, but the empty/edge state is often what a new or returning user actually sees first.
 
 ### Current Behavior (as found in code)
-[app/compare/page.tsx](app/compare/page.tsx) has no in-page empty state at all today. When the
+[app/compare/page.tsx](../../app/compare/page.tsx) has no in-page empty state at all today. When the
 `ids` query param is missing, or fewer than two creators match it, the page silently
 `router.push('/creators')`s the user away (lines 18–30) with no message explaining why they were
-redirected. [components/ComparisonBar.tsx](components/ComparisonBar.tsx) similarly renders
+redirected. [components/ComparisonBar.tsx](../../components/ComparisonBar.tsx) similarly renders
 `null` when fewer than two creators are selected (line 13), so there is no visible affordance
 guiding the user toward comparing creators in the first place.
 
 ### Files Involved
-- [app/compare/page.tsx](app/compare/page.tsx) — owns the redirect-on-empty logic; needs an
+- [app/compare/page.tsx](../../app/compare/page.tsx) — owns the redirect-on-empty logic; needs an
   actual empty state instead of (or before) the silent redirect
-- [components/ComparisonBar.tsx](components/ComparisonBar.tsx) — the sticky bar that surfaces
+- [components/ComparisonBar.tsx](../../components/ComparisonBar.tsx) — the sticky bar that surfaces
   the "Compare Now" CTA once 2+ creators are selected
-- [components/creator-card.tsx](components/creator-card.tsx) — where creators are added to a
+- [components/cards/creator-card.tsx](../../components/cards/creator-card.tsx) — where creators are added to a
   comparison in the first place
 
 ### Action Items
