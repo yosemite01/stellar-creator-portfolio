@@ -133,10 +133,11 @@ CREATE TABLE "SorobanTransaction" (
    coordination.
 3. If using v2, start the drainer somewhere on server boot (there's
    currently no `instrumentation.ts` or equivalent bootstrap in this repo).
-4. Add a load-test scenario that actually exercises concurrent submissions
-   against one account — the current `load-tests/` k6 suite doesn't have one
-   (see [`load-tests/README.md`](../load-tests/README.md)) — before trusting
-   any success-rate/latency numbers for this feature.
+4. [`load-tests/sequence-collision.test.js`](../load-tests/sequence-collision.test.js)
+   already exists for this (Issue #838: 50 concurrent submissions, target
+   >20 tx/s, no collisions) — but it POSTs to `/api/soroban/enqueue`, which
+   doesn't exist in `app/` yet. It will fail until step 2 above lands
+   *and* a matching route is added at that path.
 
 ## Troubleshooting (once wired up)
 

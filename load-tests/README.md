@@ -38,9 +38,13 @@ load-tests/
 │   ├── referrals.test.js   # Referrals API
 │   ├── upload.test.js      # Upload API
 │   └── rust-api.test.js    # Rust backend API (port 3001)
-├── smoke.test.js           # Quick smoke test (all services)
-├── stress.test.js          # Stress test (ramp to breaking point)
-├── soak.test.js            # Soak test (sustained load over time)
+├── smoke.test.js               # Quick smoke test (all services)
+├── stress.test.js              # Stress test (ramp to breaking point)
+├── soak.test.js                # Soak test (sustained load over time)
+├── spike.test.js               # Sudden burst of traffic (flash-crowd simulation)
+├── sequence-collision.test.js  # Issue #838: 50 concurrent Soroban tx submissions,
+│                                # no sequence collisions — POSTs to /api/soroban/enqueue,
+│                                # which does not exist yet (see docs/SOROBAN_SEQUENCE_MANAGEMENT.md)
 └── README.md
 ```
 
@@ -116,9 +120,8 @@ k6 run -e BASE_URL=https://staging.example.com load-tests/smoke.test.js
 k6 run --out json=results.json load-tests/smoke.test.js
 ```
 
-Or via the pnpm shortcuts defined in `package.json` (e.g. `pnpm run load:smoke`,
-`pnpm run load:stress`, `pnpm run load:auth`) — see the `load:*` scripts there for the
-full list, one per scenario.
+There are no `load:*` scripts in `package.json` — run `k6 run load-tests/<file>` directly,
+as above.
 
 ## Environment Variables
 
