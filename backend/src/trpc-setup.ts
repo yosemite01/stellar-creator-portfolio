@@ -14,6 +14,7 @@
 
 import { TRPCError, initTRPC } from '@trpc/server';
 import { NextRequest, NextResponse } from 'next/server';
+import { ZodError } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { tracingMiddleware } from '@/backend/services/tracing';
 import { CircuitOpenError } from '@/services/api/stellar/client';
@@ -23,8 +24,8 @@ import jwt from 'jsonwebtoken';
 
 interface User {
   id: string;
-  email: string;
-  name: string;
+  email: string | null;
+  name: string | null;
 }
 
 interface Context {
@@ -77,8 +78,8 @@ const t = initTRPC.context<Context>().create({
     ...shape,
     data: {
       ...shape.data,
-      zodError: 
-        error.cause instanceof Error && error.cause.name === 'ZodError'
+      zodError:
+        error.cause instanceof ZodError
           ? error.cause.flatten()
           : null,
     },
@@ -87,13 +88,18 @@ const t = initTRPC.context<Context>().create({
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
+// tracingMiddleware's `next` param is typed generically (() => Promise<unknown>)
+// so it can be shared across frameworks, but its implementation always
+// resolves to exactly whatever `next()` itself resolved to - it never
+// transforms the result. That means casting through `next`'s own real
+// return type here reflects actual runtime behavior, not a false claim.
 const tracingMw = t.middleware(({ next, path, type, ctx }) => {
   return tracingMiddleware({
     ctx: { headers: ctx.headers },
-    next,
+    next: next as unknown as () => Promise<unknown>,
     path,
     type,
-  });
+  }) as ReturnType<typeof next>;
 });
 
 const authMiddleware = t.middleware(({ ctx, next }) => {
