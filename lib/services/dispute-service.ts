@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import type { UserRole } from './admin-service';
 
 // ── Zod schemas (validation) ─────────────────────────────────────────────────
 
@@ -85,9 +86,6 @@ export const appealInputSchema = z.object({
 });
 export type AppealInput = z.infer<typeof appealInputSchema>;
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
-export type UserRole = 'USER' | 'CLIENT' | 'CREATOR' | 'ADMIN';
 
 export interface EvidenceItem extends EvidenceMetadata {
   id: string;
