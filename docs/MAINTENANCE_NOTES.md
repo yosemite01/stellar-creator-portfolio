@@ -247,3 +247,42 @@ certificate-issuing piece on the server side first, which doesn't exist yet eith
 Given this needs careful, verified work on security-sensitive crypto glue - not
 something to guess through in the same pass as other fixes - left as a scoped-out
 finding rather than attempting a full rewrite here.
+
+## mobile/src/ota/: OTA update system is unreachable dead code, and must stay that way until fixed
+
+Confirmed by grepping the whole app for imports of `ota-client.ts`/`rollback.ts` -
+nothing references either file. That's the only thing currently preventing a serious
+security issue from being live.
+
+`ota-client.ts` decrypts downloaded patches with an AES-256-GCM key read from
+`EXPO_PUBLIC_OTA_AES_KEY`. `EXPO_PUBLIC_*` variables are inlined into the client
+bundle at build time by design - every installed copy of the app ships the same key.
+That means:
+
+- Anyone who extracts the key from one installed client can decrypt any patch - but
+  more importantly, they can **encrypt their own arbitrary patch with the same key**,
+  and AES-GCM's auth tag will verify it as validly as a real one, since "encrypted
+  with this key" no longer implies "came from the real OTA server" once the key is in
+  every client.
+- The only other check, comparing the patched bundle's SHA-256 against
+  `manifest.sha256`, is circular - that field comes from the same unauthenticated
+  `fetch(MANIFEST_URL)` response as the patch itself. Whoever controls or can spoof
+  that endpoint controls both the payload and the value that's supposed to verify it.
+- Net effect if this were ever wired up: extracting the shared key from any installed
+  build, or spoofing/MITMing the manifest endpoint, lets an attacker push arbitrary
+  executable JS to every device that polls for updates. This is a remote-code-execution
+  path against the whole install base, not a data-integrity nitpick.
+
+Added a prominent warning comment directly in `ota-client.ts` (top of file) so nobody
+wires this up believing "AES-256-GCM" and "SHA-256 verified" mean it's already safe.
+
+A real fix needs **asymmetric** signing: the manifest signed server-side with a
+private key that never leaves the server, verified client-side against a public key
+embedded in the build (safe to embed - it can only verify, not sign or decrypt), with
+the payload hash carried inside that signed manifest rather than treated as
+trustworthy on its own. That's real backend signing infrastructure this repo doesn't
+have yet. Given `expo-updates` / EAS Update already solves exactly this problem (with
+an app-platform team's review behind the implementation), it's worth asking whether
+this bespoke OTA + AES + hand-rolled bsdiff-in-TypeScript system (its own doc comment
+admits the patch-apply function is "a stand-in for CI/test environments," not
+production) should be replaced with it rather than fixed in place.

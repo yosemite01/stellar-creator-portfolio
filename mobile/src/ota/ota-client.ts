@@ -1,6 +1,45 @@
 /**
  * #603 — OTA Client
  *
+ * DO NOT WIRE THIS UP AS-IS. Not currently imported by anything in the
+ * app (verified) - keep it that way until the design below is fixed.
+ *
+ * The manifest's "signed" claim and the AES-GCM decryption here do not
+ * provide the authenticity this needs:
+ *   - EXPO_PUBLIC_OTA_AES_KEY is inlined into the client bundle at build
+ *     time by design (that's what EXPO_PUBLIC_* means) - every installed
+ *     copy of the app ships the same decryption key. Anyone who extracts
+ *     it from one install can decrypt any patch, and - far worse - can
+ *     encrypt their own arbitrary patch with the same key. AES-GCM's tag
+ *     will verify against attacker-crafted plaintext just as validly as
+ *     against a real one, because "encrypted with this key" and
+ *     "actually came from the OTA server" are not the same claim once
+ *     the key is public.
+ *   - applyUpdate()'s only integrity check is comparing the patched
+ *     bundle's SHA-256 against manifest.sha256 - a field that comes from
+ *     the same unauthenticated fetch(MANIFEST_URL) response. That's
+ *     circular: whoever controls (or can spoof/MITM) the manifest
+ *     response controls both the payload and the "checksum" that's
+ *     supposed to verify it.
+ *   - Net effect if this were ever wired up: anyone who extracts the
+ *     shared key from an installed client, or who can serve a
+ *     replacement manifest, can push arbitrary executable JS to every
+ *     device that polls for updates - a remote-code-execution path
+ *     against the whole install base, not just a data-integrity bug.
+ *
+ * A real fix needs asymmetric signing, not a shared symmetric key: the
+ * manifest itself signed server-side with a private key that never
+ * leaves the server, verified client-side against a public key embedded
+ * in the build (which is safe to embed - it can only verify, not sign).
+ * The payload's SHA-256 must be checked against a hash carried inside
+ * that signed manifest, not treated as trustworthy on its own. Given the
+ * real backend signing infrastructure this needs, consider whether
+ * `expo-updates` / EAS Update (which already solves exactly this
+ * problem, with review from an app-platform team behind it) is a better
+ * fit than maintaining bespoke OTA crypto and binary patching in-house.
+ *
+ * Original doc, kept for context on what this file currently does:
+ *
  * Fetches a signed OTA manifest, decrypts the AES-256-GCM payload,
  * applies a differential binary patch, verifies the SHA-256 checksum,
  * then swaps the bundle. Operates without App Store review.
