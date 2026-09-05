@@ -504,7 +504,7 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         // Check if nullifier has already been used (replay protection)
-        const existingNullifier = await prisma.zkNullifier.findUnique({
+        const existingNullifier = await prisma.zKNullifier.findUnique({
           where: { nullifier: input.nullifier },
         });
 
@@ -520,7 +520,7 @@ export const appRouter = router({
         }
 
         // Store the nullifier to prevent replay
-        await prisma.zkNullifier.create({
+        await prisma.zKNullifier.create({
           data: {
             nullifier: input.nullifier,
             createdAt: new Date(),
