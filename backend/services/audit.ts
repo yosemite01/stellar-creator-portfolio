@@ -18,7 +18,7 @@
  */
 
 import { prisma } from '@/lib/prisma';
-import type { AuditStatus } from '@prisma/client';
+import type { AuditStatus, Prisma } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ export async function writeAuditLog(
         resource: input.resource,
         action: input.action,
         resourceId: input.resourceId ?? null,
-        payload: sanitised ?? undefined,
+        payload: (sanitised ?? undefined) as Prisma.InputJsonValue | undefined,
         status: input.status ?? 'SUCCESS',
         errorMessage: input.errorMessage ?? null,
         traceId: input.meta?.traceId ?? parseTraceId(null),
