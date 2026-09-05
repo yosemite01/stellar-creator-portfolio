@@ -2,6 +2,11 @@
  * Load test — Upload API
  * Covers: list files, upload small file, delete file
  * Note: kept at low VUs — upload is I/O heavy.
+ *
+ * KNOWN GAP: verified there is no app/api/upload route anywhere in this
+ * repo - every request below will 404 against a real deployment. See
+ * docs/MAINTENANCE_NOTES.md ("load-tests targeting nonexistent API routes")
+ * before including this scenario in a real load-test run.
  */
 import http from 'k6/http';
 import { check, sleep } from 'k6';

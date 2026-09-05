@@ -2,6 +2,11 @@
  * Load test — Referrals API
  * Covers: generate code, get stats, get history, track event
  * Rate limit: 30 req/min general, 10 req/min POST
+ *
+ * KNOWN GAP: verified there is no app/api/referrals route anywhere in this
+ * repo - every request below will 404 against a real deployment. See
+ * docs/MAINTENANCE_NOTES.md ("load-tests targeting nonexistent API routes")
+ * before including this scenario in a real load-test run.
  */
 import http from 'k6/http';
 import { check, sleep } from 'k6';

@@ -2,6 +2,14 @@
  * Load test — Reviews API
  * Covers: list reviews, submit review, vote
  * Rate limit: 20 req/min general, 10 req/min POST
+ *
+ * KNOWN GAP: verified there is no app/api/reviews route. The only review
+ * route that exists is POST /api/creators/reviews/batch (fetches reviews
+ * for multiple creators at once); there is no single-creator GET and no
+ * review-submission (POST/create) route anywhere in this repo. Every
+ * request below will 404 against a real deployment. See
+ * docs/MAINTENANCE_NOTES.md ("load-tests targeting nonexistent API routes")
+ * before including this scenario in a real load-test run.
  */
 import http from 'k6/http';
 import { check, sleep } from 'k6';

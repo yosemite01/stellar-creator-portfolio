@@ -2,6 +2,14 @@
  * Load test — Users API
  * Covers: list, get by id, create, update
  * Rate limit: 60 req/min per IP
+ *
+ * KNOWN GAP: verified there is no top-level app/api/users route (list or
+ * create). What exists instead is app/api/user/* (singular, per-field
+ * sub-resources like account, wallet-address, data-export) and the
+ * unrelated, admin-scoped app/api/admin/reports/users. Every request
+ * below will 404 against a real deployment. See docs/MAINTENANCE_NOTES.md
+ * ("load-tests targeting nonexistent API routes") before including this
+ * scenario in a real load-test run.
  */
 import http from 'k6/http';
 import { check, sleep } from 'k6';
