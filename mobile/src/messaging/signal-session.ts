@@ -110,10 +110,20 @@ class SecureIdentityStore implements IdentityKeyStore {
   }
 
   async saveIdentity(address: ProtocolAddress, key: PublicKey): Promise<boolean> {
-    const k       = `signal.identity.remote.${address.name()}`;
+    const k        = `signal.identity.remote.${address.name()}`;
+    const keyB64   = Buffer.from(key.serialize()).toString('base64');
     const existing = await SecureStore.getItemAsync(k, SECURE_OPTS);
-    await SecureStore.setItemAsync(k, Buffer.from(key.serialize()).toString('base64'), SECURE_OPTS);
+    await SecureStore.setItemAsync(k, keyB64, SECURE_OPTS);
+    // Reverse index (identity key -> userId) so a sealed-sender message,
+    // which only carries the sender's identity key, can be routed to the
+    // right per-sender session instead of a single shared placeholder one.
+    await SecureStore.setItemAsync(`signal.identity.byKey.${keyB64}`, address.name(), SECURE_OPTS);
     return existing !== null;
+  }
+
+  async resolveUserIdByIdentityKey(key: PublicKey): Promise<string | null> {
+    const keyB64 = Buffer.from(key.serialize()).toString('base64');
+    return SecureStore.getItemAsync(`signal.identity.byKey.${keyB64}`, SECURE_OPTS);
   }
 
   async isTrustedIdentity(address: ProtocolAddress, key: PublicKey): Promise<boolean> {
@@ -247,7 +257,11 @@ export class SignalSessionManager {
     const valid = senderIdentityKey.verify(envelope, signature);
     if (!valid) throw new Error('Sealed sender signature verification failed');
 
-    const senderAddress = ProtocolAddress.new('sealed-sender', 1);
+    const senderUserId = await this.identityStore.resolveUserIdByIdentityKey(senderIdentityKey);
+    if (!senderUserId) {
+      throw new Error('Sealed sender: no known session for this identity key');
+    }
+    const senderAddress = ProtocolAddress.new(senderUserId, 1);
     let plaintext: Buffer;
 
     if (msg.messageType === CiphertextMessageType.PreKey) {
@@ -265,7 +279,7 @@ export class SignalSessionManager {
 
     return {
       id: msg.id,
-      senderId: 'sealed',
+      senderId: senderUserId,
       body: plaintext.toString('utf8'),
       timestamp: msg.timestamp,
     };

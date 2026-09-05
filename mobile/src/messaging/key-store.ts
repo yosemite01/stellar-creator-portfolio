@@ -90,15 +90,14 @@ export async function getOrCreateSignedPreKey(
     if (stored) return SignedPreKeyRecord.deserialize(fromb64(stored));
   }
 
-  const keyId  = (currentId ?? 0) + 1;
-  const record = SignedPreKeyRecord.new(
+  const keyId    = (currentId ?? 0) + 1;
+  const spkPair  = identityKeyPair.privateKey.generateKeyPair();
+  const record   = SignedPreKeyRecord.new(
     keyId,
     Date.now(),
-    identityKeyPair.privateKey.generateKeyPair().publicKey,
-    identityKeyPair.privateKey.generateKeyPair().privateKey,
-    identityKeyPair.privateKey.sign(
-      identityKeyPair.privateKey.generateKeyPair().publicKey.serialize(),
-    ),
+    spkPair.publicKey,
+    spkPair.privateKey,
+    identityKeyPair.privateKey.sign(spkPair.publicKey.serialize()),
   );
 
   await SecureStore.setItemAsync(`${KEYS.SIGNED_PREKEY_BASE}${keyId}`, b64(record.serialize()), SECURE_OPTS);
