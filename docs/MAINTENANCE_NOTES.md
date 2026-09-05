@@ -395,3 +395,40 @@ the narrow `persistInAppNotification` fix:
 
 Left unimplemented; `lib/notifications.ts` has a comment pointing back here so it
 isn't mistaken for a complete module.
+
+## CRITICAL: escrow release/refund is currently non-functional (schema gap, not a type nit)
+
+`lib/escrow/escrow-transaction-handler.ts`'s `releaseEscrow` and `refundEscrow` (both
+follow the same shape, ~line 65 and ~line 165) do:
+
+```ts
+await prisma.balance.upsert({ where: { userId: creatorId }, ... });
+await prisma.transaction.create({ data: { ..., status: "completed" } });
+```
+
+Both are invalid against the actual schema, confirmed by reading `prisma/schema.prisma`
+directly:
+
+- `Balance.userId` is a plain indexed field (`@@index([userId])`), not `@unique` or
+  `@id` - Prisma requires a unique field in an `upsert`'s `where`, so this isn't a type
+  quirk, it's an invalid query. Calling either function throws a Prisma validation
+  error at runtime, every time.
+- `Transaction` has no `status` field at all (`id`, `userId`, `escrowId`, `type`,
+  `amount`, timestamps - no status). `status: "completed"` isn't just untyped, the
+  field doesn't exist to write to.
+
+Net effect: **releasing or refunding an escrow is completely broken today**, not a
+future edge case - both code paths fail immediately, before any actual balance or
+transaction row is written. This is worse than the other schema-drift items in this
+file because it's a money-movement path, not analytics or an admin action.
+
+Not fixed here: this needs an actual schema migration (add `@unique` to
+`Balance.userId` - confirming that "one balance row per user" really is the intended
+invariant, since no other code path in the repo touches `Balance` or reads
+`Transaction.status` to contradict it - and add a `status` field to `Transaction`,
+presumably `String` with at least `"completed"`/`"pending"`/`"failed"`, matching what
+this file already writes). There's no live database connected in this environment to
+generate and verify a migration against, and getting an escrow money-movement
+migration wrong is exactly the kind of thing that shouldn't be guessed through
+without being able to test it. Whoever picks this up should treat it as the highest
+priority item in this file.
