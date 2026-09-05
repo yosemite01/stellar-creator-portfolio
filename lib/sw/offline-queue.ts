@@ -12,6 +12,13 @@ const DB_NAME = 'stellar-offline-queue';
 const STORE_NAME = 'mutations';
 const SYNC_TAG = 'stellar-mutation-queue';
 
+// The Background Sync API (SyncManager / ServiceWorkerRegistration.sync)
+// isn't part of TypeScript's default DOM lib. Runtime support is already
+// feature-detected via `'SyncManager' in window` before this is used.
+interface ServiceWorkerRegistrationWithSync extends ServiceWorkerRegistration {
+  sync: { register(tag: string): Promise<void> };
+}
+
 export interface OfflineMutation {
   url: string;
   method: string;
@@ -54,7 +61,7 @@ export async function enqueue(mutation: OfflineMutation): Promise<void> {
 
   // Notify the service worker to replay when online
   if ('serviceWorker' in navigator && 'SyncManager' in window) {
-    const reg = await navigator.serviceWorker.ready;
+    const reg = (await navigator.serviceWorker.ready) as ServiceWorkerRegistrationWithSync;
     await reg.sync.register(SYNC_TAG);
   }
 }
