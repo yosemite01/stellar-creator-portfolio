@@ -335,3 +335,27 @@ real to point at (no equivalent route exists under any path), and reviews/users 
 need someone to decide what the intended real shape is (does "list users" even belong
 as a public API, or should that test be deleted; should review creation be built, or
 should this scenario be deleted too) rather than guessing a URL.
+
+## lib/error-tracking.ts: Sentry integration references an uninstalled package
+
+`initializeSentry()` does `const Sentry = await import('@sentry/nextjs')`, gated
+behind `NEXT_PUBLIC_SENTRY_DSN` being set (it warns and no-ops otherwise) - a
+reasonable, deliberately-soft integration. But `@sentry/nextjs` isn't in
+`package.json` at all, and there's no `sentry.client.config.ts`/
+`sentry.server.config.ts`/`next.config.js` wrapping (the pieces Sentry's own setup
+wizard normally adds). Two consequences:
+
+- `tsc` can't resolve the dynamic import's types (`Cannot find module '@sentry/nextjs'`).
+- More importantly, if anyone ever *does* set `NEXT_PUBLIC_SENTRY_DSN` in a real
+  deployment expecting error tracking to start working, this throws
+  "Cannot find module" at runtime instead - the DSN gate only protects against
+  "unconfigured," not "package missing."
+
+Not added here: unlike the web app's `pnpm run build`-blocking runtime dependencies
+added earlier this session (stripe, ioredis, graphql - things the code already
+assumes exist to talk to services this app is already built around), Sentry is a
+new third-party SaaS integration decision with its own account/DSN/cost
+implications, not an obvious "the code already depends on this" case. Needs someone
+to decide whether to actually wire up Sentry (run its setup wizard properly, get a
+real DSN) or rip out this dead integration path if error tracking isn't actually a
+current priority.
