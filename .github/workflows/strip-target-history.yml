@@ -2,6 +2,13 @@ name: Strip backend/target from git history
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: >-
+          This permanently rewrites all of main's git history and
+          force-pushes it. Existing clones, open PRs, and tags will break.
+          Type exactly: strip-history-force-push
+        required: true
 
 permissions:
   contents: write
@@ -10,6 +17,13 @@ jobs:
   strip:
     runs-on: ubuntu-latest
     steps:
+      - name: Require explicit confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "strip-history-force-push" ]; then
+            echo "::error::Confirmation phrase did not match. Re-run and type exactly: strip-history-force-push"
+            exit 1
+          fi
+
       - name: Checkout full history
         uses: actions/checkout@v4
         with:
