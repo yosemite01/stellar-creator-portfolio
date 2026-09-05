@@ -175,3 +175,27 @@ This needs someone to actually pick a target `react-native`/`expo`/skia/reanimat
 combination and verify the three skia call sites against it (there's no toolchain in
 this environment to build/run the RN app end-to-end to verify blind). Left undone here
 rather than forcing a major dependency bump without being able to verify it.
+
+## mobile/: login flow doesn't yet issue a real session
+
+`app/(auth)/login.tsx` now mounts `src/screens/AuthFlowNavigator.tsx` (previously
+unreachable — see the commit "create the missing /(auth)/login route"), so the
+onboarding → register → login UI actually renders instead of hitting Expo Router's
+unmatched-route error. But its `onAuthComplete(publicKey)` callback only navigates to
+`ROUTES.APP.HOME` for the current session — it deliberately does not call
+`useAuthStore().setUser()`.
+
+- `setUser(user: User, token: string)` needs a real `User` record (id, email) and a
+  session token the rest of the app can use for authenticated calls. Neither exists
+  yet: `src/hooks/useGoogleAuth.ts`'s own doc comment says the Google auth path
+  "isn't yet a session token the rest of the app can use," and the wallet-connect flow
+  it replaced never issued one either.
+- Net effect: a user can reach the app for one session by completing the flow, but
+  `isAuthenticated` never actually flips to `true` in the persisted store, so
+  restarting the app correctly bounces back to `/(auth)/login` rather than staying
+  signed in. This is honest given the current state (no fake session persisted) but
+  is obviously not a finished login experience.
+- Fix needs backend work first: a real endpoint that exchanges the Google ID token (or
+  wallet signature) for an actual `{ user, token }` pair, then `login.tsx`'s
+  `handleAuthComplete` should call `useAuthStore().setUser(user, token)` with that
+  real data before navigating home.
