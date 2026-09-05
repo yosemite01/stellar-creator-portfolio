@@ -10,6 +10,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { redisGet, redisSet, redisDel } from "@/lib/storage/redis";
 import { createHash } from "crypto";
 
@@ -191,13 +192,21 @@ export interface UpsertFlagInput {
  * Create or update a feature flag. Invalidates cache after write.
  */
 export async function upsertFlag(input: UpsertFlagInput) {
+  // Distinguish "not provided" (undefined - leave the field alone on
+  // update) from "explicitly cleared" (null - Prisma needs its JsonNull
+  // sentinel to actually write a JSON null, not skip the field).
+  const userSegmentValue: Prisma.InputJsonValue | typeof Prisma.JsonNull | undefined =
+    input.userSegment === null
+      ? Prisma.JsonNull
+      : (input.userSegment as Prisma.InputJsonValue | undefined);
+
   const flag = await prisma.featureFlag.upsert({
     where: { name: input.name },
     create: {
       name: input.name,
       enabled: input.enabled ?? false,
       rolloutPercent: input.rolloutPercent ?? 0,
-      userSegment: input.userSegment ?? undefined,
+      userSegment: userSegmentValue,
       description: input.description,
     },
     update: {
@@ -206,7 +215,7 @@ export async function upsertFlag(input: UpsertFlagInput) {
         rolloutPercent: input.rolloutPercent,
       }),
       ...(input.userSegment !== undefined && {
-        userSegment: input.userSegment ?? undefined,
+        userSegment: userSegmentValue,
       }),
       ...(input.description !== undefined && {
         description: input.description,
