@@ -359,3 +359,39 @@ implications, not an obvious "the code already depends on this" case. Needs some
 to decide whether to actually wire up Sentry (run its setup wizard properly, get a
 real DSN) or rip out this dead integration path if error tracking isn't actually a
 current priority.
+
+## lib/notifications: a real email-queue subsystem is imported but was never built
+
+`lib/services/bounty-service.ts` imports `persistInAppNotification` from
+`@/lib/notifications` - that module didn't exist at all (real, confirmed missing
+file, not a typo). Added `lib/notifications.ts` with a working
+`persistInAppNotification` that writes to the `InAppNotification` Prisma model,
+whose fields (`userId`, `title`, `body`, `read`, `applicationId?`, `bountyId?`,
+`createdAt`) map exactly onto `BountyNotificationRecord` - this one was safe and
+narrow enough to actually implement rather than just document.
+
+But `lib/email.ts` and `lib/email/bounty-notify.ts` (4 call sites) also import
+`submitQueuedEmail`, `processEmailQueue`, `getOrCreateUnsubscribeToken`,
+`canSendEmailCategory`, and a `NotificationEmailCategory` type from the same
+`@/lib/notifications` path - a whole queued-transactional-email subsystem
+(`bounty-notify.ts` calls `submitQueuedEmail` with `to`/`subject`/`template`/
+`category`/`variables` for real flows like "applicant received" emails) that
+doesn't exist anywhere either. This is not something to guess-implement alongside
+the narrow `persistInAppNotification` fix:
+
+- A real queue needs its own persistence/retry semantics - schema.prisma already
+  has `EmailDeliveryLog`, which might be the intended backing table, but nothing
+  confirms that without checking what actually reads/writes it elsewhere.
+- `getOrCreateUnsubscribeToken` implies real token generation, storage, and
+  presumably a public unsubscribe-by-token endpoint - a security-relevant piece
+  (predictable or leakable tokens let someone unsubscribe another user) worth
+  getting right deliberately, not improvised.
+- `canSendEmailCategory` most plausibly should consult `NotificationPreference`
+  (already in the schema: `emailBountyAlerts`, `emailApplicationUpdates`,
+  `emailMessages`, `emailMarketing`) but the exact category-to-field mapping needs
+  someone to actually decide, matching `NotificationEmailCategory`'s intended
+  values (`bounty-notify.ts` passes `'application'` and `'transactional'` as
+  examples, but the full set isn't defined anywhere).
+
+Left unimplemented; `lib/notifications.ts` has a comment pointing back here so it
+isn't mistaken for a complete module.
