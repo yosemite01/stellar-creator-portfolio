@@ -30,6 +30,46 @@ export type MainTabParamList = {
   Settings: undefined;
 };
 
+// ─── Home Screen ──────────────────────────────────────────────────────────────
+
+export interface PortfolioSummary {
+  id: string;
+  title: string;
+  subtitle: string;
+  creator: string;
+  value: string;
+  followers: number;
+  change: number;
+  tags: string[];
+}
+
+export interface MetricCard {
+  id: string;
+  label: string;
+  value: number;
+  previousValue: number;
+  unit: string;
+  trend: 'up' | 'down' | 'flat';
+  trendPct: number;
+}
+
+export interface ProjectBountyItem {
+  id: string;
+  kind: 'project' | 'bounty';
+  title: string;
+  subtitle: string;
+  reward: string;
+  due: string;
+  status: string;
+  tags: string[];
+}
+
+export interface HomeData {
+  trendingPortfolios: PortfolioSummary[];
+  quickMetrics: MetricCard[];
+  projectBountyItems: ProjectBountyItem[];
+}
+
 // ─── Canvas / Collaboration ───────────────────────────────────────────────────
 
 export interface Point {
