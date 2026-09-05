@@ -61,7 +61,7 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 5 * 60 * 1000, // 5 minutes
-      cacheTime: 10 * 60 * 1000, // 10 minutes
+      gcTime: 10 * 60 * 1000, // 10 minutes (renamed from cacheTime in React Query v5)
       retry: (failureCount, error: any) => {
         // Don't retry on 4xx errors
         if (error?.data?.httpStatus >= 400 && error?.data?.httpStatus < 500) {
