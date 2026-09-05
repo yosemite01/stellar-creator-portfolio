@@ -62,15 +62,6 @@ jobs:
       - name: Test
         run: cd backend && cargo test --workspace --all-features
 
-  contracts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install Rust & Soroban
-        uses: dtolnay/rust-toolchain@1.74.0
-      - name: Test Contracts
-        run: cd backend && cargo test --workspace --all-features
-
   reproducible-build:
     name: Verify Reproducible Contract Hashes
     runs-on: ubuntu-latest
