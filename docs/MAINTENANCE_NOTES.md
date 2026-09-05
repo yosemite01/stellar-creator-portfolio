@@ -106,6 +106,23 @@ codes at the time of writing — will drift):
   since Prisma validates queries against the schema. Needs someone who
   knows the intended data model to add the missing fields/models and a
   migration, not a type-only fix.
+  - More instances found in `backend/src/router.ts` (the tRPC layer flagged
+    elsewhere in this file): its entire `creators` and `projects` sub-routers
+    are built against `prisma.creator` and `prisma.project` — not typos for
+    the schema's actual `CreatorProfile` model, but whole models
+    (`Creator` with `name`/`title`/`discipline`/`bio`/`avatar`/`coverImage`
+    fields and a `projects`/`reviews` relation; `Project` with
+    `tags`/`year`/`link`) that were never added to the schema at all. Also:
+    `backend/src/graphql/rate-limit.ts` queries `prisma.apiKeyUsage` — only
+    `ApiKey` exists, no `ApiKeyUsage` model — and both
+    `backend/src/graphql/resolvers.ts` and `router.ts` write/select a
+    `difficulty` field on `Bounty` that the model doesn't have (its real
+    fields are `budget`, `deadline`, `status`, `category`, `tags` — no
+    difficulty rating anywhere). Same conclusion as above: this needs
+    someone who knows the intended data model, not a guessed schema
+    addition — `creators`/`projects` in particular look like a whole
+    feature area that was scaffolded in the router before the schema
+    caught up, not a small drift.
 - **`services/api/stellar/contract.ts` (4 errors)**: `ScVal`/`LedgerEntryData`
   conversion, a private `Account.sequence` access, `GetTransactionStatus`
   missing `PENDING`. Likely a `@stellar/stellar-sdk` version drift (the
