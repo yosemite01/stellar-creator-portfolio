@@ -199,3 +199,51 @@ unmatched-route error. But its `onAuthComplete(publicKey)` callback only navigat
   wallet signature) for an actual `{ user, token }` pair, then `login.tsx`'s
   `handleAuthComplete` should call `useAuthStore().setUser(user, token)` with that
   real data before navigating home.
+
+## mobile/src/messaging/: doesn't compile against the installed libsignal-client
+
+Verified directly against `node_modules/@signalapp/libsignal-client@0.69.1`'s own
+`.d.ts` files (the version actually declared and installed - not a version-pin
+mismatch). `key-store.ts` and `signal-session.ts` are written against an API that
+doesn't exist in this version:
+
+- `PrivateKey` has no `.generateKeyPair()` method. The real pattern is
+  `PrivateKey.generate()` (produces a private key) + `.getPublicKey()` (derives the
+  matching public key) - there's no combined "keypair" object. Two call sites use the
+  fictional method: the signed-prekey generation just fixed in this session (now
+  correct in *logic*, still needs the real generate()/getPublicKey() calls swapped in)
+  and `generateOneTimePreKeys`'s `PrivateKey.generate().generateKeyPair()`.
+- `IdentityKeyPair` and `generateRegistrationId` are used as `IdentityKeyPair.new(...)`
+  and a free function respectively; the real API is `new IdentityKeyPair(pub, priv)`,
+  and there's no exported `generateRegistrationId` at all in this version - needs a
+  real replacement (Signal's registration ID is just a random 14-bit-ish integer;
+  check what `processPreKeyBundle`/`PreKeyBundle.new` actually expect it to range over
+  before picking a generator).
+- `PublicKey.deserialize`/`PrivateKey.deserialize` etc. take `Buffer`, not
+  `Uint8Array` - every `fromb64()` call site needs wrapping.
+- `SessionStore`/`PreKeyStore`/`SignedPreKeyStore`/`IdentityKeyStore` are `abstract
+  class`es meant to be `extend`ed, not interfaces to `implement` - mechanical fix,
+  method signatures already match almost exactly (`isTrustedIdentity` needs a third
+  `direction: Direction` parameter the current code doesn't pass).
+- `signalDecrypt`/`signalDecryptPreKey` take a parsed `SignalMessage`/
+  `PreKeySignalMessage` object, not a raw `Buffer`/`Uint8Array` - needs
+  `SignalMessage.deserialize(buf)` first. `signalDecryptPreKey` also takes a 7th
+  argument (`kyberPrekeyStore`) this code never provides.
+
+Bigger finding, not just an API-version fix: **the library already implements real
+sealed sender** - `sealedSenderEncrypt`/`sealedSenderEncryptMessage`,
+`sealedSenderDecryptMessage`/`sealedSenderDecryptToUsmc`, backed by a proper
+`SenderCertificate`/`UnidentifiedSenderMessageContent` system designed exactly to
+solve "how does the recipient learn who really sent this without the transport layer
+seeing it." `signal-session.ts`'s `encryptSealedSender`/`decryptSealedSender` instead
+hand-roll a scheme (concatenate identity key + ciphertext, self-sign the envelope) that
+this session patched for a real address-collision bug but did not replace. The
+hand-rolled scheme also has no path to a trusted `SenderCertificate` issuer, so even
+once wired up it can't offer the same guarantees the library's real mechanism does.
+Recommend replacing `encryptSealedSender`/`decryptSealedSender` with the library's own
+functions rather than continuing to patch the ad-hoc one - that needs a
+certificate-issuing piece on the server side first, which doesn't exist yet either.
+
+Given this needs careful, verified work on security-sensitive crypto glue - not
+something to guess through in the same pass as other fixes - left as a scoped-out
+finding rather than attempting a full rewrite here.
