@@ -30,6 +30,8 @@ export const ROUTES = {
     MULTISIG: '/(app)/multisig',
     /** Peer-to-peer transfer flow. */
     P2P: '/(app)/p2p',
+    /** Biometric authentication screen. */
+    BIOMETRIC: '/(app)/biometric-auth',
   },
 } as const;
 

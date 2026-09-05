@@ -11,7 +11,6 @@ import {
   View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import { useNavigation } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { useTheme } from "../theme/ThemeProvider";
 import { useI18n } from "../i18n/I18nProvider";
@@ -21,7 +20,6 @@ import {
   PortfolioSummary,
   ProjectBountyItem,
   HomeData,
-  RootStackParamList,
 } from "../types";
 import { ROUTES } from "../constants/routes";
 import { MetricCard } from "../components/dashboard/MetricCard";
@@ -29,7 +27,6 @@ import { PortfolioCard } from "../components/home/PortfolioCard";
 import { ProjectBountyList } from "../components/home/ProjectBountyList";
 import { ActionButton } from "../components/buttons/ActionButton";
 import { FontSize, FontWeight, Radius, Spacing } from "../theme/tokens";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { trigger } from "../haptics/HapticEngine";
 
 const buildHomeData = (): HomeData => ({
@@ -156,8 +153,6 @@ export function HomeScreen() {
   const { colors, isDark } = useTheme();
   const { t } = useI18n();
   const router = useRouter();
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { data, isLoading, isStale, cachedAt, refetch } =
     useOfflineData<HomeData>("home-screen-data", fetchHomeData, {
       ttlMs: 5 * 60 * 1000,
@@ -178,7 +173,13 @@ export function HomeScreen() {
     () => router.push(ROUTES.APP.P2P),
     [router],
   );
-  
+
+  const handleNavigateToBiometric = useCallback(
+    () => router.push(ROUTES.APP.BIOMETRIC),
+    [router],
+  );
+
+
   // Infinite scroll for bounty items
   const bountyRef = useRef(null);
   const {
@@ -300,7 +301,7 @@ export function HomeScreen() {
           <View style={styles.heroActions}>
             <ActionButton
               title={t("home.useBiometrics")}
-              onPress={() => navigation.navigate("BiometricAuth")}
+              onPress={handleNavigateToBiometric}
               variant="primary"
               accessibilityLabel="Open biometric authentication screen"
             />
