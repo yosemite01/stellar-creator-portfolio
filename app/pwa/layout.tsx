@@ -100,13 +100,13 @@ export default function RootLayout({ children }: RootLayoutProps) {
         <meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)" />
         <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: dark)" />
 
-        {/* Icons */}
-        <link rel="icon" href="/favicon.ico" sizes="any" />
-        <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-        <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+        {/* Icons — aria-label added for accessibility on icon-only link elements */}
+        <link rel="icon" href="/favicon.ico" sizes="any" aria-label="Tamgora favicon" />
+        <link rel="icon" href="/icon.svg" type="image/svg+xml" aria-label="Tamgora icon" />
+        <link rel="apple-touch-icon" href="/icons/icon-180.png" aria-label="Tamgora apple touch icon" />
 
         {/* Manifest */}
-        <link rel="manifest" href="/manifest.json" />
+        <link rel="manifest" href="/manifest.json" aria-label="PWA manifest" />
 
         {/* Fonts */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -117,7 +117,19 @@ export default function RootLayout({ children }: RootLayoutProps) {
         <link rel="dns-prefetch" href="https://www.google-analytics.com" />
 
       </head>
-      <body>{children}</body>
+      <body>
+        {/* Skip-to-content link for keyboard navigation accessibility */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:text-black focus:shadow-lg"
+          aria-label="Skip to main content"
+        >
+          Skip to main content
+        </a>
+        <div id="main-content" role="main">
+          {children}
+        </div>
+      </body>
     </html>
   );
 }
