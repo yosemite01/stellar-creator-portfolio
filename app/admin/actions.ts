@@ -179,6 +179,28 @@ export async function getUsersSummary(
     orderBy: { createdAt: 'desc' },
   });
 
+  // Count disputes (reports) per user in a single query
+  const userIds = users.map((u) => u.id);
+  const disputeCounts = await prisma.dispute.groupBy({
+    by: ['creatorId'],
+    where: { creatorId: { in: userIds } },
+    _count: { id: true },
+  });
+  const clientDisputeCounts = await prisma.dispute.groupBy({
+    by: ['clientId'],
+    where: { clientId: { in: userIds } },
+    _count: { id: true },
+  });
+
+  // Build a lookup map of dispute counts per user
+  const reportMap = new Map<string, number>();
+  for (const d of disputeCounts) {
+    reportMap.set(d.creatorId, (reportMap.get(d.creatorId) ?? 0) + d._count.id);
+  }
+  for (const d of clientDisputeCounts) {
+    reportMap.set(d.clientId, (reportMap.get(d.clientId) ?? 0) + d._count.id);
+  }
+
   return users.map((user) => ({
     id: user.id,
     name: user.name || 'Unnamed User',
@@ -187,6 +209,6 @@ export async function getUsersSummary(
     status: user.suspendedAt ? 'suspended' : 'active',
     joinedAt: user.createdAt.toISOString().split('T')[0],
     bounties: user.creatorProfile?.completedProjects || 0,
-    reports: 0, // TODO: Calculate from database
+    reports: reportMap.get(user.id) ?? 0,
   }));
 }
