@@ -32,6 +32,8 @@ export type Sep24TransactionStatus =
   | 'idle'
   | 'incomplete'
   | 'pending_anchor'
+  | 'pending_user'
+  | 'pending_external'
   | 'completed'
   | 'error'
 
