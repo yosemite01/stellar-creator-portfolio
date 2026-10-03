@@ -275,13 +275,9 @@ directly (`tests/unit/rate-limit.test.ts`,
 `tests/integration/security.test.ts`, `tests/e2e/api-abuse.test.ts`) and
 prints a combined pass/fail summary.
 
-**`npm run test:unit` / `test:integration` / `test:e2e` / `test:security`
-are declared in `package.json` but currently broken** — they point at
-`tests/unit/runner.ts`, `tests/integration/runner.ts`, `tests/e2e/runner.ts`,
-and `tests/security/runner.ts`, none of which exist (only the combined
-`tests/runner.ts` does, and there is no `tests/security/` directory at
-all). Use plain `npm test` until those are added or the scripts are fixed
-to point at the right files.
+Run a single suite with `npm run test:unit`, `test:integration` or `test:e2e`.
+`npm run test:security` runs the integration and e2e suites, which hold the
+security checks.
 
 ### Test Coverage
 
@@ -329,12 +325,11 @@ backend/limit/
 ├── routes/
 │   └── estimate.ts
 ├── tests/
-│   ├── runner.ts               # The only working test entry point (npm test)
+│   ├── runner.ts               # npm test (all) or npm run test:<unit|integration|e2e|security>
 │   ├── unit/rate-limit.test.ts
 │   ├── integration/security.test.ts
 │   └── e2e/api-abuse.test.ts
 ├── index.ts
-├── endpoints.ts
 ├── setup.sh
 ├── .env.example
 ├── package.json
