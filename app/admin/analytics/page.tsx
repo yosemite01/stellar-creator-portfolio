@@ -145,15 +145,23 @@ async function BackupStatusSection() {
       }),
     ]);
   } catch {
-    // use mocks below
+    // Audit log unavailable: report "no record" below rather than guessing.
   }
-  const backupTime = latestBackup ? new Date(latestBackup.createdAt) : new Date(Date.now() - 45 * 60 * 1000);
-  const drillTime = latestDrill ? new Date(latestDrill.createdAt) : new Date(Date.now() - 24 * 24 * 60 * 60 * 1000);
-  const drillStatus = latestDrill ? (latestDrill.status === 'SUCCESS' ? 'Passed' : 'Failed') : 'Passed';
-  const diffMs = Date.now() - backupTime.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMins / 60);
-  const backupAgeStr = diffHours > 0 ? `${diffHours}h ${diffMins % 60}m ago` : `${diffMins}m ago`;
+
+  // Without a recorded backup or drill, say so. Showing a plausible default
+  // here would tell an operator their backups are healthy when nothing is
+  // known about them.
+  const now = new Date();
+  let backupAgeStr = 'No backup recorded';
+  let backupStale = true;
+  if (latestBackup) {
+    const diffMins = Math.floor((now.getTime() - latestBackup.createdAt.getTime()) / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    backupAgeStr = diffHours > 0 ? `${diffHours}h ${diffMins % 60}m ago` : `${diffMins}m ago`;
+    backupStale = diffHours >= 24;
+  }
+  const drillStatus = latestDrill ? (latestDrill.status === 'SUCCESS' ? 'Passed' : 'Failed') : 'Never run';
+  const drillLabel = latestDrill ? `Last Drill: ${formatDate(latestDrill.createdAt, 'default')}` : 'No restore drill recorded';
 
   return (
     <section style={styles.section}>
@@ -166,13 +174,13 @@ async function BackupStatusSection() {
         </div>
         <div style={styles.card}>
           <p style={styles.cardLabel}>Last Backup Age</p>
-          <p style={{ ...styles.cardValue, color: diffHours >= 24 ? '#ef4444' : '#10b981' }}>{backupAgeStr}</p>
+          <p style={{ ...styles.cardValue, color: backupStale ? '#ef4444' : '#10b981' }}>{backupAgeStr}</p>
           <span style={{ fontSize: '12px', color: '#94a3b8' }}>Recovery Target: RPO &lt; 1h</span>
         </div>
         <div style={styles.card}>
           <p style={styles.cardLabel}>Monthly Restore Drill</p>
           <p style={{ ...styles.cardValue, color: drillStatus === 'Passed' ? '#818cf8' : '#ef4444' }}>{drillStatus}</p>
-          <span style={{ fontSize: '12px', color: '#94a3b8' }}>Last Drill: {formatDate(drillTime, 'default')}</span>
+          <span style={{ fontSize: '12px', color: '#94a3b8' }}>{drillLabel}</span>
         </div>
       </div>
     </section>
