@@ -4,7 +4,20 @@
  */
 
 import { Request, Response, NextFunction } from "express";
-import { RedisClient } from "redis";
+/**
+ * The subset of a node-redis v4 client used for distributed limiting. Typed
+ * here so `redis` stays optional: callers who want shared limits pass their
+ * own connected client.
+ */
+export interface RedisClient {
+  get(key: string): Promise<string | null>;
+  del(key: string): Promise<number>;
+  zRemRangeByScore(key: string, min: number | string, max: number | string): Promise<number>;
+  zCard(key: string): Promise<number>;
+  zAdd(key: string, member: { score: number; value: string }): Promise<number>;
+  expire(key: string, seconds: number): Promise<boolean | number>;
+  setEx(key: string, seconds: number, value: string): Promise<string | null>;
+}
 
 // ─── Per-Endpoint Rate Limit Constants ─────────────────────────────────────
 
@@ -114,8 +127,8 @@ interface RateLimitEntry {
 }
 
 interface RateLimitConfig {
-  windowMs: number; // Time window in milliseconds
-  maxRequests: number; // Max requests per window
+  windowMs?: number; // Time window in milliseconds (default 60s)
+  maxRequests?: number; // Max requests per window (default 100)
   keyGenerator?: (req: Request) => string; // Custom key generator
   skip?: (req: Request) => boolean; // Skip rate limiting for certain requests
   onLimitReached?: (req: Request, res: Response) => void; // Callback when limit reached
@@ -134,16 +147,16 @@ interface RateLimitStore {
  */
 export class RateLimiter {
   private store: RateLimitStore = {};
-  protected config: RateLimitConfig;
-  private cleanupInterval: NodeJS.Timeout;
+  protected config: RateLimitConfig & { windowMs: number; maxRequests: number };
+  private cleanupInterval?: NodeJS.Timeout;
   private redisClient?: RedisClient;
 
   constructor(config: RateLimitConfig) {
     this.config = {
-      windowMs: 60000, // Default: 1 minute
-      maxRequests: 100,
       blockDurationMs: 300000, // Default: 5 minutes block
       ...config,
+      windowMs: config.windowMs ?? 60000, // Default: 1 minute
+      maxRequests: config.maxRequests ?? 100,
     };
 
     this.redisClient = config.redisClient;
@@ -165,12 +178,14 @@ export class RateLimiter {
     }
 
     // Use API key if available, fallback to IP address
-    const apiKey = req.headers["x-api-key"] as string;
-    if (apiKey) {
+    // Optional chaining: requests built outside Express (tests, internal
+    // callers) may carry no headers or socket.
+    const apiKey = req.headers?.["x-api-key"];
+    if (typeof apiKey === "string" && apiKey) {
       return `api-key:${apiKey}`;
     }
 
-    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const ip = req.ip || req.socket?.remoteAddress || "unknown";
     return `ip:${ip}`;
   }
 
@@ -242,7 +257,7 @@ export class RateLimiter {
     if (isLimited) {
       // Enable DDoS protection: block for blockDurationMs
       if (!entry.blockedUntil) {
-        entry.blockedUntil = now + (this.config.blockDurationMs || 300000);
+        entry.blockedUntil = now + (this.config.blockDurationMs ?? 300000);
       }
     }
 
@@ -291,17 +306,17 @@ export class RateLimiter {
       const isLimited = count >= this.config.maxRequests;
 
       // Add current request
-      await this.redisClient.zAdd(key, { score: now, member: String(now) });
+      await this.redisClient.zAdd(key, { score: now, value: String(now) });
 
       // Set expiration (window + extra time for safety)
       await this.redisClient.expire(key, Math.ceil((this.config.windowMs + 10000) / 1000));
 
       // If limit reached, set block duration
       if (isLimited) {
-        const blockedUntil = now + (this.config.blockDurationMs || 300000);
+        const blockedUntil = now + (this.config.blockDurationMs ?? 300000);
         await this.redisClient.setEx(
           blockedUntilKey,
-          Math.ceil((this.config.blockDurationMs || 300000) / 1000),
+          Math.ceil((this.config.blockDurationMs ?? 300000) / 1000),
           blockedUntil.toString(),
         );
       }
