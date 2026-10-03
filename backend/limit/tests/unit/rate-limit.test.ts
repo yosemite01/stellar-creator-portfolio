@@ -94,7 +94,8 @@ export class RateLimiterTests {
    * Test: Sliding window reset
    */
   static async testSlidingWindowReset(): Promise<boolean> {
-    const limiter = new RateLimiter({ windowMs: 100, maxRequests: 1 });
+    // blockDurationMs: 0 turns off the post-limit block, isolating the window reset.
+    const limiter = new RateLimiter({ windowMs: 100, maxRequests: 1, blockDurationMs: 0 });
     const mockReq = {
       ip: "127.0.0.1",
       method: "GET",
@@ -538,23 +539,25 @@ export class MonitoringTests {
 /**
  * Run all unit tests
  */
-export function runAllUnitTests(): {
+export async function runAllUnitTests(): Promise<{
   passed: number;
   failed: number;
   tests: Array<{ name: string; passed: boolean; error?: string }>;
-} {
+}> {
   const results: Array<{ name: string; passed: boolean; error?: string }> = [];
 
   const testClasses = [RateLimiterTests, SecurityUtilityTests, MonitoringTests];
 
-  testClasses.forEach((testClass) => {
+  for (const testClass of testClasses) {
     const methods = Object.getOwnPropertyNames(testClass).filter((m) =>
       m.startsWith("test"),
     );
 
-    methods.forEach((method) => {
+    for (const method of methods) {
       try {
-        const result = (testClass as any)[method]();
+        // Several tests are async; await so a returned Promise is not
+        // mistaken for a failure (it is never === true).
+        const result = await (testClass as any)[method]();
         results.push({
           name: `${testClass.name}.${method}`,
           passed: result === true,
@@ -566,8 +569,8 @@ export function runAllUnitTests(): {
           error: (error as Error).message,
         });
       }
-    });
-  });
+    }
+  }
 
   const passed = results.filter((r) => r.passed).length;
   const failed = results.filter((r) => !r.passed).length;

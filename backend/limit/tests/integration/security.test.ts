@@ -61,7 +61,7 @@ export class IntegrationTests {
       let isLimited = false;
 
       for (let i = 0; i < 5; i++) {
-        const status = rateLimiter.isLimited(mockReq);
+        const status = await rateLimiter.isLimited(mockReq);
         if (status.limited && !isLimited) {
           isLimited = true;
           break;
@@ -294,7 +294,7 @@ export class PerformanceIntegrationTests {
 
       // Simulate 10000 rate limit checks
       for (let i = 0; i < 10000; i++) {
-        limiter.isLimited(mockReq);
+        await limiter.isLimited(mockReq);
       }
 
       const duration = Date.now() - startTime;
