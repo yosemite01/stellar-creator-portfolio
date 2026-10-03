@@ -254,17 +254,18 @@ this bespoke OTA + AES + hand-rolled bsdiff-in-TypeScript system (its own doc co
 admits the patch-apply function is "a stand-in for CI/test environments," not
 production) should be replaced with it rather than fixed in place.
 
-## load-tests/: two scenarios still target routes that don't exist
+## load-tests/: one scenario still targets a route that doesn't exist
 
 - `upload.test.js` now exercises the real `POST /api/upload` (multipart, signed
   in), and `reviews.test.js` targets the Rust API's `/api/v1/reviews` and
   `/api/v1/creators/:address/reviews` via `RUST_API_URL`. An earlier version of
   this note said review submission did not exist; it does, in the Rust service
   (`backend/services/api`), which is where `NEXT_PUBLIC_API_URL` should point.
-- Still open: `referrals.test.js` hits `/api/referrals` and `users.test.js` hits
-  `GET /api/users`; neither route exists. Both keep their `KNOWN GAP` header.
-  Whether a public user list belongs in the API, and what the referral endpoints
-  should look like, are product decisions.
+- `/api/referrals` now exists (code, stats, history and tracking, backed by
+  `lib/services/referral-service`), and `referrals.test.js` targets it.
+- Still open: `users.test.js` hits `GET /api/users`, which does not exist and
+  keeps its `KNOWN GAP` header. Whether a public user list belongs in the API
+  is a product decision.
 
 ## lib/error-tracking.ts: Sentry is an optional integration
 
