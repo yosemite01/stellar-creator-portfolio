@@ -12,49 +12,63 @@
 --      efficient conversation-scoped searches without a full table scan.
 --   6. Adds an index on sender_id for address-based filtering.
 
--- ── 1. Add plain_text column (nullable; encryption keeps ciphertext primary) ──
-ALTER TABLE messages
-  ADD COLUMN IF NOT EXISTS plain_text TEXT;
-
--- ── 2. Add the tsvector column ────────────────────────────────────────────────
-ALTER TABLE messages
-  ADD COLUMN IF NOT EXISTS search_vector TSVECTOR;
-
--- ── 3. Backfill search_vector for any existing rows that have plain_text ──────
-UPDATE messages
-SET search_vector = to_tsvector('english', COALESCE(plain_text, ''))
-WHERE plain_text IS NOT NULL;
-
--- ── 4. GIN index for fast FTS lookups ─────────────────────────────────────────
-CREATE INDEX IF NOT EXISTS idx_messages_search_vector
-  ON messages USING GIN (search_vector);
-
--- ── 5. Trigger function: auto-update search_vector on INSERT/UPDATE ────────────
-CREATE OR REPLACE FUNCTION messages_search_vector_update()
-RETURNS TRIGGER AS $$
+-- No migration creates the messages table (the messages API currently keeps
+-- conversations in memory), so on a database built from migrations this
+-- whole step is skipped instead of failing with 'relation "messages" does
+-- not exist'. Where the table has been created out of band, it runs as
+-- before.
+DO $$
 BEGIN
-  NEW.search_vector := to_tsvector('english', COALESCE(NEW.plain_text, ''));
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+  IF to_regclass('public.messages') IS NULL THEN
+    RAISE NOTICE 'messages table not present; skipping full-text search setup';
+    RETURN;
+  END IF;
 
--- Drop trigger first so this migration is idempotent (re-runnable in dev).
-DROP TRIGGER IF EXISTS trig_messages_search_vector ON messages;
+  -- ── 1. Add plain_text column (nullable; encryption keeps ciphertext primary) ──
+  ALTER TABLE messages
+    ADD COLUMN IF NOT EXISTS plain_text TEXT;
 
-CREATE TRIGGER trig_messages_search_vector
-  BEFORE INSERT OR UPDATE OF plain_text
-  ON messages
-  FOR EACH ROW
-  EXECUTE FUNCTION messages_search_vector_update();
+  -- ── 2. Add the tsvector column ────────────────────────────────────────────────
+  ALTER TABLE messages
+    ADD COLUMN IF NOT EXISTS search_vector TSVECTOR;
 
--- ── 6. Composite index for conversation-scoped search ─────────────────────────
--- Supports: WHERE thread_id = $1 AND search_vector @@ query ORDER BY created_at DESC
-CREATE INDEX IF NOT EXISTS idx_messages_thread_created
-  ON messages (thread_id, created_at DESC);
+  -- ── 3. Backfill search_vector for any existing rows that have plain_text ──────
+  UPDATE messages
+  SET search_vector = to_tsvector('english', COALESCE(plain_text, ''))
+  WHERE plain_text IS NOT NULL;
 
--- ── 7. Index on sender_id for address-based filtering ─────────────────────────
-CREATE INDEX IF NOT EXISTS idx_messages_sender
-  ON messages (sender_id);
+  -- ── 4. GIN index for fast FTS lookups ─────────────────────────────────────────
+  CREATE INDEX IF NOT EXISTS idx_messages_search_vector
+    ON messages USING GIN (search_vector);
+
+  -- ── 5. Trigger function: auto-update search_vector on INSERT/UPDATE ────────────
+  CREATE OR REPLACE FUNCTION messages_search_vector_update()
+  RETURNS TRIGGER AS $fn$
+  BEGIN
+    NEW.search_vector := to_tsvector('english', COALESCE(NEW.plain_text, ''));
+    RETURN NEW;
+  END;
+  $fn$ LANGUAGE plpgsql;
+
+  -- Drop trigger first so this migration is idempotent (re-runnable in dev).
+  DROP TRIGGER IF EXISTS trig_messages_search_vector ON messages;
+
+  CREATE TRIGGER trig_messages_search_vector
+    BEFORE INSERT OR UPDATE OF plain_text
+    ON messages
+    FOR EACH ROW
+    EXECUTE FUNCTION messages_search_vector_update();
+
+  -- ── 6. Composite index for conversation-scoped search ─────────────────────────
+  -- Supports: WHERE thread_id = $1 AND search_vector @@ query ORDER BY created_at DESC
+  CREATE INDEX IF NOT EXISTS idx_messages_thread_created
+    ON messages (thread_id, created_at DESC);
+
+  -- ── 7. Index on sender_id for address-based filtering ─────────────────────────
+  CREATE INDEX IF NOT EXISTS idx_messages_sender
+    ON messages (sender_id);
+END
+$$;
 
 -- ── Example query (not executed — for documentation) ──────────────────────────
 --
