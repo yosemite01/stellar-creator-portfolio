@@ -38,7 +38,7 @@ export function useStellarAuth(): StellarAuth {
         if (key && typeof key === 'string') {
           setPublicKey(key);
         }
-      } catch (err) {
+      } catch {
         localStorage.removeItem(STORAGE_KEY);
       }
     }

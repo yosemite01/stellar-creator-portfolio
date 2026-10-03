@@ -135,7 +135,7 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
       } else {
         setError(body.error.message || 'Failed to load reviews');
       }
-    } catch (err) {
+    } catch {
       setError('Failed to load reviews');
     } finally {
       setIsLoading(false);

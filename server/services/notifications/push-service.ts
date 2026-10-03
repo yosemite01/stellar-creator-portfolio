@@ -454,7 +454,7 @@ export class PushNotificationService {
         const response = await provider.send(payload);
         Object.assign(results, response.channels);
         if (response.success) hasSuccess = true;
-      } catch (error) {
+      } catch {
         // Continue with next provider on error
       }
     }
@@ -516,7 +516,7 @@ export class PushNotificationService {
             item.nextRetry = new Date(Date.now() + backoff);
           }
         }
-      } catch (error) {
+      } catch {
         item.attempts++;
         if (item.attempts >= item.maxAttempts) {
           item.status = 'failed';

@@ -371,7 +371,7 @@ export function IpfsStorageBrowser() {
     try {
       await ipfsClient.pinFile(cid);
       await loadFiles();
-    } catch (err) {
+    } catch {
       setError('Failed to pin file');
     }
   };
@@ -380,7 +380,7 @@ export function IpfsStorageBrowser() {
     try {
       await ipfsClient.unpinFile(cid);
       await loadFiles();
-    } catch (err) {
+    } catch {
       setError('Failed to unpin file');
     }
   };
@@ -391,7 +391,7 @@ export function IpfsStorageBrowser() {
     try {
       await ipfsClient.deleteFile(cid);
       await loadFiles();
-    } catch (err) {
+    } catch {
       setError('Failed to delete file');
     }
   };

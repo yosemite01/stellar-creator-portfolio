@@ -60,7 +60,7 @@ export function useStellarWallet(): UseStellarWalletReturn {
         if (key && typeof key === 'string') {
           setPublicKey(key);
         }
-      } catch (err) {
+      } catch {
         // Clear invalid stored data
         localStorage.removeItem(STORAGE_KEY);
       }
