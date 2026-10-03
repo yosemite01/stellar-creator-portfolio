@@ -254,37 +254,17 @@ this bespoke OTA + AES + hand-rolled bsdiff-in-TypeScript system (its own doc co
 admits the patch-apply function is "a stand-in for CI/test environments," not
 production) should be replaced with it rather than fixed in place.
 
-## load-tests/: four scenarios target API routes that don't exist
+## load-tests/: two scenarios still target routes that don't exist
 
-Verified by checking `app/api/` directly for each, not by running the load tests
-(no environment here to point k6 at a live deployment):
-
-- `referrals.test.js` hits `/api/referrals` (GET code/stats, POST track). No
-  `app/api/referrals` route exists anywhere in the repo.
-- `upload.test.js` hits `/api/upload` (GET list, POST upload). No `app/api/upload`
-  route exists anywhere in the repo.
-- `reviews.test.js` hits `GET /api/reviews?creatorId=` and `POST /api/reviews`. The
-  only review route that actually exists is `POST /api/creators/reviews/batch`
-  (fetches reviews for multiple creators at once, via `getReviewsForCreator` from
-  `lib/services/review-service`) - there's no single-creator GET and, more
-  significantly, **no review-submission route at all** anywhere in the app. Reviews
-  can currently only ever be read in batch, never created through the API.
-- `users.test.js` hits `GET /api/users` (list) and expects `{ data: [...] }`. There's
-  no top-level `app/api/users` route - only `app/api/user/*` (singular, per-field
-  sub-resources: `account`, `wallet-address`, `data-export`) and the unrelated,
-  admin-scoped `app/api/admin/reports/users`.
-
-Every request in these four scenarios will 404 against a real deployment. Added a
-`KNOWN GAP` comment to the top of each file pointing back here, so running the full
-load-test suite doesn't produce a wall of false-negative 404s that look like the app
-is broken when it's actually the test target that's wrong (or, for reviews, that
-points at a feature - review submission - that was never built).
-
-Not rewritten to point at real routes here: for referrals and upload there's nothing
-real to point at (no equivalent route exists under any path), and reviews/users would
-need someone to decide what the intended real shape is (does "list users" even belong
-as a public API, or should that test be deleted; should review creation be built, or
-should this scenario be deleted too) rather than guessing a URL.
+- `upload.test.js` now exercises the real `POST /api/upload` (multipart, signed
+  in), and `reviews.test.js` targets the Rust API's `/api/v1/reviews` and
+  `/api/v1/creators/:address/reviews` via `RUST_API_URL`. An earlier version of
+  this note said review submission did not exist; it does, in the Rust service
+  (`backend/services/api`), which is where `NEXT_PUBLIC_API_URL` should point.
+- Still open: `referrals.test.js` hits `/api/referrals` and `users.test.js` hits
+  `GET /api/users`; neither route exists. Both keep their `KNOWN GAP` header.
+  Whether a public user list belongs in the API, and what the referral endpoints
+  should look like, are product decisions.
 
 ## lib/error-tracking.ts: Sentry is an optional integration
 
