@@ -31,7 +31,6 @@ interface Notification {
   priority: 'high' | 'normal' | 'low';
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 const typeIcons: Record<NotificationType, React.ReactNode> = {
   message: <MessageSquare size={16} className="text-blue-500" />,
@@ -59,7 +58,7 @@ function formatRelativeTime(date: Date): string {
 }
 
 async function fetchNotifications(): Promise<Notification[]> {
-  const res = await fetch(`${API_BASE}/api/notifications`);
+  const res = await fetch('/api/notifications');
   if (!res.ok) return [];
   const data = await res.json();
   return (data.notifications ?? data ?? []).map((n: any) => ({
@@ -69,11 +68,11 @@ async function fetchNotifications(): Promise<Notification[]> {
 }
 
 async function markAsRead(id: string): Promise<void> {
-  await fetch(`${API_BASE}/api/notifications/${id}/read`, { method: 'PATCH' });
+  await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
 }
 
 async function markAllAsRead(): Promise<void> {
-  await fetch(`${API_BASE}/api/notifications/read-all`, { method: 'PATCH' });
+  await fetch('/api/notifications/read-all', { method: 'PATCH' });
 }
 
 export function NotificationCenter() {
