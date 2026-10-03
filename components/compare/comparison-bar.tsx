@@ -31,13 +31,22 @@ export function ComparisonBar() {
           {/* Creator Avatars */}
           <div className="flex -space-x-2">
             {selectedCreators.map((creator) => (
-              <div
+              <button
                 key={creator.id}
-                className="relative w-10 h-10 rounded-full border-2 border-background bg-gradient-to-br from-primary to-accent flex items-center justify-center text-sm font-bold text-white"
-                title={creator.name}
+                type="button"
+                onClick={() => removeCreator(creator.id)}
+                aria-label={`Remove ${creator.name} from comparison`}
+                title={`Remove ${creator.name}`}
+                className="group relative w-10 h-10 rounded-full border-2 border-background bg-gradient-to-br from-primary to-accent flex items-center justify-center text-sm font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                {getAvatarInitials(creator.name)[0]}
-              </div>
+                <span className="group-hover:opacity-0 group-focus-visible:opacity-0">
+                  {getAvatarInitials(creator.name)[0]}
+                </span>
+                <X
+                  className="absolute h-4 w-4 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+                  aria-hidden="true"
+                />
+              </button>
             ))}
           </div>
 
