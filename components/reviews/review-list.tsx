@@ -47,11 +47,11 @@ function ReviewStars({ rating }: { rating: number }) {
   );
 }
 
-export function ReviewList({ reviews, creatorName = 'Creator' }: ReviewListProps) {
+export function ReviewList({ reviews, creatorName }: ReviewListProps) {
   if (!reviews || reviews.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
-        <p>No reviews yet</p>
+        <p>{creatorName ? `No reviews for ${creatorName} yet` : 'No reviews yet'}</p>
       </div>
     );
   }
