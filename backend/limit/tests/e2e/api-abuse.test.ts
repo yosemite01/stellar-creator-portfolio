@@ -30,7 +30,7 @@ export class AttackPreventionE2ETests {
       // Simulate 20 rapid requests
       let blockedCount = 0;
       for (let i = 0; i < 20; i++) {
-        const status = limiter.isLimited(mockReq);
+        const status = await limiter.isLimited(mockReq);
         if (status.limited) {
           blockedCount++;
         }
@@ -131,13 +131,19 @@ export class AttackPreventionE2ETests {
       const logger = new Logger();
       const monitor = new Monitor(logger);
 
-      // Simulate failed login attempts from single IP
+      // Simulate repeated login attempts from a single IP. Anomaly detection
+      // counts requests the monitor has recorded, so drive it through
+      // recordRequest (as the monitoring middleware does) rather than by
+      // writing log lines directly.
+      const loginReq = {
+        ip: "192.168.1.50",
+        method: "POST",
+        path: "/api/login",
+        headers: {},
+        get: () => undefined,
+      };
       for (let i = 0; i < 15; i++) {
-        logger.log(LogLevel.WARN, EventType.AUTH_FAILURE, "Failed login", {
-          ip: "192.168.1.50",
-          method: "POST",
-          path: "/api/login",
-        });
+        monitor.recordRequest(loginReq, Date.now());
       }
 
       // Detect anomalies
@@ -182,7 +188,7 @@ export class AttackPreventionE2ETests {
 
       // Can make many requests to users endpoint
       for (let i = 0; i < 30; i++) {
-        if (userLimiter.isLimited(usersReq).limited) {
+        if ((await userLimiter.isLimited(usersReq)).limited) {
           return false;
         }
       }
@@ -190,7 +196,7 @@ export class AttackPreventionE2ETests {
       // But limited on login endpoint
       let loginBlocked = false;
       for (let i = 0; i < 10; i++) {
-        if (loginLimiter.isLimited(loginReq).limited) {
+        if ((await loginLimiter.isLimited(loginReq)).limited) {
           loginBlocked = true;
           break;
         }
@@ -308,11 +314,11 @@ export class AttackPreventionE2ETests {
 
       // Both should use same limit
       for (let i = 0; i < 5; i++) {
-        limiter.isLimited(mockReq1);
+        await limiter.isLimited(mockReq1);
       }
 
       // Next request from same IP should be limited
-      const status = limiter.isLimited(mockReq2);
+      const status = await limiter.isLimited(mockReq2);
       if (!status.limited) return false;
 
       return true;
@@ -388,7 +394,7 @@ export class SecurityEventE2ETests {
       });
 
       for (let i = 0; i < 15; i++) {
-        limiter.isLimited(mockReq);
+        await limiter.isLimited(mockReq);
       }
 
       // Detect anomalies with threshold
@@ -418,9 +424,10 @@ export class SecurityEventE2ETests {
       const logger = new Logger();
       const monitor = new Monitor(logger);
 
-      // Log various events
+      // Log completed responses: response time and status-code metrics are
+      // aggregated from RESPONSE events.
       for (let i = 0; i < 10; i++) {
-        logger.log(LogLevel.INFO, EventType.REQUEST, `Request ${i}`, {
+        logger.log(LogLevel.INFO, EventType.RESPONSE, `Response ${i}`, {
           method: "GET",
           path: "/api/test",
           responseTime: 100 + Math.random() * 200,
@@ -478,7 +485,7 @@ export class LoadTestingE2E {
           },
         );
 
-        limiter.isLimited(mockReq);
+        await limiter.isLimited(mockReq);
       }
 
       const duration = Date.now() - startTime;
@@ -505,7 +512,7 @@ export class LoadTestingE2E {
       for (let i = 0; i < 10000; i++) {
         const ip = `192.168.${Math.floor(i / 256)}.${i % 256}`;
         const mockReq = { ip, method: "GET", path: "/api/test" } as any;
-        limiter.isLimited(mockReq);
+        await limiter.isLimited(mockReq);
       }
 
       const duration = Date.now() - startTime;
