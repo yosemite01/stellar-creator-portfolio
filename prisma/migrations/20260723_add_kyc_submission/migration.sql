@@ -7,8 +7,8 @@ CREATE TYPE "KYCDocumentType" AS ENUM ('PASSPORT', 'DRIVER_LICENSE', 'NATIONAL_I
 CREATE TYPE "KYCStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 
 CREATE TABLE "KYCSubmission" (
-  "id"                String          NOT NULL,
-  "userId"            String          NOT NULL,
+  "id"                TEXT            NOT NULL,
+  "userId"            TEXT            NOT NULL,
   "documentType"      "KYCDocumentType" NOT NULL,
   "uploadedAt"        TIMESTAMPTZ     NOT NULL DEFAULT now(),
   "expiresAt"         TIMESTAMPTZ     NOT NULL,
