@@ -199,7 +199,8 @@ mod tests {
         env.mock_all_auths();
         let (client, _) = deploy(&env, 250);
         assert_eq!(client.get_fee(), 250);
-        assert_eq!(client.max_fee_bps(), 10_000);
+        // Hard ceiling of 10% (#1104 / #517).
+        assert_eq!(client.max_fee_bps(), 1_000);
     }
 
     #[test]
