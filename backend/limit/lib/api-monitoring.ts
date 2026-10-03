@@ -340,11 +340,9 @@ export class Monitor {
           : LogLevel.WARN;
 
     this.logger.log(level, EventType.SECURITY, `Security Alert: ${eventType}`, {
-      sourceIp,
-      endpoint,
-      severity,
-      description,
-      metadata,
+      ip: sourceIp,
+      path: endpoint,
+      metadata: { ...metadata, severity, description },
     });
 
     return alert;
@@ -533,7 +531,7 @@ export function monitoringMiddleware(monitor: Monitor) {
 
     // Override res.send to capture response
     const originalSend = res.send;
-    res.send = function (data: any) {
+    res.send = function (this: Response, data: any) {
       monitor.recordResponse(req, res, res.statusCode, startTime);
       return originalSend.call(this, data);
     } as any;
