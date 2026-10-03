@@ -1,21 +1,13 @@
 /**
- * Load test — Reviews API
- * Covers: list reviews, submit review, vote
- * Rate limit: 20 req/min general, 10 req/min POST
- *
- * KNOWN GAP: verified there is no app/api/reviews route. The only review
- * route that exists is POST /api/creators/reviews/batch (fetches reviews
- * for multiple creators at once); there is no single-creator GET and no
- * review-submission (POST/create) route anywhere in this repo. Every
- * request below will 404 against a real deployment. See
- * docs/MAINTENANCE_NOTES.md ("load-tests targeting nonexistent API routes")
- * before including this scenario in a real load-test run.
+ * Load test — Reviews API (Rust service, /api/v1)
+ * Covers: list a creator's reviews, list all reviews, submit a review
+ * Target: RUST_API_URL (backend/services/api), not the Next.js app.
  */
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Trend } from 'k6/metrics';
-import { BASE_URL, averageLoadOptions, defaultThresholds } from '../config/options.js';
-import { jsonHeaders, getSessionCookie, authHeaders } from '../helpers/auth.js';
+import { RUST_API_URL, defaultThresholds } from '../config/options.js';
+import { jsonHeaders } from '../helpers/auth.js';
 
 export const options = {
   // Reviews have a tighter rate limit — keep VUs lower
@@ -30,45 +22,53 @@ export const options = {
 const listLatency   = new Trend('reviews_list_duration');
 const createLatency = new Trend('reviews_create_duration');
 
-// Seed creator IDs — replace with real IDs from your DB for accurate testing
-const CREATOR_IDS = ['creator-1', 'creator-2', 'creator-3'];
-
-let sessionCookie;
-
-export function setup() {
-  sessionCookie = getSessionCookie();
-}
+// Creator and reviewer Stellar addresses. Override with real ones via
+// CREATOR_ADDRESSES (comma-separated) for representative results.
+const CREATOR_ADDRESSES = (__ENV.CREATOR_ADDRESSES ||
+  'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H').split(',');
+const REVIEWER_ADDRESS = __ENV.REVIEWER_ADDRESS ||
+  'GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ';
 
 export default function () {
-  const creatorId = CREATOR_IDS[__ITER % CREATOR_IDS.length];
+  const creator = CREATOR_ADDRESSES[__ITER % CREATOR_ADDRESSES.length];
 
-  // --- GET /api/reviews?creatorId= ---
+  // --- GET /api/v1/creators/:id/reviews ---
   const listRes = http.get(
-    `${BASE_URL}/api/reviews?creatorId=${creatorId}&sort=recent&page=1&limit=10`,
+    `${RUST_API_URL}/api/v1/creators/${creator}/reviews?sortBy=createdAt&sortOrder=desc&page=1&limit=10`,
     { headers: jsonHeaders() },
   );
   listLatency.add(listRes.timings.duration);
   check(listRes, {
-    'reviews list: status 200 or 404': (r) => r.status === 200 || r.status === 404,
+    'creator reviews: status 200': (r) => r.status === 200,
+  });
+
+  // --- GET /api/v1/reviews (all reviews, filtered) ---
+  const allRes = http.get(
+    `${RUST_API_URL}/api/v1/reviews?minRating=3&page=1&limit=10`,
+    { headers: jsonHeaders() },
+  );
+  check(allRes, {
+    'all reviews: status 200': (r) => r.status === 200,
   });
 
   sleep(1);
 
-  // --- POST /api/reviews (submit) ---
+  // --- POST /api/v1/reviews (submit) ---
   const createRes = http.post(
-    `${BASE_URL}/api/reviews`,
+    `${RUST_API_URL}/api/v1/reviews`,
     JSON.stringify({
-      creatorId: creatorId,
-      rating:    4,
-      title:     'Load test review',
-      body:      'This is an automated load test review. Please disregard.',
+      creator_address: creator,
+      reviewer_address: REVIEWER_ADDRESS,
+      bounty_id: null,
+      rating: 4,
+      comment: 'Automated load-test review. Please disregard.',
     }),
-    { headers: authHeaders(sessionCookie) },
+    { headers: jsonHeaders() },
   );
   createLatency.add(createRes.timings.duration);
   check(createRes, {
-    'reviews create: status 201 or 401 or 429': (r) =>
-      [201, 401, 429].includes(r.status),
+    'reviews create: accepted or rate-limited': (r) =>
+      [200, 201, 429].includes(r.status),
   });
 
   sleep(2);
