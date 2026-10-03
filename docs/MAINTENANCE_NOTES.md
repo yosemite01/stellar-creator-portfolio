@@ -42,16 +42,16 @@ items below have been implemented here.
   in scope for #1195, but worth a separate ticket — it means the "one Node version"
   story isn't fully true yet even after #1195/#1196 land.
 
-## backend/limit's test:unit / test:integration / test:e2e / test:security scripts are broken
+## backend/limit: test scripts fixed (October 2026)
 
-- [`backend/limit/package.json`](../backend/limit/package.json) declares
-  `test:unit`, `test:integration`, `test:e2e`, and `test:security`, each
-  pointing at `tests/<suite>/runner.ts`. None of those per-suite runner
-  files exist — only the combined `tests/runner.ts` does (which is what
-  plain `npm test` in that directory runs, and it works).
-- Fix is either: add the four missing runner files, or simplify the four
-  broken scripts down to just re-running `tests/runner.ts` (possibly with
-  a suite-name filter argument) so the documented commands actually work.
+`npm test` and `npm run test:unit` / `test:integration` / `test:e2e` /
+`test:security` all run, and all 51 cases pass. Before, none could start: the
+runner imported its suites from the wrong directory, the per-suite scripts
+pointed at runner files that never existed, and the package had 15 type errors.
+Fixing them also surfaced real bugs, now fixed: input validation rejected every
+array field, Redis-backed limiting sent sorted-set members under the wrong key,
+`blockDurationMs: 0` could not disable blocking, and the unit runner reported
+every async test as failed without running its assertions.
 
 ## `cargo check --workspace` / `cargo test --workspace --all-features` currently fail outright
 
