@@ -84,8 +84,10 @@ export function useTrpcErrorHandler() {
       console.error('tRPC Error:', error);
       // Could integrate with toast notifications here
       if (error?.data?.code === 'UNAUTHORIZED') {
-        // Redirect to login
-        window.location.href = '/login';
+        // Redirect to login, returning here afterwards
+        const login = new URL('/auth/login', window.location.origin);
+        login.searchParams.set('callbackUrl', window.location.pathname);
+        window.location.assign(login.toString());
       }
     },
   };
