@@ -49,6 +49,50 @@ jobs:
           fi
           echo "Migration prefixes are unique"
 
+  prisma-migrations:
+    name: Prisma migrations apply to an empty database
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Apply all migrations
+        run: pnpm exec prisma migrate deploy
+      - name: Fail if the schema has tables or columns no migration creates
+        run: |
+          pnpm exec prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --script > drift.sql
+          if grep -qE 'CREATE TABLE|ADD COLUMN|CREATE TYPE' drift.sql; then
+            echo "schema.prisma declares objects that no migration creates:"
+            grep -E 'CREATE TABLE|ADD COLUMN|CREATE TYPE' drift.sql
+            exit 1
+          fi
+
   backend:
     runs-on: ubuntu-latest
     steps:
