@@ -92,7 +92,17 @@ function Histogram({
   );
 }
 
-export function CreatorReputation({ creatorId }: { creatorId: string }) {
+interface CreatorReputationProps {
+  creatorId: string;
+  /**
+   * The completed bounty the viewer may review this creator for. Reviews
+   * belong to a bounty, so the "Write a Review" action only appears when one
+   * is supplied.
+   */
+  reviewBountyId?: string;
+}
+
+export function CreatorReputation({ creatorId, reviewBountyId }: CreatorReputationProps) {
   const [payload, setPayload] = useState<FilteredReputationPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -181,13 +191,15 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-2xl font-bold text-foreground mb-4">No reviews yet</h2>
           <p className="text-muted-foreground mb-8">Be the first to share your experience working with this creator.</p>
-          <Button onClick={() => setShowReviewForm(true)}>Write a Review</Button>
-          {showReviewForm && (
+          {reviewBountyId && (
+            <Button onClick={() => setShowReviewForm(true)}>Write a Review</Button>
+          )}
+          {reviewBountyId && showReviewForm && (
             <div className="mt-8 text-left max-w-2xl mx-auto">
               <ReviewForm
                 creatorId={creatorId}
                 creatorName="this creator"
-                bountyId={`demo-${Math.random().toString(36).substring(7)}`}
+                bountyId={reviewBountyId}
                 onSuccess={() => {
                   setShowReviewForm(false);
                   loadReviews(filters);
@@ -219,20 +231,22 @@ export function CreatorReputation({ creatorId }: { creatorId: string }) {
             </p>
           </div>
 
-          <Button
-            onClick={() => setShowReviewForm(!showReviewForm)}
-            variant={showReviewForm ? 'outline' : 'default'}
-          >
-            {showReviewForm ? 'Cancel Review' : 'Write a Review'}
-          </Button>
+          {reviewBountyId && (
+            <Button
+              onClick={() => setShowReviewForm(!showReviewForm)}
+              variant={showReviewForm ? 'outline' : 'default'}
+            >
+              {showReviewForm ? 'Cancel Review' : 'Write a Review'}
+            </Button>
+          )}
         </div>
 
-        {showReviewForm && (
+        {reviewBountyId && showReviewForm && (
           <div className="mb-12 animate-in fade-in slide-in-from-top-4 duration-300">
             <ReviewForm
               creatorId={creatorId}
               creatorName="this creator"
-              bountyId={`demo-${Math.random().toString(36).substring(7)}`}
+              bountyId={reviewBountyId}
               onSuccess={() => {
                 setShowReviewForm(false);
                 loadReviews(filters); // Refresh reviews
