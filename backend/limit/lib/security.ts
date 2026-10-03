@@ -199,7 +199,8 @@ export interface ValidationSchema {
     max?: number;
     pattern?: RegExp;
     enum?: (string | number | boolean)[];
-    items?: ValidationSchema;
+    /** Rule applied to every element of an array field. */
+    items?: ValidationSchema[string];
     properties?: ValidationSchema;
   };
 }
@@ -290,8 +291,10 @@ export class InputValidator {
         continue;
       }
 
-      // Check type
-      if (typeof value !== rules.type) {
+      // Check type. typeof reports arrays as "object", so arrays are
+      // classified separately; otherwise every "array" field failed here.
+      const actualType = Array.isArray(value) ? "array" : typeof value;
+      if (actualType !== rules.type) {
         errors.push(`${field} must be of type ${rules.type}`);
         continue;
       }
