@@ -150,7 +150,8 @@ export const appRouter = router({
           title: z.string().min(1),
           description: z.string().min(1),
           budget: z.number().positive(),
-          deadline: z.date(),
+          // Coerce: without a tRPC data transformer the deadline arrives as an ISO string.
+          deadline: z.coerce.date(),
           category: z.string(),
           tags: z.array(z.string()),
           difficulty: z.enum(['beginner', 'intermediate', 'advanced', 'expert']),
