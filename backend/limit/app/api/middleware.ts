@@ -11,9 +11,9 @@ import {
   validateInput,
   ValidationSchema,
   CorsConfig,
-} from "../lib/security";
-import { RateLimiter, RequestQueue } from "../middleware/rate-limit";
-import { createMonitoring, Monitor } from "../lib/api-monitoring";
+} from "../../lib/security";
+import { RateLimiter, RequestQueue } from "../../middleware/rate-limit";
+import { createMonitoring, Monitor } from "../../lib/api-monitoring";
 
 /**
  * Middleware Configuration Options
@@ -77,7 +77,7 @@ export class ApiMiddlewareStack {
   private config: MiddlewareConfig;
   private rateLimiter?: RateLimiter;
   private requestQueue?: RequestQueue;
-  private monitoring?: { middleware: any; monitor: Monitor };
+  private monitoring?: ReturnType<typeof createMonitoring>;
 
   constructor(app: Express, config: Partial<MiddlewareConfig> = {}) {
     this.app = app;
