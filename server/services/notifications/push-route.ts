@@ -1,15 +1,15 @@
 /**
- * Push notification route handlers (send, batch send, status update, health).
+ * Push notification route handlers, mounted at /api/notifications/push
+ * (send, batch send, health) and /api/notifications/push/[id] (status).
  *
- * NOT MOUNTED, deliberately. Do not move this file under app/api until:
- *   - validateRequest() actually verifies the bearer token. Today it only
- *     checks that an Authorization header is present, so any caller could
- *     send a notification to any user.
- *   - PATCH authenticates the caller and checks they own the notification;
- *     it also expects an [id] route param that a /push route does not have.
+ * Sending is restricted to admins and to backend services holding
+ * PUSH_SERVICE_TOKEN: a send can target any user, so an ordinary session is
+ * not enough. Status updates are limited to the notification's owner.
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from '@/lib/auth/auth';
 import { pushService, type PushPayload } from '@/server/services/notifications/push-service';
 import { validateNotificationPayload, sanitizeContent } from '@/server/services/notifications/notification-validators';
 import type { UserPreferences } from '@/server/services/notifications/notification-types';
@@ -35,37 +35,57 @@ interface BatchNotificationRequest {
   dryRun?: boolean;
 }
 
-// Validation middleware
-async function validateRequest(req: NextRequest): Promise<void> {
-  const contentType = req.headers.get('content-type');
-  if (!contentType?.includes('application/json')) {
-    throw new Error('Content-Type must be application/json');
+type SenderAuth =
+  | { ok: true; actor: string }
+  | { ok: false; response: NextResponse };
+
+function tokensMatch(given: string, expected: string): boolean {
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Authorises a caller to send notifications: either a backend service
+ * presenting PUSH_SERVICE_TOKEN as a bearer token, or a signed-in admin.
+ * The returned actor id keys the rate limit, so it cannot be spoofed with
+ * a client-supplied header.
+ */
+async function authorizeSender(req: NextRequest): Promise<SenderAuth> {
+  if (!req.headers.get('content-type')?.includes('application/json')) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 }),
+    };
   }
 
-  // Verify API key or JWT
-  const auth = req.headers.get('authorization');
-  if (!auth) {
-    throw new Error('Missing authorization header');
+  const authorization = req.headers.get('authorization');
+  const serviceToken = process.env.PUSH_SERVICE_TOKEN;
+  if (authorization?.startsWith('Bearer ') && serviceToken) {
+    if (tokensMatch(authorization.slice(7), serviceToken)) {
+      return { ok: true, actor: 'service' };
+    }
+    return { ok: false, response: NextResponse.json({ error: 'Invalid token' }, { status: 401 }) };
   }
 
-  if (!auth.startsWith('Bearer ')) {
-    throw new Error('Invalid authorization format');
+  const session = await getServerSession();
+  if (!session?.user?.id) {
+    return { ok: false, response: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
   }
-
-  // Verify token (implement with your auth provider)
-  // const token = auth.substring(7);
-  // await verifyToken(token);
+  if (session.user.role !== 'ADMIN') {
+    return { ok: false, response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+  }
+  return { ok: true, actor: `user:${session.user.id}` };
 }
 
 // Single notification endpoint
 export async function POST(req: NextRequest) {
   try {
-    // Validate request format
-    await validateRequest(req);
+    const auth = await authorizeSender(req);
+    if (!auth.ok) return auth.response;
 
     // Check rate limiting
-    const clientId = req.headers.get('x-client-id') || 'anonymous';
-    const rateLimitResult = await rateLimit(clientId, {
+    const rateLimitResult = await rateLimit(auth.actor, {
       limit: 100,
       window: 3600, // 1 hour
     });
@@ -181,11 +201,10 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error('Push notification error:', error);
 
-    const message = error instanceof Error ? error.message : 'Internal server error';
-
+    // The details stay in the server log; callers get a generic message.
     return NextResponse.json(
       {
-        error: message,
+        error: 'Internal server error',
         timestamp: new Date().toISOString(),
       },
       { status: 500 },
@@ -196,10 +215,10 @@ export async function POST(req: NextRequest) {
 // Batch notification endpoint
 export async function PUT(req: NextRequest) {
   try {
-    await validateRequest(req);
+    const auth = await authorizeSender(req);
+    if (!auth.ok) return auth.response;
 
-    const clientId = req.headers.get('x-client-id') || 'anonymous';
-    const rateLimitResult = await rateLimit(clientId, {
+    const rateLimitResult = await rateLimit(`${auth.actor}:batch`, {
       limit: 1000,
       window: 3600,
     });
@@ -308,21 +327,27 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-// Update notification status (e.g. mark as OPENED)
+// Update notification status (e.g. mark as OPENED). Only the recipient may
+// change the status of their own notification.
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await getServerSession();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
-    const { id } = params;
+    const { id } = await params;
     const { status } = await req.json();
 
     if (!Object.values(NotificationStatus).includes(status)) {
       return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
     }
 
-    const updated = await prisma.notification.update({
-      where: { id },
+    const result = await prisma.notification.updateMany({
+      where: { id, userId: session.user.id },
       data: {
         status,
         openedAt: status === NotificationStatus.OPENED ? new Date() : undefined,
@@ -330,39 +355,49 @@ export async function PATCH(
       },
     });
 
-    return NextResponse.json(updated);
+    if (result.count === 0) {
+      return NextResponse.json({ error: 'Notification not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ id, status });
   } catch (error) {
     console.error('Error updating notification status:', error);
     return NextResponse.json({ error: 'Failed to update status' }, { status: 500 });
   }
 }
 
-// Helper functions
-
+/**
+ * Delivery preferences for a recipient, or null when the user does not
+ * exist. Push channels follow the user's in-app switch from
+ * NotificationPreference; users who never saved preferences get the
+ * defaults (everything on).
+ */
 async function getUserPreferences(userId: string): Promise<UserPreferences | null> {
   try {
-    // Fetch from database
-    // const user = await db.users.findById(userId);
-    // if (!user) return null;
-    //
-    // return user.notificationPreferences;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, createdAt: true, notificationPreference: true },
+    });
+    if (!user) return null;
 
-    // Placeholder implementation
+    const pref = user.notificationPreference;
+    const pushEnabled = pref?.inAppEnabled ?? true;
+
     return {
       userId,
       channels: {
-        firebase: true,
-        onesignal: true,
-        browser: true,
-        email: true,
+        firebase: pushEnabled,
+        onesignal: pushEnabled,
+        browser: pushEnabled,
+        email: pref ? pref.emailBountyAlerts || pref.emailApplicationUpdates || pref.emailMessages : true,
       },
       doNotDisturb: false,
       blockedCategories: [],
-      unsubscribedCategories: [],
+      unsubscribedCategories: pref?.emailMarketing === false ? ['marketing'] : [],
       language: 'en',
       timezone: 'UTC',
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: user.createdAt,
+      updatedAt: pref?.updatedAt ?? user.createdAt,
     };
   } catch (error) {
     console.error('Error fetching user preferences:', error);
