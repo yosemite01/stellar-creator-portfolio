@@ -1,12 +1,8 @@
 /**
  * Load test — Upload API
- * Covers: list files, upload small file, delete file
- * Note: kept at low VUs — upload is I/O heavy.
- *
- * KNOWN GAP: verified there is no app/api/upload route anywhere in this
- * repo - every request below will 404 against a real deployment. See
- * docs/MAINTENANCE_NOTES.md ("load-tests targeting nonexistent API routes")
- * before including this scenario in a real load-test run.
+ * Covers: POST /api/upload (multipart, signed-in users only)
+ * Note: kept at low VUs — upload is I/O heavy and writes to object storage,
+ * so point BASE_URL at an environment with a disposable S3 bucket.
  */
 import http from 'k6/http';
 import { check, sleep } from 'k6';
@@ -28,7 +24,6 @@ export const options = {
 };
 
 const uploadLatency = new Trend('upload_duration');
-const listLatency   = new Trend('upload_list_duration');
 
 let sessionCookie;
 
@@ -37,18 +32,6 @@ export function setup() {
 }
 
 export default function () {
-  // --- GET /api/upload?prefix=uploads (list files) ---
-  const listRes = http.get(
-    `${BASE_URL}/api/upload?prefix=uploads`,
-    { headers: authHeaders(sessionCookie) },
-  );
-  listLatency.add(listRes.timings.duration);
-  check(listRes, {
-    'upload list: status 200 or 401': (r) => r.status === 200 || r.status === 401,
-  });
-
-  sleep(1);
-
   // --- POST /api/upload (small PNG upload) ---
   // Minimal 1x1 transparent PNG (67 bytes)
   const pngBase64 =
@@ -61,6 +44,7 @@ export default function () {
 
   const formData = {
     file: http.file(pngBytes, `test-${__VU}-${__ITER}.png`, 'image/png'),
+    path: 'load-tests',
   };
 
   const uploadRes = http.post(`${BASE_URL}/api/upload`, formData, {
@@ -68,8 +52,9 @@ export default function () {
   });
   uploadLatency.add(uploadRes.timings.duration);
   check(uploadRes, {
-    'upload: status 200 or 201 or 401': (r) =>
-      [200, 201, 401].includes(r.status),
+    // 503 means object storage is not configured for this environment.
+    'upload: status 200': (r) => r.status === 200,
+    'upload: returns a signed url': (r) => r.status !== 200 || Boolean(r.json('signedUrl')),
   });
 
   sleep(2);
