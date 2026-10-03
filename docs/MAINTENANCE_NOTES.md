@@ -106,16 +106,14 @@ build failed on unresolved modules. Notable fixes behind that:
 - The JWT fallback secret `'dev-secret-key'` is gone; tokens fail closed when
   `JWT_SECRET` is unset.
 
-## server/services/notifications/push-route.ts is deliberately not mounted
+## Push notification routes: authenticated and mounted (October 2026)
 
-- These push handlers (`POST`/`PUT`/`PATCH`/`GET`) now live beside the push service
-  in `server/services/notifications/`. They must not be routed yet:
-  `validateRequest()` only checks that an `Authorization: Bearer …` header is
-  present without verifying it, so mounting them would let anyone send
-  notifications to any user. `PATCH` has no auth at all and expects an `[id]`
-  route param.
-- Fix: verify the token (session or signed service token), scope `PATCH` to the
-  notification's owner, then add `app/api/notifications/push/route.ts`.
+`POST`/`PUT /api/notifications/push` (send one / batch) accept only signed-in
+admins or backend services presenting `PUSH_SERVICE_TOKEN`, and are rate-limited
+per caller rather than per client-supplied header. `PATCH
+/api/notifications/push/:id` lets the recipient update their own notification's
+status. Delivery preferences come from `NotificationPreference` instead of a
+hard-coded "everything on" placeholder.
 
 ## mobile/: `npm install` cannot succeed as currently pinned (needs a dependency decision)
 
