@@ -1033,6 +1033,7 @@ mod tests {
             indexer_stellar_account_id: "GBTEST123456789012345678901234567890123456789012".to_string(),
             ledger_chunk: 100,
             poll_interval_secs: 6,
+            horizon_webhook_secret: "test-webhook-secret".to_string(),
         }
     }
 
