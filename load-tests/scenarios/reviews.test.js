@@ -22,15 +22,15 @@ export const options = {
 const listLatency   = new Trend('reviews_list_duration');
 const createLatency = new Trend('reviews_create_duration');
 
-// Creator and reviewer Stellar addresses. Override with real ones via
-// CREATOR_ADDRESSES (comma-separated) for representative results.
-const CREATOR_ADDRESSES = (__ENV.CREATOR_ADDRESSES ||
-  'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H').split(',');
-const REVIEWER_ADDRESS = __ENV.REVIEWER_ADDRESS ||
-  'GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ';
+// Creator ids to read and review (the seeded creators by default). Override
+// with real ids via CREATOR_IDS (comma-separated) for representative results.
+const CREATOR_IDS = (__ENV.CREATOR_IDS || 'alex-studio').split(',');
+// Reviews belong to a completed bounty; point BOUNTY_ID at one in the target
+// environment.
+const BOUNTY_ID = __ENV.BOUNTY_ID || 'load-test-bounty';
 
 export default function () {
-  const creator = CREATOR_ADDRESSES[__ITER % CREATOR_ADDRESSES.length];
+  const creator = CREATOR_IDS[__ITER % CREATOR_IDS.length];
 
   // --- GET /api/v1/creators/:id/reviews ---
   const listRes = http.get(
@@ -57,11 +57,12 @@ export default function () {
   const createRes = http.post(
     `${RUST_API_URL}/api/v1/reviews`,
     JSON.stringify({
-      creator_address: creator,
-      reviewer_address: REVIEWER_ADDRESS,
-      bounty_id: null,
+      bountyId: BOUNTY_ID,
+      creatorId: creator,
       rating: 4,
-      comment: 'Automated load-test review. Please disregard.',
+      title: 'Load test review',
+      body: 'Automated load-test review. Please disregard.',
+      reviewerName: 'k6',
     }),
     { headers: jsonHeaders() },
   );
