@@ -23,9 +23,19 @@ ALTER TABLE IF EXISTS bounties
 ALTER TABLE IF EXISTS profiles
   ADD COLUMN IF NOT EXISTS skill_ids TEXT[] DEFAULT '{}';
 
--- Index for matching engine lookups (array containment @> operator)
-CREATE INDEX IF NOT EXISTS idx_bounties_skill_ids
-  ON bounties USING gin(skill_ids);
+-- Index for matching engine lookups (array containment @> operator).
+-- Guarded like the ALTERs above: the snake_case bounties/profiles tables
+-- only exist where they were created outside these migrations.
+DO $$
+BEGIN
+  IF to_regclass('public.bounties') IS NOT NULL THEN
+    CREATE INDEX IF NOT EXISTS idx_bounties_skill_ids
+      ON bounties USING gin(skill_ids);
+  END IF;
 
-CREATE INDEX IF NOT EXISTS idx_profiles_skill_ids
-  ON profiles USING gin(skill_ids);
+  IF to_regclass('public.profiles') IS NOT NULL THEN
+    CREATE INDEX IF NOT EXISTS idx_profiles_skill_ids
+      ON profiles USING gin(skill_ids);
+  END IF;
+END
+$$;
