@@ -13,7 +13,7 @@
  *  - Dynamic tag chips for high-dimension filtering.
  */
 
-import React, { useState, useCallback, useTransition, useRef } from 'react';
+import React, { useState, useCallback, useTransition, useRef, useId } from 'react';
 import { Search, Loader2, X, Tag } from 'lucide-react';
 import { vectorSearch, filterByTags, VectorSearchResult } from '@/lib/search/vectorSearch';
 import { cn } from '@/lib/utils';
@@ -40,6 +40,7 @@ export function SemanticSearchBar({
   const [results, setResults] = useState<VectorSearchResult[]>([]);
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
+  const listboxId = useId();
   const [isPending, startTransition] = useTransition();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -103,9 +104,11 @@ export function SemanticSearchBar({
           onFocus={() => results.length && setOpen(true)}
           placeholder={placeholder}
           className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          role="combobox"
           aria-label="Semantic portfolio search"
           aria-autocomplete="list"
-          aria-expanded={open}
+          aria-expanded={open && results.length > 0}
+          aria-controls={listboxId}
         />
         {query && (
           <button onClick={clear} aria-label="Clear search">
@@ -136,6 +139,7 @@ export function SemanticSearchBar({
       {/* Results dropdown */}
       {open && results.length > 0 && (
         <ul
+          id={listboxId}
           role="listbox"
           className="absolute z-50 mt-1 w-full rounded-xl border border-border bg-background shadow-lg"
         >
