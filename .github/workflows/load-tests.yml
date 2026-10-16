@@ -23,7 +23,7 @@ jobs:
   load-test:
     runs-on: ubuntu-24.04  # Pinned to ensure reproducible builds (see #1270)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install k6
         run: |
@@ -67,7 +67,7 @@ jobs:
 
       - name: Notify on failure
         if: failure() && github.event_name == 'schedule'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.issues.create({
