@@ -155,3 +155,84 @@ export async function matchCreatorsForBounty(
 
   return suggestions;
 }
+
+/**
+ * Validate that an ID looks like a valid bounty identifier.
+ * Deny-by-default: must be an alphanumeric/hyphen/underscore string between 1 and 128 characters,
+ * with no leading/trailing whitespace, control characters, or path separators.
+ */
+export function isValidBountyId(id: unknown): id is string {
+  if (typeof id !== 'string') return false;
+  const trimmed = id.trim();
+  if (!trimmed || trimmed !== id) return false;
+  return /^[a-zA-Z0-9_-]{1,128}$/.test(id);
+}
+
+export type BountyAccessErrorStatus = 400 | 401 | 403 | 404;
+
+export type BountyAccessResult =
+  | { authorized: true; bounty: { id: string; creatorId: string } }
+  | { authorized: false; status: BountyAccessErrorStatus; error: string };
+
+export interface SessionUserLike {
+  id?: string;
+  role?: string;
+}
+
+export interface SessionLike {
+  user?: SessionUserLike | null;
+}
+
+/**
+ * Verifies that the request has an active session and that the user is either
+ * the creator/owner of the bounty or an administrator.
+ */
+export async function verifyBountyOwnerOrAdmin(
+  bountyId: unknown,
+  session: SessionLike | null | undefined,
+): Promise<BountyAccessResult> {
+  if (!session?.user?.id) {
+    return {
+      authorized: false,
+      status: 401,
+      error: 'Unauthorized',
+    };
+  }
+
+  if (!isValidBountyId(bountyId)) {
+    return {
+      authorized: false,
+      status: 400,
+      error: 'Invalid bounty id',
+    };
+  }
+
+  const bounty = await prisma.bounty.findUnique({
+    where: { id: bountyId },
+    select: { id: true, creatorId: true },
+  });
+
+  if (!bounty) {
+    return {
+      authorized: false,
+      status: 404,
+      error: 'Bounty not found',
+    };
+  }
+
+  const isOwner = bounty.creatorId === session.user.id;
+  const isAdmin = typeof session.user.role === 'string' && session.user.role.toUpperCase() === 'ADMIN';
+
+  if (!isOwner && !isAdmin) {
+    return {
+      authorized: false,
+      status: 403,
+      error: 'Forbidden',
+    };
+  }
+
+  return {
+    authorized: true,
+    bounty,
+  };
+}

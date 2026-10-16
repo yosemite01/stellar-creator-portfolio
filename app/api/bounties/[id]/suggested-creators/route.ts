@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getSuggestedCreators, matchCreatorsForBounty, TOP_MATCHES } from '@/lib/match-creators';
+import { getServerSession } from '@/lib/auth/auth';
+import {
+  getSuggestedCreators,
+  matchCreatorsForBounty,
+  verifyBountyOwnerOrAdmin,
+  TOP_MATCHES,
+} from '@/lib/match-creators';
 
 export const runtime = 'nodejs';
 
@@ -12,9 +18,17 @@ type RouteContext = {
  * GET /api/bounties/[id]/suggested-creators
  * Returns the top matching creators for the bounty (read-only) for the
  * "Suggested Freelancers" sidebar.
+ * Requires active session and restricts access to the bounty owner or admin.
  */
 export async function GET(request: NextRequest, context: RouteContext) {
-  const { id } = await context.params;
+  const session = await getServerSession();
+  const { id } = (await context?.params) ?? {};
+
+  const authCheck = await verifyBountyOwnerOrAdmin(id, session);
+  if (!authCheck.authorized) {
+    return NextResponse.json({ error: authCheck.error }, { status: authCheck.status });
+  }
+
   const limitParam = request.nextUrl.searchParams.get('limit');
   const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || TOP_MATCHES, 1), 50) : TOP_MATCHES;
 
@@ -26,9 +40,16 @@ export async function GET(request: NextRequest, context: RouteContext) {
  * POST /api/bounties/[id]/suggested-creators
  * Runs matching for a newly created bounty and notifies the top creators via a
  * MatchNotification. Intended to be called right after a bounty is created.
+ * Requires active session and restricts access to the bounty owner or admin.
  */
 export async function POST(_request: NextRequest, context: RouteContext) {
-  const { id } = await context.params;
+  const session = await getServerSession();
+  const { id } = (await context?.params) ?? {};
+
+  const authCheck = await verifyBountyOwnerOrAdmin(id, session);
+  if (!authCheck.authorized) {
+    return NextResponse.json({ error: authCheck.error }, { status: authCheck.status });
+  }
 
   const suggestions = await matchCreatorsForBounty(id);
   return NextResponse.json({
