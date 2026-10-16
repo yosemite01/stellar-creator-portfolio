@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { NotificationStatus } from '@prisma/client';
+import { logger } from '@/lib/logger';
 
 interface NotificationLog {
   userId: string;
@@ -53,9 +54,9 @@ export class NotificationLogger {
         },
       });
 
-      console.log('[NotificationLogger]', log.messageId, log.status);
+      logger.info('NotificationLogger', { messageId: log.messageId, status: log.status });
     } catch (error) {
-      console.error('Failed to log notification:', error);
+      logger.error('Failed to log notification', { err: String(error) });
     }
   }
 
@@ -78,9 +79,9 @@ export class NotificationLogger {
         },
       });
 
-      console.log('[DeliveryTracker]', messageId, status);
+      logger.info('DeliveryTracker', { messageId, status });
     } catch (error) {
-      console.error('Failed to track delivery:', error);
+      logger.error('Failed to track delivery', { err: String(error) });
     }
   }
 
@@ -132,9 +133,9 @@ export class NotificationLogger {
   ): Promise<void> {
     try {
       // Audit logging could also go to a separate AuditLog model
-      console.log('[AuditLog]', action, userId, details);
+      logger.info('AuditLog', { action, userId, details: JSON.stringify(details) });
     } catch (error) {
-      console.error('Failed to audit log:', error);
+      logger.error('Failed to audit log', { err: String(error) });
     }
   }
 }

@@ -104,6 +104,47 @@ See [`docs/architecture.md`](./docs/architecture.md) for a platform-wide
 diagram of how the Next.js app, tRPC/GraphQL/REST, the Rust API, realtime
 servers, Soroban contracts, mobile app, and their data stores fit together.
 
+## Observability
+
+### Structured logging
+
+Server code (`app/api/`, `server/`) uses the structured logger in `lib/logger.ts`
+instead of `console.log`. Every log line is a JSON object with `time`, `level`,
+`msg`, and — when inside a request — `requestId`:
+
+```ts
+import { logger } from '@/lib/logger';
+logger.info('KYC cleanup complete', { deleted: count });
+logger.error('Failed to index creator', { creatorId, err: String(err) });
+```
+
+Set the `LOG_LEVEL` environment variable to `debug | info | warn | error`
+(defaults to `debug` in development, `info` in production).
+
+### Request IDs
+
+Every inbound HTTP request is assigned an `x-request-id`:
+
+- The middleware reads an existing `x-request-id` header from trusted upstream
+  proxies (e.g. Vercel, Cloudflare); if absent, a UUID v4 is generated.
+- The ID is echoed back in the response `x-request-id` header.
+- The ID is stored in `AsyncLocalStorage` for the lifetime of the request, so
+  the logger and Sentry scope include it automatically — no prop-drilling.
+
+Wrap a Next.js Route Handler:
+
+```ts
+import { withRequestId } from '@/lib/request-id-middleware';
+
+export const GET = withRequestId(async (req) => {
+  return NextResponse.json({ ok: true });
+});
+```
+
+The `x-request-id` value appears in every Sentry event (`request_id` tag) and
+in every structured log line (`requestId` field), making it trivial to
+correlate a client error with server-side logs.
+
 ## Getting Started
 
 ### Prerequisites

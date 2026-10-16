@@ -24,6 +24,7 @@ import { Client as ElasticClient } from '@elastic/elasticsearch';
 import type { SearchHit } from '@elastic/elasticsearch/lib/api/types';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { logger } from '@/lib/logger';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -190,7 +191,7 @@ export async function ensureIndex(): Promise<void> {
 
   const exists = await es.indices.exists({ index: ES_INDEX });
   if (exists) {
-    console.log(`[Search] Index '${ES_INDEX}' already exists`);
+    logger.info(`[Search] Index '${ES_INDEX}' already exists`);
     return;
   }
 
@@ -263,7 +264,7 @@ export async function ensureIndex(): Promise<void> {
     },
   });
 
-  console.log(`[Search] Created index '${ES_INDEX}' with ${EMBED_DIMS}-dim dense vector field`);
+  logger.info(`[Search] Created index '${ES_INDEX}'`, { dims: EMBED_DIMS });
 }
 
 // ── Indexing ──────────────────────────────────────────────────────────────────
@@ -331,9 +332,9 @@ export function onProfileChanged(
   void (async () => {
     try {
       await indexCreator(profile, { generateVector: true });
-      console.log(`[Search] Re-indexed creator ${profile.id} after profile change`);
+      logger.info(`[Search] Re-indexed creator`, { creatorId: profile.id });
     } catch (err) {
-      console.error(`[Search] Failed to re-index creator ${profile.id}:`, err);
+      logger.error(`[Search] Failed to re-index creator`, { creatorId: profile.id, err: String(err) });
     }
   })();
 }

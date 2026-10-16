@@ -12,6 +12,7 @@
  */
 
 import { onEvent, onAnyEvent } from '@/server/services/events';
+import { logger } from '@/lib/logger';
 
 // ── BountyCreated ─────────────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@ import { onEvent, onAnyEvent } from '@/server/services/events';
 onEvent('BountyCreated', async ({ payload, eventId, createdAt }) => {
   // TODO: replace with actual email service call
   // e.g. await emailQueue.enqueue('bounty-created', { bountyId: payload.bountyId, ... })
-  console.log('[Listener:BountyCreated]', {
+  logger.info('BountyCreated', {
     eventId,
     createdAt,
     bountyId: payload.bountyId,
@@ -41,9 +42,9 @@ onEvent('BountyCreated', async ({ payload, eventId, createdAt }) => {
  * When a bounty is updated, notify active applicants of the changes.
  */
 onEvent('BountyUpdated', async ({ payload }) => {
-  console.log('[Listener:BountyUpdated]', {
+  logger.info('BountyUpdated', {
     bountyId: payload.bountyId,
-    changes: Object.keys(payload.changes),
+    changes: Object.keys(payload.changes).join(','),
   });
   // await notificationService.notifyApplicantsOfBountyUpdate(payload.bountyId, payload.changes);
 });
@@ -56,7 +57,7 @@ onEvent('BountyUpdated', async ({ payload }) => {
  *  2. Notify bounty creator of new application.
  */
 onEvent('ApplicationSubmitted', async ({ payload }) => {
-  console.log('[Listener:ApplicationSubmitted]', {
+  logger.info('ApplicationSubmitted', {
     applicationId: payload.applicationId,
     bountyId: payload.bountyId,
     applicantId: payload.applicantId,
@@ -71,7 +72,7 @@ onEvent('ApplicationSubmitted', async ({ payload }) => {
  * When an application status changes, email the applicant with the outcome.
  */
 onEvent('ApplicationStatusChanged', async ({ payload }) => {
-  console.log('[Listener:ApplicationStatusChanged]', {
+  logger.info('ApplicationStatusChanged', {
     applicationId: payload.applicationId,
     status: payload.status,
     applicantId: payload.applicantId,
@@ -85,7 +86,7 @@ onEvent('ApplicationStatusChanged', async ({ payload }) => {
  * Send a welcome email on new user registration.
  */
 onEvent('UserRegistered', async ({ payload }) => {
-  console.log('[Listener:UserRegistered]', {
+  logger.info('UserRegistered', {
     userId: payload.userId,
     email: payload.email,
   });
@@ -98,7 +99,7 @@ onEvent('UserRegistered', async ({ payload }) => {
  * Notify both parties when an escrow is created.
  */
 onEvent('EscrowCreated', async ({ payload }) => {
-  console.log('[Listener:EscrowCreated]', {
+  logger.info('EscrowCreated', {
     escrowId: payload.escrowId,
     bountyId: payload.bountyId,
     amount: payload.amount,
@@ -115,7 +116,7 @@ onEvent('EscrowCreated', async ({ payload }) => {
 onAnyEvent(async ({ type, eventId, createdAt }) => {
   // Structured telemetry log — replace with OpenTelemetry span if needed
   if (process.env.NODE_ENV !== 'test') {
-    console.debug('[EventBus:telemetry]', { type, eventId, createdAt });
+    logger.debug('EventBus:telemetry', { type, eventId, createdAt: String(createdAt) });
   }
 });
 

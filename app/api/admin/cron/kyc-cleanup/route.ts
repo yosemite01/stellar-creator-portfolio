@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/admin/cron/kyc-cleanup
@@ -44,10 +45,10 @@ export async function POST(req: NextRequest) {
       where: { expiresAt: { lte: new Date() } },
     });
 
-    console.log(`KYC cleanup: deleted ${count} expired submission(s)`);
+    logger.info('KYC cleanup complete', { deleted: count });
     return NextResponse.json({ success: true, deleted: count }, { status: 200 });
   } catch (error) {
-    console.error('KYC cleanup cron job failed:', error);
+    logger.error('KYC cleanup cron job failed', { err: String(error) });
     return NextResponse.json(
       { error: 'Failed to clean up expired KYC submissions', details: String(error) },
       { status: 500 },

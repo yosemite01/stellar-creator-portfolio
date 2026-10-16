@@ -1,3 +1,10 @@
+# CI workflow: ci
+# Purpose: Main CI matrix — runs frontend lint/typecheck/unit-tests/build,
+# Prisma migration health, Rust backend clippy+tests, reproducible WASM
+# contract hash verification, Lighthouse performance audit, Playwright E2E
+# tests, and a Docker image smoke-test on every push/PR to main or dev.
+# Caching: pnpm store (actions/setup-node cache:'pnpm') and Cargo registry
+# + target directory (Swatinem/rust-cache) are restored on every run.
 name: CI
 
 on:

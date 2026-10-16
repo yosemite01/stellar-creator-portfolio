@@ -1,3 +1,7 @@
+# CI workflow: codeql
+# Purpose: GitHub CodeQL static-analysis security scan. Runs on push to
+# main, on PRs, and on a weekly schedule. Detects common vulnerability
+# patterns (injection, deserialization, etc.) in TypeScript/JavaScript.
 name: CodeQL Security Analysis
 
 on:

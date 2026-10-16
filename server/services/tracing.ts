@@ -37,6 +37,7 @@ import {
 } from '@opentelemetry/api';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { BatchSpanProcessor, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-base';
+import { logger } from '@/lib/logger';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -71,12 +72,12 @@ let tracer: Tracer | null = null;
  */
 export function initializeTracing(): void {
   if (!OTEL_ENABLED) {
-    console.log('[Tracing] OpenTelemetry disabled via OTEL_ENABLED=false');
+    logger.info('[Tracing] OpenTelemetry disabled via OTEL_ENABLED=false');
     return;
   }
 
   if (sdk) {
-    console.warn('[Tracing] OpenTelemetry already initialized');
+    logger.warn('[Tracing] OpenTelemetry already initialized');
     return;
   }
 
@@ -135,17 +136,20 @@ export function initializeTracing(): void {
   sdk.start();
   tracer = trace.getTracer(SERVICE_NAME, SERVICE_VERSION);
 
-  console.log(
-    `[Tracing] OpenTelemetry initialized: service=${SERVICE_NAME} env=${ENV} endpoint=${OTLP_ENDPOINT} sampleRate=${TRACE_SAMPLE_RATE}`,
-  );
+  logger.info('[Tracing] OpenTelemetry initialized', {
+    service: SERVICE_NAME,
+    env: ENV,
+    endpoint: OTLP_ENDPOINT,
+    sampleRate: TRACE_SAMPLE_RATE,
+  });
 
   // Graceful shutdown on SIGTERM
   process.on('SIGTERM', async () => {
     try {
       await sdk?.shutdown();
-      console.log('[Tracing] OpenTelemetry SDK shut down');
+      logger.info('[Tracing] OpenTelemetry SDK shut down');
     } catch (err) {
-      console.error('[Tracing] Error during shutdown:', err);
+      logger.error('[Tracing] Error during shutdown', { err: String(err) });
     }
   });
 }

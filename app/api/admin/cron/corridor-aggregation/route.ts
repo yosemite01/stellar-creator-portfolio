@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { aggregateCorridorPayments } from '@/server/services/corridor-analytics';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/admin/cron/corridor-aggregation
@@ -40,14 +41,14 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    console.log('Starting corridor payment aggregation');
+    logger.info('Starting corridor payment aggregation');
     await aggregateCorridorPayments();
     return NextResponse.json(
       { success: true, message: 'Corridor payments aggregated successfully' },
       { status: 200 }
     );
   } catch (error) {
-    console.error('Cron job failed:', error);
+    logger.error('Cron job failed', { err: String(error) });
     return NextResponse.json(
       { error: 'Failed to aggregate corridor payments', details: String(error) },
       { status: 500 }

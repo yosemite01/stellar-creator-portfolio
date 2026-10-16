@@ -1,3 +1,7 @@
+# CI workflow: helm
+# Purpose: Validates the Helm chart (lint + dry-run template render) on
+# PRs that touch charts/ or k8s/. Catches chart syntax errors and missing
+# values before a release reaches the cluster.
 name: Helm Chart Validation
 
 on:

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma';
+import { logger } from '@/lib/logger';
 
 interface PushPayload {
   changes: {
@@ -90,9 +91,7 @@ export async function POST(req: NextRequest) {
               },
             });
           } else if (process.env.DEBUG) {
-            console.log(
-              `Conflict: skipping bounty ${bountyData.id} (server is newer)`
-            );
+            logger.debug('Conflict: skipping bounty (server is newer)', { bountyId: bountyData.id });
           }
         }
       }
@@ -153,9 +152,7 @@ export async function POST(req: NextRequest) {
               },
             });
           } else if (process.env.DEBUG) {
-            console.log(
-              `Conflict: skipping application ${appData.id} (server is newer)`
-            );
+            logger.debug('Conflict: skipping application (server is newer)', { applicationId: appData.id });
           }
         }
       }

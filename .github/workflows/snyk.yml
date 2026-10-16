@@ -1,3 +1,7 @@
+# CI workflow: snyk
+# Purpose: Snyk SCA (Software Composition Analysis) scan. Checks npm and
+# Cargo dependencies for known CVEs on push to main and on a daily schedule.
+# Findings are uploaded to the Snyk dashboard and reported in the Security tab.
 name: Snyk Security Scan
 
 on:

@@ -1,3 +1,9 @@
+# CI workflow: deploy-contracts
+# Purpose: Builds and deploys Soroban smart contracts to Testnet on every
+# push to main. Runs contract unit tests and Rust clippy before deploying.
+# Mainnet deployments are handled separately by deploy-mainnet.yml and
+# require a published GitHub release + manual environment approval.
+# Caching: Cargo registry + target directory (Swatinem/rust-cache).
 name: Deploy Soroban Contracts
 
 on:

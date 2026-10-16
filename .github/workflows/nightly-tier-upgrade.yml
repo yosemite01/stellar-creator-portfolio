@@ -1,3 +1,7 @@
+# CI workflow: nightly-tier-upgrade
+# Purpose: Nightly job that promotes eligible creators to higher tiers based
+# on activity thresholds. Runs via workflow_dispatch and a nightly cron
+# schedule; results are posted to Slack.
 name: Nightly Tier Upgrade
 
 on:

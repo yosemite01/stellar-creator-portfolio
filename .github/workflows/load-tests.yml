@@ -1,3 +1,7 @@
+# CI workflow: load-tests
+# Purpose: Runs k6 load tests against a staging environment to catch
+# performance regressions before they reach production. Triggered manually
+# or on a schedule; results are uploaded as GitHub Actions artifacts.
 name: Load Tests
 
 on:

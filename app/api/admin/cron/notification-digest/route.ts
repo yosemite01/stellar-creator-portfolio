@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { queueDigestEmails } from '@/server/services/notifications/digest-service';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/admin/cron/notification-digest?frequency=daily|weekly
@@ -51,12 +52,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await queueDigestEmails(frequency);
-    console.log(
-      `Notification digest (${frequency}): queued ${result.queued}, skipped ${result.skipped} (no unread notifications)`,
-    );
+    logger.info('Notification digest queued', { frequency, queued: result.queued, skipped: result.skipped });
     return NextResponse.json({ success: true, frequency, ...result }, { status: 200 });
   } catch (error) {
-    console.error('Notification digest cron job failed:', error);
+    logger.error('Notification digest cron job failed', { err: String(error) });
     return NextResponse.json(
       { error: 'Failed to queue notification digests', details: String(error) },
       { status: 500 },

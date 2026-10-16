@@ -1,3 +1,10 @@
+# CI workflow: deploy-mainnet
+# Purpose: Deploys Soroban contracts and the Next.js frontend to the Stellar
+# Mainnet when a GitHub release is published. Requires a valid semver tag
+# (v1.2.3), no pre-release suffix, and manual approval via the 'mainnet'
+# GitHub Environment. Simulates all contracts against both the primary and
+# secondary Mainnet RPC before any on-chain transaction is sent.
+# Caching: pnpm store (actions/setup-node cache:'pnpm').
 name: Deploy to Mainnet
 
 # Trigger: only on published releases (not drafts, not pre-releases unless the
