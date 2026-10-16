@@ -22,11 +22,11 @@ path = "smoke_test.rs"
 actix-web.workspace = true
 actix-rt.workspace = true
 actix-ws = "0.4"
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 futures = "0.3"
 sha2.workspace = true
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.52", features = ["full"] }
-tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }

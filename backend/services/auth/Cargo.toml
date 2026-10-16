@@ -27,13 +27,13 @@ hex.workspace = true
 thiserror.workspace = true
 rand = { version = "0.8", features = ["getrandom"] }
 urlencoding = "2.1"
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 # jsonwebtoken 10 requires an explicit crypto backend (rust_crypto or
 # aws_lc_rs) or every sign/verify call panics at runtime with "Could not
 # automatically determine the process-level CryptoProvider". Pure-Rust backend
 # chosen to match the crate's existing deps (ed25519-dalek, sha2, rand) and
 # avoid an aws-lc-rs C/cmake build dependency.
-jsonwebtoken = { version = "10.4", features = ["use_pem", "rust_crypto"] }
+jsonwebtoken = { version = "11.1", features = ["use_pem", "rust_crypto"] }
 sqlx.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = "0.4"

@@ -23,7 +23,7 @@ reqwest.workspace = true
 actix-web = { workspace = true }
 hmac = { workspace = true }
 # Pinned below the workspace default (0.11): hmac 0.12 depends on digest 0.10.
-sha2 = "0.10"
+sha2 = "0.11"
 hex = { workspace = true }
 stellar-discovery = { path = "../discovery" }
 
@@ -31,6 +31,6 @@ stellar-discovery = { path = "../discovery" }
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
-opentelemetry-semantic-conventions = "0.15"
+opentelemetry-semantic-conventions = "0.33"
 tracing-opentelemetry.workspace = true
 stellar-common = { path = "../common" }
