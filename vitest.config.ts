@@ -30,5 +30,11 @@ export default defineConfig({
       // Playwright specs; run with `pnpm test:e2e`.
       'e2e/**',
     ],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html', 'lcov'],
+      include: ['app/api/**'],
+      exclude: ['**/*.test.ts', '**/*.spec.ts', '**/__tests__/**'],
+    },
   },
 });

@@ -2,3 +2,4 @@
 # Allows running compose directly from repository root.
 include:
   - path: backend/docker-compose.yml
+  - path: docker-compose.test.yml

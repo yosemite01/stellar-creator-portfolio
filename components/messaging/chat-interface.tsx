@@ -170,7 +170,7 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
     const displayText = isTranslated ? translation.text : (msg.plaintext || 'Encrypted message')
 
     return (
-      <div key={msg.id} className={cn('flex flex-col gap-2 rounded-xl p-3 shadow-sm', isMine ? 'bg-primary/10' : 'bg-muted')}>
+      <div key={msg.id} data-testid="message-item" className={cn('flex flex-col gap-2 rounded-xl p-3 shadow-sm', isMine ? 'bg-primary/10' : 'bg-muted')}>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <div className="flex items-center gap-2">
             <User className="h-4 w-4" />
@@ -283,6 +283,7 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
         <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <select
+              data-testid="participant-select"
               className="rounded-lg border border-border bg-background text-foreground px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               value={currentUser}
               onChange={(e) => setCurrentUser(e.target.value)}
@@ -322,6 +323,7 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
             </div>
           )}
           <textarea
+            data-testid="message-input"
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -342,6 +344,7 @@ export function ChatInterface({ initialThreadId = 'general' }: Props) {
               <input type="file" className="hidden" onChange={handleAttachment} />
             </label>
             <button
+              data-testid="send-button"
               onClick={handleSend}
               className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:opacity-90"
             >

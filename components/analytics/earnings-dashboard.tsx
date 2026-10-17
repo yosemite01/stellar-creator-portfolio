@@ -229,12 +229,13 @@ export function EarningsDashboard() {
                   <th className="px-4 py-3 text-right">Amount</th>
                   <th className="px-4 py-3 text-right">USD Equiv.</th>
                   <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-right">Receipt</th>
                 </tr>
               </thead>
               <tbody>
                 {paginated.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
+                    <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
                       No transactions found.
                     </td>
                   </tr>
@@ -257,6 +258,18 @@ export function EarningsDashboard() {
                       <Badge variant={STATUS_VARIANT[tx.status]} className="capitalize text-xs">
                         {tx.status}
                       </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs gap-1"
+                        onClick={() => window.open(`/api/payouts/${tx.id}/receipt?format=pdf`, '_blank')}
+                        title="Download official PDF receipt with platform fee breakdown and Stellar link"
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        PDF
+                      </Button>
                     </td>
                   </tr>
                 ))}
