@@ -1,3 +1,22 @@
+export interface DisputeEvidenceItem {
+  id: string;
+  disputeId: string;
+  uploadedById: string;
+  fileUrl: string | null;
+  fileName: string | null;
+  fileSize: number | null;
+  mimeType: string | null;
+  message: string | null;
+  messageId: string | null;
+  createdAt: string;
+  uploadedBy?: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    role: string;
+  };
+}
+
 export interface Dispute {
   id: string;
   escrowId: string;
@@ -5,6 +24,8 @@ export interface Dispute {
   clientId: string;
   status: string;
   reason: string | null;
+  deadline?: string | null;
+  evidence?: DisputeEvidenceItem[];
   createdAt: string;
   updatedAt: string;
 }

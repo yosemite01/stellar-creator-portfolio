@@ -24,6 +24,21 @@ export async function GET(req: NextRequest) {
   const [disputes, total] = await Promise.all([
     prisma.dispute.findMany({
       where,
+      include: {
+        evidence: {
+          orderBy: { createdAt: 'desc' },
+          include: {
+            uploadedBy: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
       skip,
       take: limit,

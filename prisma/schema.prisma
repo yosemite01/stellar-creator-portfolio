@@ -99,6 +99,7 @@ model User {
   projects            Project[]
   teamsOwned          Team[]        @relation("team_owner")
   teamMemberships     TeamMember[]
+  disputeEvidence     DisputeEvidence[] @relation("dispute_evidence_uploader")
 
   @@index([email])
   @@index([suspendedAt])
@@ -630,6 +631,8 @@ model Dispute {
   clientId  String
   status    String   @default("open")
   reason    String?
+  deadline  DateTime?
+  evidence  DisputeEvidence[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -637,6 +640,26 @@ model Dispute {
   @@index([creatorId])
   @@index([clientId])
   @@index([status])
+  @@index([deadline])
+}
+
+model DisputeEvidence {
+  id           String   @id @default(cuid())
+  disputeId    String
+  dispute      Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy   User     @relation("dispute_evidence_uploader", fields: [uploadedById], references: [id], onDelete: Cascade)
+  fileUrl      String?
+  fileName     String?
+  fileSize     Int?
+  mimeType     String?
+  message      String?  @db.Text
+  messageId    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([disputeId])
+  @@index([uploadedById])
 }
 
 // ── Audit Logging & Telemetry ────────────────────────────────────────────

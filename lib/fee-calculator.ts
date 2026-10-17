@@ -8,11 +8,50 @@
  * frontend can show accurate fee previews before the user signs a transaction.
  */
 
+/** Hard ceiling for governance-settable platform fees: 10% (1000 bps) — mirrors backend/contracts/core/src/fee.rs */
+export const MAX_FEE_BPS = 1_000;
+
 /** Platform fee rate (2.5 %). */
 export const PLATFORM_FEE_BPS = 250; // basis points
 
 /** Maximum platform fee in the token's smallest unit (e.g. stroops for XLM). */
 export const PLATFORM_FEE_CAP = 500;
+
+/**
+ * Validates fee basis points against protocol bounds.
+ * Mirrors `assert_valid_fee_bps` in `backend/contracts/core/src/fee.rs`.
+ */
+export function assertValidFeeBps(feeBps: number): void {
+  if (
+    !Number.isFinite(feeBps) ||
+    !Number.isInteger(feeBps) ||
+    feeBps < 0 ||
+    feeBps > MAX_FEE_BPS
+  ) {
+    throw new Error('Fee exceeds maximum of 1000 basis points (10%)');
+  }
+}
+
+/**
+ * Compute platform fee in integer token units (stroops).
+ * Mirrors `compute_fee(amount: i128, fee_bps: u32) -> i128` in `backend/contracts/core/src/fee.rs`.
+ * Uses integer truncation arithmetic matching Rust contract behavior.
+ */
+export function computeFee(amount: number | bigint, feeBps: number = PLATFORM_FEE_BPS): number {
+  assertValidFeeBps(feeBps);
+  const amtBig = BigInt(Math.trunc(Number(amount)));
+  const bpsBig = BigInt(feeBps);
+  return Number((amtBig * bpsBig) / 10_000n);
+}
+
+/**
+ * Compute net amount after platform fee in integer token units (stroops).
+ * Mirrors `compute_net(amount: i128, fee_bps: u32) -> i128` in `backend/contracts/core/src/fee.rs`.
+ */
+export function computeNet(amount: number | bigint, feeBps: number = PLATFORM_FEE_BPS): number {
+  const fee = computeFee(amount, feeBps);
+  return Number(amount) - fee;
+}
 
 /** Stellar base network fee per operation in XLM. */
 export const NETWORK_FEE_XLM = 0.00001;

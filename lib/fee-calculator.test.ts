@@ -5,7 +5,12 @@ import {
   PLATFORM_FEE_BPS,
   PLATFORM_FEE_CAP,
   NETWORK_FEE_XLM,
+  MAX_FEE_BPS,
+  assertValidFeeBps,
+  computeFee,
+  computeNet,
 } from './fee-calculator';
+import sharedFeeVectors from '../fixtures/fee-vectors.json';
 
 describe('calculateFees', () => {
   it('returns zero breakdown for zero amount', () => {
@@ -89,3 +94,30 @@ describe('formatFeeBreakdown', () => {
     expect(text).toContain('USDC');
   });
 });
+
+describe('aligned contract fee calculation (core/src/fee.rs)', () => {
+  it('enforces MAX_FEE_BPS ceiling of 1000 (10%)', () => {
+    expect(MAX_FEE_BPS).toBe(1000);
+    expect(() => assertValidFeeBps(1000)).not.toThrow();
+    expect(() => assertValidFeeBps(1001)).toThrow('Fee exceeds maximum of 1000 basis points (10%)');
+    expect(() => assertValidFeeBps(-1)).toThrow();
+    expect(() => assertValidFeeBps(1.5)).toThrow();
+  });
+
+  it('computes fee and net correctly for standard amounts', () => {
+    expect(computeFee(1000, 250)).toBe(25);
+    expect(computeNet(1000, 250)).toBe(975);
+    expect(computeFee(10_000, 1000)).toBe(1000);
+    expect(computeNet(10_000, 1000)).toBe(9000);
+  });
+
+  it('passes all shared test vectors identically to Rust contract', () => {
+    for (const vector of sharedFeeVectors) {
+      const fee = computeFee(vector.amount, vector.feeBps);
+      const net = computeNet(vector.amount, vector.feeBps);
+      expect(fee).toBe(vector.expectedFee);
+      expect(net).toBe(vector.amount - vector.expectedFee);
+    }
+  });
+});
+

@@ -1,0 +1,23 @@
+[
+  { "amount": 0, "feeBps": 0, "expectedFee": 0 },
+  { "amount": 0, "feeBps": 250, "expectedFee": 0 },
+  { "amount": 0, "feeBps": 1000, "expectedFee": 0 },
+  { "amount": 1, "feeBps": 250, "expectedFee": 0 },
+  { "amount": 39, "feeBps": 250, "expectedFee": 0 },
+  { "amount": 40, "feeBps": 250, "expectedFee": 1 },
+  { "amount": 41, "feeBps": 250, "expectedFee": 1 },
+  { "amount": 79, "feeBps": 250, "expectedFee": 1 },
+  { "amount": 80, "feeBps": 250, "expectedFee": 2 },
+  { "amount": 100, "feeBps": 1, "expectedFee": 0 },
+  { "amount": 9999, "feeBps": 1, "expectedFee": 0 },
+  { "amount": 10000, "feeBps": 1, "expectedFee": 1 },
+  { "amount": 400, "feeBps": 250, "expectedFee": 10 },
+  { "amount": 1000, "feeBps": 250, "expectedFee": 25 },
+  { "amount": 10000, "feeBps": 250, "expectedFee": 250 },
+  { "amount": 20000, "feeBps": 250, "expectedFee": 500 },
+  { "amount": 10000, "feeBps": 1000, "expectedFee": 1000 },
+  { "amount": 1234567, "feeBps": 350, "expectedFee": 43209 },
+  { "amount": 10000000, "feeBps": 500, "expectedFee": 500000 },
+  { "amount": 1000000000, "feeBps": 1000, "expectedFee": 100000000 },
+  { "amount": 9999999999, "feeBps": 999, "expectedFee": 998999999 }
+]
