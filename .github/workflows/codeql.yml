@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -62,7 +62,7 @@ jobs:
 
     steps:
       - name: Check for high-severity CodeQL alerts
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const alerts = await github.rest.codeScanning.listAlertsForRepo({
