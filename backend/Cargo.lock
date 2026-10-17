@@ -4793,6 +4793,8 @@ dependencies = [
 name = "stellar-core-contract"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "soroban-sdk",
 ]
 

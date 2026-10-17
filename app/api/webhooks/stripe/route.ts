@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type Stripe from 'stripe'
 import { getStripe, getStripeWebhookSecret, isStripeConfigured } from '@/lib/payments/stripe'
-import { processStripeWebhookEvent } from '@/lib/payments/stripe-webhook'
+import {
+  processStripeWebhookEvent,
+  recordProcessedWebhookEvent,
+  unmarkProcessedWebhookEvent,
+} from '@/lib/payments/stripe-webhook'
 
 export const runtime = 'nodejs'
 
@@ -33,9 +37,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 })
   }
 
+  // Idempotency: skip duplicates if already recorded (Issue #1575)
+  const isNew = await recordProcessedWebhookEvent(event.id, event.type)
+  if (!isNew) {
+    return NextResponse.json({ received: true, deduplicated: true })
+  }
+
   try {
     await processStripeWebhookEvent(event)
   } catch (error) {
+    // Unmark the event record so Stripe's automated retries can be processed
+    await unmarkProcessedWebhookEvent(event.id)
     // A 5xx makes Stripe retry the delivery.
     console.error(`[stripe-webhook] failed to process ${event.type}:`, error)
     return NextResponse.json({ error: 'Webhook handler failed' }, { status: 500 })

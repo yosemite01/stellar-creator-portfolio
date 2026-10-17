@@ -1,4 +1,5 @@
 import type Stripe from 'stripe'
+import { prisma } from '@/lib/prisma'
 import {
   findEscrowByPaymentIntent,
   getEscrow,
@@ -60,3 +61,51 @@ export async function processStripeWebhookEvent(event: Stripe.Event): Promise<Es
       return null
   }
 }
+
+/**
+ * Records a Stripe webhook event ID to ensure idempotent processing (Issue #1575).
+ * Returns true if the event was newly recorded, false if it was already processed (conflict).
+ */
+export async function recordProcessedWebhookEvent(
+  eventId: string,
+  eventType?: string
+): Promise<boolean> {
+  try {
+    await prisma.processedWebhookEvent.create({
+      data: {
+        id: eventId,
+        eventType: eventType ?? null,
+      },
+    })
+    return true
+  } catch (error: any) {
+    if (error?.code === 'P2002') {
+      return false
+    }
+    throw error
+  }
+}
+
+/**
+ * Removes a recorded webhook event so that failed operations can be retried by Stripe.
+ */
+export async function unmarkProcessedWebhookEvent(eventId: string): Promise<void> {
+  try {
+    await prisma.processedWebhookEvent.delete({
+      where: { id: eventId },
+    })
+  } catch {
+    // Ignore error if record does not exist
+  }
+}
+
+/**
+ * Checks if a webhook event was already processed.
+ */
+export async function isWebhookEventProcessed(eventId: string): Promise<boolean> {
+  const existing = await prisma.processedWebhookEvent.findUnique({
+    where: { id: eventId },
+  })
+  return existing !== null
+}
+

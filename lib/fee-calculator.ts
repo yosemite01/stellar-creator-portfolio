@@ -11,11 +11,44 @@
 /** Platform fee rate (2.5 %). */
 export const PLATFORM_FEE_BPS = 250; // basis points
 
+/** Hard ceiling for governance-settable platform fees: 10% (1000 bps), aligned with contract MAX_FEE_BPS. */
+export const MAX_FEE_BPS = 1000;
+
 /** Maximum platform fee in the token's smallest unit (e.g. stroops for XLM). */
 export const PLATFORM_FEE_CAP = 500;
 
 /** Stellar base network fee per operation in XLM. */
 export const NETWORK_FEE_XLM = 0.00001;
+
+/**
+ * Validates fee basis points against contract MAX_FEE_BPS limit (Issue #1576).
+ * Mirrors assert_valid_fee_bps in core/src/fee.rs.
+ */
+export function assertValidFeeBps(feeBps: number): void {
+  if (feeBps > MAX_FEE_BPS) {
+    throw new Error('Fee exceeds maximum of 1000 basis points (10%)');
+  }
+}
+
+/**
+ * Computes fee in integer units (stroops), exactly matching contract core/src/fee.rs:
+ * `amount * (fee_bps as i128) / 10_000`
+ */
+export function computeFee(amount: bigint | number | string, feeBps: number = PLATFORM_FEE_BPS): bigint {
+  assertValidFeeBps(feeBps);
+  const bigAmount = BigInt(amount);
+  if (bigAmount <= 0n) return 0n;
+  return (bigAmount * BigInt(feeBps)) / 10000n;
+}
+
+/**
+ * Computes net amount after platform fee in integer units (stroops), matching core/src/fee.rs.
+ */
+export function computeNet(amount: bigint | number | string, feeBps: number = PLATFORM_FEE_BPS): bigint {
+  const bigAmount = BigInt(amount);
+  return bigAmount - computeFee(bigAmount, feeBps);
+}
+
 
 export interface FeeBreakdown {
   /** Gross amount the payer deposits into escrow. */

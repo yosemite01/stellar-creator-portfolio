@@ -3,9 +3,14 @@ import {
   calculateFees,
   formatFeeBreakdown,
   PLATFORM_FEE_BPS,
+  MAX_FEE_BPS,
   PLATFORM_FEE_CAP,
   NETWORK_FEE_XLM,
+  assertValidFeeBps,
+  computeFee,
+  computeNet,
 } from './fee-calculator';
+import feeVectors from '../shared/fixtures/fee-vectors.json';
 
 describe('calculateFees', () => {
   it('returns zero breakdown for zero amount', () => {
@@ -89,3 +94,35 @@ describe('formatFeeBreakdown', () => {
     expect(text).toContain('USDC');
   });
 });
+
+describe('Contract parity with core/src/fee.rs (Issue #1576)', () => {
+  it('enforces MAX_FEE_BPS ceiling of 1000 (10%)', () => {
+    expect(MAX_FEE_BPS).toBe(1000);
+    expect(() => assertValidFeeBps(1000)).not.toThrow();
+    expect(() => assertValidFeeBps(1001)).toThrow('Fee exceeds maximum of 1000 basis points (10%)');
+    expect(() => computeFee(1000, 1001)).toThrow('Fee exceeds maximum of 1000 basis points (10%)');
+  });
+
+  it('matches all shared test vectors from shared/fixtures/fee-vectors.json', () => {
+    for (const vector of feeVectors) {
+      const computedFee = computeFee(vector.amount, vector.feeBps);
+      expect(computedFee.toString()).toBe(
+        vector.expectedFee,
+        `Vector failure: ${vector.description} (amount: ${vector.amount}, feeBps: ${vector.feeBps})`
+      );
+
+      const computedNet = computeNet(vector.amount, vector.feeBps);
+      const expectedNet = BigInt(vector.amount) - BigInt(vector.expectedFee);
+      expect(computedNet.toString()).toBe(
+        expectedNet.toString(),
+        `Net vector failure: ${vector.description}`
+      );
+    }
+  });
+
+  it('handles negative or zero amounts safely', () => {
+    expect(computeFee(-100n, 250)).toBe(0n);
+    expect(computeFee(0n, 250)).toBe(0n);
+  });
+});
+

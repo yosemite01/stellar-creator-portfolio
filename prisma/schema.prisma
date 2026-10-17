@@ -99,6 +99,7 @@ model User {
   projects            Project[]
   teamsOwned          Team[]        @relation("team_owner")
   teamMemberships     TeamMember[]
+  pushDeviceTokens    PushDeviceToken[]
 
   @@index([email])
   @@index([suspendedAt])
@@ -1002,4 +1003,13 @@ model CorridorPayment {
   @@index([destCurrency])
   @@index([periodBucket])
   @@index([sourceCurrency, destCurrency])
+}
+
+/// Processed Stripe webhook events for idempotent handling (Issue #1575)
+model ProcessedWebhookEvent {
+  id        String   @id
+  eventType String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

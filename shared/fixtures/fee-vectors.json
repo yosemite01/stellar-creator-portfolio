@@ -1,0 +1,86 @@
+[
+  {
+    "description": "Zero deposit results in zero fee",
+    "amount": "0",
+    "feeBps": 250,
+    "expectedFee": "0"
+  },
+  {
+    "description": "Sub-stroop amount rounds down to zero fee",
+    "amount": "39",
+    "feeBps": 250,
+    "expectedFee": "0"
+  },
+  {
+    "description": "Exact 1-stroop threshold at 250 bps (40 * 250 = 10000)",
+    "amount": "40",
+    "feeBps": 250,
+    "expectedFee": "1"
+  },
+  {
+    "description": "Slightly above 1-stroop threshold rounds down to 1 stroop",
+    "amount": "41",
+    "feeBps": 250,
+    "expectedFee": "1"
+  },
+  {
+    "description": "Standard deposit of 100 stroops at 250 bps truncates 2.5 to 2",
+    "amount": "100",
+    "feeBps": 250,
+    "expectedFee": "2"
+  },
+  {
+    "description": "Standard deposit of 1,000 stroops at 250 bps",
+    "amount": "1000",
+    "feeBps": 250,
+    "expectedFee": "25"
+  },
+  {
+    "description": "Standard deposit of 10,000 stroops at 250 bps",
+    "amount": "10000",
+    "feeBps": 250,
+    "expectedFee": "250"
+  },
+  {
+    "description": "Minimum fee rate 0 bps on large amount",
+    "amount": "10000000",
+    "feeBps": 0,
+    "expectedFee": "0"
+  },
+  {
+    "description": "Maximum allowed fee rate 1000 bps (10%) on 1 stroop rounds to 0",
+    "amount": "1",
+    "feeBps": 1000,
+    "expectedFee": "0"
+  },
+  {
+    "description": "Maximum allowed fee rate 1000 bps (10%) on 10 stroops yields 1",
+    "amount": "10",
+    "feeBps": 1000,
+    "expectedFee": "1"
+  },
+  {
+    "description": "Maximum allowed fee rate 1000 bps (10%) on 10,000,000 stroops (1 XLM)",
+    "amount": "10000000",
+    "feeBps": 1000,
+    "expectedFee": "1000000"
+  },
+  {
+    "description": "Odd amount and rate with fractional truncation (1234567 * 75 / 10000)",
+    "amount": "1234567",
+    "feeBps": 75,
+    "expectedFee": "9259"
+  },
+  {
+    "description": "Large amount near 1 billion stroops with non-zero remainder",
+    "amount": "999999999",
+    "feeBps": 250,
+    "expectedFee": "24999999"
+  },
+  {
+    "description": "10 billion stroops at 500 bps (5%)",
+    "amount": "10000000000",
+    "feeBps": 500,
+    "expectedFee": "500000000"
+  }
+]
