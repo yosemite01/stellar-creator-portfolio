@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import crypto from 'crypto';
 
 // Reject requests whose timestamp is further than this from "now" in either
@@ -9,35 +9,60 @@ import crypto from 'crypto';
 // ever checks it against the clock.
 const MAX_WEBHOOK_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
-async function verifyWebhookSignature(rawBody: string, request: NextRequest): Promise<boolean> {
-  const signature = request.headers.get('x-webhook-signature');
-  const timestamp = request.headers.get('x-webhook-timestamp');
+export async function verifyWebhookSignature(rawBody: string, request: NextRequest): Promise<boolean> {
   const secret = process.env.EMAIL_WEBHOOK_SECRET;
-
-  if (!signature || !timestamp || !secret) {
+  if (!secret) {
+    // Fail-safe: deny if secret is not configured
     return false;
   }
 
-  const timestampMs = Number(timestamp) * 1000;
-  if (!Number.isFinite(timestampMs)) {
-    return false;
-  }
-  if (Math.abs(Date.now() - timestampMs) > MAX_WEBHOOK_CLOCK_SKEW_MS) {
-    return false;
-  }
+  const signature =
+    request.headers.get('x-webhook-signature') ||
+    request.headers.get('resend-signature') ||
+    request.headers.get('x-postmark-signature');
+  const timestamp =
+    request.headers.get('x-webhook-timestamp') ||
+    request.headers.get('x-timestamp');
 
-  const hmac = crypto.createHmac('sha256', secret);
-  hmac.update(`${timestamp}.${rawBody}`);
-  const expectedSignature = hmac.digest('hex');
-
-  const signatureBuf = Buffer.from(signature, 'hex');
-  const expectedBuf = Buffer.from(expectedSignature, 'hex');
-  if (signatureBuf.length !== expectedBuf.length) {
+  if (!signature) {
     return false;
   }
 
-  return crypto.timingSafeEqual(signatureBuf, expectedBuf);
+  if (timestamp) {
+    const timestampMs = Number(timestamp) * 1000;
+    if (!Number.isFinite(timestampMs)) {
+      return false;
+    }
+    if (Math.abs(Date.now() - timestampMs) > MAX_WEBHOOK_CLOCK_SKEW_MS) {
+      return false;
+    }
+
+    const hmac = crypto.createHmac('sha256', secret);
+    hmac.update(`${timestamp}.${rawBody}`);
+    const expectedSignature = hmac.digest('hex');
+
+    const signatureBuf = Buffer.from(signature, 'hex');
+    const expectedBuf = Buffer.from(expectedSignature, 'hex');
+    if (signatureBuf.length !== expectedBuf.length) {
+      return false;
+    }
+
+    return crypto.timingSafeEqual(signatureBuf, expectedBuf);
+  } else {
+    const hmac = crypto.createHmac('sha256', secret);
+    hmac.update(rawBody);
+    const expectedSignature = hmac.digest('hex');
+
+    const signatureBuf = Buffer.from(signature, 'hex');
+    const expectedBuf = Buffer.from(expectedSignature, 'hex');
+    if (signatureBuf.length !== expectedBuf.length) {
+      return false;
+    }
+
+    return crypto.timingSafeEqual(signatureBuf, expectedBuf);
+  }
 }
+
 
 export async function POST(request: NextRequest) {
   try {

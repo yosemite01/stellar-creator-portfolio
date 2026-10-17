@@ -99,6 +99,7 @@ model User {
   projects            Project[]
   teamsOwned          Team[]        @relation("team_owner")
   teamMemberships     TeamMember[]
+  pushDeviceTokens    PushDeviceToken[]
 
   @@index([email])
   @@index([suspendedAt])

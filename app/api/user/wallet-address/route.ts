@@ -4,6 +4,25 @@ import { prisma } from '@/lib/prisma';
 import { isValidStellarAddress } from '@/lib/utils/stellar-address';
 
 /**
+ * GET /api/user/wallet-address
+ *
+ * Retrieves the currently linked Stellar wallet address for the authenticated user.
+ */
+export async function GET() {
+  const session = await getServerSession();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { walletAddress: true },
+  });
+
+  return NextResponse.json({ walletAddress: user?.walletAddress ?? null });
+}
+
+/**
  * PATCH /api/user/wallet-address
  *
  * Saves a Stellar public key the user typed/pasted in at signup, after
@@ -25,7 +44,7 @@ export async function PATCH(req: NextRequest) {
   }
   if (!isValidStellarAddress(address)) {
     return NextResponse.json(
-      { error: 'That doesn’t look like a valid Stellar address (should start with G and be 56 characters)' },
+      { error: 'That doesn’t look like a valid Stellar address (should start with G, be 56 characters, and have a valid checksum)' },
       { status: 422 }
     );
   }
