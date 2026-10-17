@@ -35,16 +35,22 @@ env:
   WS_PONG_DEADLINE_SECS: "10"
   WS_IDLE_TIMEOUT_SECS: "300"
 
+# Liveness — checks the process is alive; no external deps (#1599)
 livenessProbe:
   httpGet:
-    path: /health
+    path: /api/health
     port: 3001
   initialDelaySeconds: 10
   periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
 
+# Readiness — checks DB, Redis and Horizon before accepting traffic (#1599)
 readinessProbe:
   httpGet:
-    path: /ready
+    path: /api/ready
     port: 3001
   initialDelaySeconds: 5
   periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3

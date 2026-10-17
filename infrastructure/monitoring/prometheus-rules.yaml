@@ -1,0 +1,127 @@
+## Prometheus alerting rules for Stellar Creator Portfolio (#1598)
+## SLOs: 99.5 % availability, p95 < 500 ms, p99 < 2 000 ms (30-day rolling)
+##
+## Deploy with:
+##   kubectl apply -f infrastructure/monitoring/prometheus-rules.yaml
+## Or via the Helm chart if PrometheusRule CRD is available.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellar-api-slos
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack   # must match your Prometheus Operator selector
+spec:
+  groups:
+    # ── Error-rate alerts ───────────────────────────────────────────────────
+    - name: stellar_api_error_rate
+      interval: 1m
+      rules:
+        # Availability SLO: < 0.5 % 5xx over 5-minute window
+        - alert: StellarApiHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{job="stellar-api", status=~"5.."}[5m]))
+              /
+              sum(rate(http_requests_total{job="stellar-api", status!~"4.."}[5m]))
+            ) > 0.005
+          for: 5m
+          labels:
+            severity: critical
+            service: stellar-api
+            slo: availability
+          annotations:
+            summary: "stellar-api 5xx error rate exceeds 0.5 %"
+            description: >
+              The 5-minute 5xx error rate for stellar-api is
+              {{ printf "%.2f" $value | mul 100 }} %, exceeding the 0.5 % SLO.
+            runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/blob/main/infrastructure/monitoring/slo.md#stellarapihigherrorrate-page"
+
+    # ── Latency alerts ──────────────────────────────────────────────────────
+    - name: stellar_api_latency
+      interval: 1m
+      rules:
+        # p95 latency SLO: < 500 ms
+        - alert: StellarApiHighLatencyP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (rate(http_request_duration_seconds_bucket{job="stellar-api"}[5m]))
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: critical
+            service: stellar-api
+            slo: latency_p95
+          annotations:
+            summary: "stellar-api p95 latency exceeds 500 ms"
+            description: >
+              p95 response time is {{ printf "%.0f" ($value | mul 1000) }} ms
+              (SLO: 500 ms).
+            runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/blob/main/infrastructure/monitoring/slo.md#stellarapihighlatencyp95-page"
+
+        # p99 latency warning: < 2 000 ms
+        - alert: StellarApiHighLatencyP99
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (rate(http_request_duration_seconds_bucket{job="stellar-api"}[5m]))
+            ) > 2.0
+          for: 5m
+          labels:
+            severity: warning
+            service: stellar-api
+            slo: latency_p99
+          annotations:
+            summary: "stellar-api p99 latency exceeds 2 000 ms"
+            description: >
+              p99 response time is {{ printf "%.0f" ($value | mul 1000) }} ms
+              (SLO: 2 000 ms).
+            runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/blob/main/infrastructure/monitoring/slo.md#stellarapihighlatencyp99-warn"
+
+    # ── Error-budget burn-rate alerts ────────────────────────────────────────
+    # Multi-window burn-rate alerting (Google SRE book, Chapter 5).
+    # Error budget = 0.5 % monthly failure budget.
+    - name: stellar_api_error_budget
+      interval: 1m
+      rules:
+        # Fast burn: 1h window — burn rate > 14× exhausts monthly budget in ~2 days
+        - alert: StellarApiErrorBudgetBurn1h
+          expr: |
+            (
+              sum(rate(http_requests_total{job="stellar-api", status=~"5.."}[1h]))
+              /
+              sum(rate(http_requests_total{job="stellar-api", status!~"4.."}[1h]))
+            ) / 0.005 > 14
+          for: 2m
+          labels:
+            severity: critical
+            service: stellar-api
+            slo: error_budget
+          annotations:
+            summary: "stellar-api error budget burning at > 14× (1h window)"
+            description: >
+              1h burn rate = {{ printf "%.1f" $value }}× the error budget.
+              Monthly budget will be exhausted in roughly
+              {{ printf "%.1f" (div 720.0 $value) }} hours at this rate.
+            runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/blob/main/infrastructure/monitoring/slo.md#stellarapierrorbudgetburn1h-page"
+
+        # Slow burn: 6h window — burn rate > 6× exhausts budget within a week
+        - alert: StellarApiErrorBudgetBurn6h
+          expr: |
+            (
+              sum(rate(http_requests_total{job="stellar-api", status=~"5.."}[6h]))
+              /
+              sum(rate(http_requests_total{job="stellar-api", status!~"4.."}[6h]))
+            ) / 0.005 > 6
+          for: 15m
+          labels:
+            severity: warning
+            service: stellar-api
+            slo: error_budget
+          annotations:
+            summary: "stellar-api error budget burning at > 6× (6h window)"
+            description: >
+              6h burn rate = {{ printf "%.1f" $value }}× the error budget.
+            runbook_url: "https://github.com/yosemite01/stellar-creator-portfolio/blob/main/infrastructure/monitoring/slo.md#stellarapierrorbudgetburn6h-warn"

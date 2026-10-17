@@ -95,6 +95,44 @@ jobs:
             exit 1
           fi
 
+  # Issue #1588 — schema/migration drift check
+  # Fails loudly when schema.prisma diverges from the migrations folder so a
+  # missing migration is caught before it reaches production.
+  prisma-drift:
+    name: "Prisma: schema ↔ migrations drift check (#1588)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check for schema ↔ migrations drift
+        run: |
+          echo "Running prisma migrate diff --from-migrations … --to-schema-datamodel …"
+          set +e
+          pnpm exec prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code 2>drift_stderr.txt
+          EXIT=$?
+          set -e
+          if [ $EXIT -ne 0 ]; then
+            echo ""
+            echo "::error::schema.prisma has changes that are not reflected in any migration."
+            echo "Run 'pnpm exec prisma migrate dev --name <describe_change>' locally to"
+            echo "generate the missing migration, then commit the result."
+            echo ""
+            cat drift_stderr.txt
+            exit 1
+          fi
+          echo "No drift detected — schema.prisma matches the migrations folder."
+
   backend:
     runs-on: ubuntu-latest
     steps:

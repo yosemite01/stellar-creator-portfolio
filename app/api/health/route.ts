@@ -1,11 +1,11 @@
 /**
- * Health-check endpoint
+ * Liveness probe — GET /api/health  (#1599)
  *
- * GET /api/health
+ * Reports whether the process is alive and its internal circuit-breaker state.
+ * Intentionally makes NO external calls so Kubernetes never kills a healthy
+ * pod because a transient dependency outage tripped the liveness check.
  *
- * Returns the current circuit breaker state for the Stellar RPC service so
- * load balancers, Kubernetes liveness probes, and dashboards can react
- * appropriately.
+ * For full dependency health see GET /api/ready (readiness probe).
  *
  * Response shape:
  * ```json
@@ -20,7 +20,7 @@
  * ```
  *
  * HTTP status:
- *   200 — circuit CLOSED or HALF_OPEN (service available / probing)
+ *   200 — process healthy (circuit CLOSED or HALF_OPEN)
  *   503 — circuit OPEN (Stellar RPC unavailable), includes `Retry-After: 30`
  */
 
