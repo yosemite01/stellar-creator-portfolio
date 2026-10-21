@@ -54,6 +54,42 @@ function networkPassphrase(): string {
   return process.env.STELLAR_NETWORK_PASSPHRASE ?? Networks.TESTNET;
 }
 
+export function horizonUrl(): string {
+  return process.env.STELLAR_HORIZON_URL ?? DEFAULT_HORIZON_URL;
+}
+
+/**
+ * Decode a user-signed envelope for the configured network.  Rejects (400) a
+ * missing or non-string value, XDR that does not decode and envelopes that are
+ * already fee-bumped.
+ */
+export function parseInnerTransaction(xdrEnvelope: unknown): Transaction {
+  if (typeof xdrEnvelope !== 'string' || !xdrEnvelope) {
+    throw new SponsorError('Missing xdr', 400);
+  }
+
+  let parsed: Transaction | FeeBumpTransaction;
+  try {
+    parsed = TransactionBuilder.fromXDR(xdrEnvelope, networkPassphrase()) as
+      | Transaction
+      | FeeBumpTransaction;
+  } catch {
+    throw new SponsorError('Invalid transaction XDR', 400);
+  }
+
+  if (parsed instanceof FeeBumpTransaction) {
+    throw new SponsorError('Transaction is already fee-bumped', 400);
+  }
+
+  return parsed;
+}
+
+/**
+ * Called with the unsigned fee-bump before the platform key is touched.
+ * Throw a {@link SponsorError} to refuse sponsorship.
+ */
+export type BeforeSign = (feeBump: FeeBumpTransaction) => void | Promise<void>;
+
 /**
  * Parse a user-signed envelope XDR and wrap it in a platform-funded fee-bump.
  *
@@ -66,28 +102,21 @@ function networkPassphrase(): string {
  * Soroban note: fee-bumping a Soroban transaction works, but the inner tx's
  * resource fee must already be set by a prior simulation — the relay only
  * bumps the inclusion fee and does not re-simulate.
+ *
+ * `beforeSign` runs on the finished, still unsigned fee-bump, so anything it
+ * rejects never receives the platform signature.
  */
-export async function buildFeeBump(xdrEnvelope: string): Promise<FeeBumpTransaction> {
+export async function buildFeeBump(
+  xdrEnvelope: string,
+  beforeSign?: BeforeSign,
+): Promise<FeeBumpTransaction> {
   const passphrase = networkPassphrase();
   const feeSource = process.env.STELLAR_FEE_ACCOUNT;
   if (!feeSource) {
     throw new SponsorError('Paymaster relay is not configured', 503);
   }
 
-  let parsed: Transaction | FeeBumpTransaction;
-  try {
-    parsed = TransactionBuilder.fromXDR(xdrEnvelope, passphrase) as
-      | Transaction
-      | FeeBumpTransaction;
-  } catch {
-    throw new SponsorError('Invalid transaction XDR', 400);
-  }
-
-  if (parsed instanceof FeeBumpTransaction) {
-    throw new SponsorError('Transaction is already fee-bumped', 400);
-  }
-
-  const inner = parsed as Transaction;
+  const inner = parseInnerTransaction(xdrEnvelope);
   const innerFee = BigInt(inner.fee);
   if (innerFee > MAX_SPONSORED_FEE) {
     throw new SponsorError('Transaction fee exceeds the sponsored maximum', 402);
@@ -108,6 +137,8 @@ export async function buildFeeBump(xdrEnvelope: string): Promise<FeeBumpTransact
     passphrase,
   );
 
+  await beforeSign?.(feeBump);
+
   // Sign only the outer envelope — the inner tx keeps the user's signatures.
   const feeSecret = await getSecret('STELLAR_FEE_ACCOUNT_SECRET');
   feeBump.sign(Keypair.fromSecret(feeSecret));
@@ -119,11 +150,13 @@ export async function buildFeeBump(xdrEnvelope: string): Promise<FeeBumpTransact
  * Build the fee-bump and submit it to Horizon, returning the hashes the
  * paymaster client surfaces to the UI.
  */
-export async function sponsorTransaction(xdrEnvelope: string): Promise<SponsoredResult> {
-  const feeBump = await buildFeeBump(xdrEnvelope);
-  const horizonUrl = process.env.STELLAR_HORIZON_URL ?? DEFAULT_HORIZON_URL;
+export async function sponsorTransaction(
+  xdrEnvelope: string,
+  beforeSign?: BeforeSign,
+): Promise<SponsoredResult> {
+  const feeBump = await buildFeeBump(xdrEnvelope, beforeSign);
 
-  const res = await fetch(`${horizonUrl}/transactions`, {
+  const res = await fetch(`${horizonUrl()}/transactions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ tx: feeBump.toXDR() }),

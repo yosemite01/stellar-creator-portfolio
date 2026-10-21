@@ -233,6 +233,8 @@ commented in `.env.example` with what it does:
 | Key management | `KMS_PROVIDER`, `KMS_SECRET_PREFIX` | Defaults to `env` locally; `aws` pulls from Secrets Manager |
 | Storage | `AWS_*` | S3 uploads |
 | Payments | `STRIPE_*` | Stripe checkout and webhooks |
+| Paymaster relay | `PAYMASTER_RELAY_ENABLED`, `STELLAR_FEE_ACCOUNT`, `STELLAR_SPONSOR_*`, `STELLAR_FEE_ACCOUNT_MIN_BALANCE` | Fee-bump relay. Callers must be signed in, may only sponsor calls into our contracts (`deployments/<network>.json`) plus any classic ops in `STELLAR_SPONSOR_ALLOWED_OPS`, and are capped by `STELLAR_SPONSOR_DAILY_BUDGET`; sponsoring pauses when the fee account runs low |
+| Semantic search | `OPENAI_API_KEY`, `EMBED_*` | `/api/search/vector` and `/api/search/hybrid`. Vector search is rate limited per IP (30/min) or signed-in user (300/min). Also set a usage alert and a hard monthly cap in the OpenAI dashboard |
 
 #### Check it worked
 
