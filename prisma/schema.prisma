@@ -102,6 +102,8 @@ model User {
   disputeEvidence     DisputeEvidence[] @relation("dispute_evidence_uploader")
   pinnedFiles         PinnedFile[]
   pushDeviceTokens    PushDeviceToken[]
+  threadMemberships   ThreadMember[]
+  messagesSent        Message[]      @relation("message_sender")
 
   @@index([email])
   @@index([suspendedAt])
@@ -1044,4 +1046,55 @@ model CorridorPayment {
   @@index([destCurrency])
   @@index([periodBucket])
   @@index([sourceCurrency, destCurrency])
+}
+
+// ── Encrypted messaging (opaque ciphertext; see ADR 0007) ─────────────────
+
+/// Conversation thread. Membership is required to read/write.
+model Thread {
+  id        String         @id @default(cuid())
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  members   ThreadMember[]
+  messages  Message[]
+
+  @@map("threads")
+}
+
+model ThreadMember {
+  id       String   @id @default(cuid())
+  threadId String   @map("thread_id")
+  userId   String   @map("user_id")
+  joinedAt DateTime @default(now()) @map("joined_at")
+  thread   Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, userId])
+  @@index([userId])
+  @@map("thread_members")
+}
+
+/// End-to-end encrypted message. Server stores ciphertext + iv as opaque blobs
+/// and never decrypts. Optional plainText is client-supplied for search only.
+model Message {
+  id          String   @id @default(cuid())
+  threadId    String   @map("thread_id")
+  senderId    String   @map("sender_id")
+  recipientId String   @map("recipient_id")
+  ciphertext  String   @db.Text
+  iv          String
+  attachment  Json?
+  status      String   @default("sent")
+  readBy      String[] @default([]) @map("read_by")
+  metadata    Json?
+  /// Client-supplied plaintext excerpt for FTS only — never derived by decrypting.
+  plainText   String?  @map("plain_text") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sender User   @relation("message_sender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt(sort: Desc)])
+  @@index([senderId])
+  @@map("messages")
 }
