@@ -25,7 +25,7 @@
 /tsconfig.json              @yosemite01
 /package.json               @yosemite01
 /pnpm-lock.yaml             @yosemite01
-Dockerfile                  @yosemite01
+Dockerfile*                 @yosemite01
 Makefile                    @yosemite01
 
 # Environment and secrets

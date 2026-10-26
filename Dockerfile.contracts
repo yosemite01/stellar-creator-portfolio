@@ -4,11 +4,13 @@
 # byte-for-byte identical regardless of where this runs (CI or local).
 #
 # Pinned versions — bump deliberately and re-verify hashes.
-# soroban-sdk 23 needs Rust >= 1.84 and the wasm32v1-none target. Updating
+# soroban-sdk 29 needs Rust >= 1.91, stellar-cli >= 25.2 and the wasm32v1-none
+# target. Updating
 # requires a hash re-baseline (scripts/verify.sh --update-baseline) and a
 # deliberate PR review.
 #
-# Related: #1348
+# Related: #1348. Built by scripts/build-reproducible.sh (Dockerfile.app is the
+# Next.js image).
 FROM rust:1.94.1-slim AS builder
 
 # Reproducibility: no incremental compilation, deterministic codegen, fixed

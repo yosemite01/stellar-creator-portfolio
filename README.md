@@ -47,7 +47,7 @@ Network passphrase: `Test SDF Network ; September 2015`
 | Frontend | Next.js 16 (App Router), TypeScript, Tailwind CSS v4, shadcn/ui |
 | Auth | NextAuth.js |
 | Database | PostgreSQL via Prisma ORM (Supabase recommended) |
-| Smart Contracts | Rust + Soroban SDK 23.5.3 (`backend/contracts/`), one SDK version across the repo |
+| Smart Contracts | Rust + Soroban SDK 29.0.1 (`backend/contracts/`), one SDK version across the repo |
 | Rust API | Actix-web |
 | Mobile | React Native (Expo) |
 | Payments | Stripe |
@@ -95,7 +95,7 @@ Network passphrase: `Test SDF Network ; September 2015`
 
 > **Legacy `contracts/` tree (archived):** all Soroban contracts live in
 > `backend/contracts/`, the workspace in `backend/Cargo.toml`, and build against
-> a single `soroban-sdk = "23.5.3"`. The old top-level `contracts/` tree (`amm`,
+> a single `soroban-sdk = "29.0.1"`. The old top-level `contracts/` tree (`amm`,
 > `analytics`, `core`, `escrow`, `vault`) pinned soroban-sdk 21.7.7. No workspace
 > or CI job built it, so it was removed rather than upgraded. Its source,
 > including `amm`, `vault` and `analytics`, which have no `backend/contracts/`
