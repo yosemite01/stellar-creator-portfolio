@@ -17,14 +17,19 @@ fn domain_hash(env: &Env, seed: u8) -> BytesN<32> {
 }
 
 fn sign(env: &Env, msg: &BytesN<32>) -> (BytesN<32>, BytesN<64>) {
+    sign_with_key(env, msg, 7)
+}
+
+/// Sign `msg` with the deterministic key derived from `key_seed`.
+fn sign_with_key(env: &Env, msg: &BytesN<32>, key_seed: u8) -> (BytesN<32>, BytesN<64>) {
     use ed25519_dalek::{Signer, SigningKey};
-    use rand_core::OsRng;
 
     // Sign the raw hash bytes directly — the contract verifies via
     // `env.crypto().ed25519_verify(&public_key, &domain_hash.into(), &proof)`
     // against the bytes as-is, not an XDR-encoded `ScVal` wrapping them (which
     // is what soroban_sdk's `testutils::ed25519::Sign` trait produces).
-    let kp = SigningKey::generate(&mut OsRng);
+    // A fixed key keeps the tests deterministic and needs no RNG.
+    let kp = SigningKey::from_bytes(&[key_seed; 32]);
     let sig = kp.sign(&msg.to_array());
     (
         BytesN::from_array(env, &kp.verifying_key().to_bytes()),
@@ -101,7 +106,7 @@ fn test_wrong_public_key_panics() {
     let owner = new_address(&env);
     let hash = domain_hash(&env, 7);
     let (_, sig) = sign(&env, &hash);
-    let (wrong_pk, _) = sign(&env, &hash);
+    let (wrong_pk, _) = sign_with_key(&env, &hash, 8);
     client.submit_proof(&owner, &hash, &wrong_pk, &sig);
 }
 
@@ -178,7 +183,7 @@ fn test_invalid_public_key_signature_mismatch_panics() {
     let owner = new_address(&env);
     let hash = domain_hash(&env, 13);
     let (_, sig) = sign(&env, &hash);
-    let (wrong_pk, _) = sign(&env, &domain_hash(&env, 100));
+    let (wrong_pk, _) = sign_with_key(&env, &domain_hash(&env, 100), 8);
 
     // Signature from one key with a different public key = verification fails
     client.submit_proof(&owner, &hash, &wrong_pk, &sig);
