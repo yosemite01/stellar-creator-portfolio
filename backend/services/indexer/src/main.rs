@@ -17,9 +17,9 @@ use stellar_discovery::{create_discovery, ServiceInfo};
 use tracing::{error, info, warn};
 
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
-use opentelemetry::KeyValue;
+use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{runtime, trace, Resource};
+use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 
@@ -829,21 +829,17 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     // Initialize OpenTelemetry
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint(std::env::var("OTLP_ENDPOINT").unwrap_or_else(|_| "http://jaeger:4317".to_string())),
-        )
-        .with_trace_config(
-            trace::Config::default().with_resource(Resource::new(vec![KeyValue::new(
-                opentelemetry_semantic_conventions::resource::SERVICE_NAME,
-                "stellar-indexer",
-            )])),
-        )
-        .install_batch(runtime::Tokio)
-        .expect("Failed to initialize tracer");
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(std::env::var("OTLP_ENDPOINT").unwrap_or_else(|_| "http://jaeger:4317".to_string()))
+        .build()
+        .expect("Failed to build OTLP span exporter");
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(Resource::builder().with_service_name("stellar-indexer").build())
+        .build();
+    let tracer = tracer_provider.tracer("stellar-indexer");
+    opentelemetry::global::set_tracer_provider(tracer_provider);
 
     let telemetry = OpenTelemetryLayer::new(tracer);
     
