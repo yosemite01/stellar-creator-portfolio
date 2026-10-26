@@ -712,12 +712,9 @@ impl BountyContract {
         stellar_upgradeable::propose_upgrade(&env, &admin, &stored_admin, new_wasm_hash)
     }
 
-    /// Upgrade the contract WASM. Only the governance multisig (contract admin)
-    /// may call this. Emits an `upgraded` event with the new wasm hash.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), BountyError> {
-        admin.require_auth();
-        // Bounty contract uses a standalone admin key
-        let stored_admin_key = Symbol::new(&env, "bounty_admin");
+    /// Apply the pending upgrade once its timelock has elapsed. Admin-only.
+    /// Emits `(contract, upgraded)`.
+    pub fn execute_upgrade(env: Env, admin: Address) {
         let stored_admin: Address = env
             .storage()
             .persistent()
@@ -736,11 +733,46 @@ impl BountyContract {
         stellar_upgradeable::cancel_upgrade(&env, &admin, &stored_admin);
     }
 
-        env.events().publish(
-            (symbol_short!("contract"), symbol_short!("upgraded")),
-            new_wasm_hash,
-        );
-        Ok(())
+    /// The upgrade currently waiting out its timelock, if any.
+    pub fn get_pending_upgrade(env: Env) -> Option<stellar_upgradeable::PendingUpgrade> {
+        stellar_upgradeable::pending_upgrade(&env)
+    }
+
+    /// Nominate a new admin (step 1 of 2). Admin-only. Emits `(admin, proposed)`.
+    pub fn propose_admin(env: Env, admin: Address, new_admin: Address) {
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .expect("Contract admin not set");
+        stellar_upgradeable::propose_admin(&env, &admin, &stored_admin, &new_admin);
+    }
+
+    /// Accept a nomination (step 2 of 2). Must be signed by the nominee.
+    /// Emits `(admin, accepted)`.
+    pub fn accept_admin(env: Env, new_admin: Address) {
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .expect("Contract admin not set");
+        let accepted = stellar_upgradeable::accept_admin(&env, &new_admin, &stored_admin);
+        env.storage().persistent().set(&Symbol::new(&env, "bounty_admin"), &accepted);
+    }
+
+    /// Withdraw a pending admin nomination. Admin-only. Emits `(admin, cancelled)`.
+    pub fn cancel_admin_transfer(env: Env, admin: Address) {
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .expect("Contract admin not set");
+        stellar_upgradeable::cancel_admin_transfer(&env, &admin, &stored_admin);
+    }
+
+    /// The nominated-but-not-yet-accepted admin, if any.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        stellar_upgradeable::pending_admin(&env)
     }
 
     /// Set the bounty contract admin (governance multisig). Can only be called once.
