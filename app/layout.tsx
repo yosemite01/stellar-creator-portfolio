@@ -76,7 +76,7 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Per-request nonce set by middleware.ts; forwarded to <Script nonce>.
+  // Per-request nonce set by proxy.ts; forwarded to <Script nonce>.
   const nonce = (await headers()).get('x-nonce') ?? undefined;
 
   return (
