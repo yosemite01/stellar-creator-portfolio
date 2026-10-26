@@ -1243,7 +1243,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Amount must be positive")]
+    #[should_panic(expected = "Error(Contract, #8)")]
     fn deposit_zero_amount_panics() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 0);
@@ -1273,7 +1273,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Escrow not active")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn double_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1284,7 +1284,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Unauthorized")]
+    #[should_panic(expected = "Error(Contract, #4)")]
     fn release_rejects_non_party_authorizer() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1312,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only payer can refund")]
+    #[should_panic(expected = "Error(Contract, #4)")]
     fn refund_rejects_payee_authorizer() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1322,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Escrow not active")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn double_refund_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1333,7 +1333,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Escrow not active")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn refund_after_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1344,7 +1344,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Escrow not active")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn release_after_refund_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1377,7 +1377,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Unauthorized")]
+    #[should_panic(expected = "Error(Contract, #4)")]
     fn stranger_cannot_dispute() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1387,7 +1387,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Escrow not active")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn cannot_dispute_released_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1398,7 +1398,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Escrow not active")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn cannot_release_disputed_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1451,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only platform admin can resolve disputes")]
+    #[should_panic(expected = "Error(Contract, #4)")]
     fn non_admin_cannot_resolve_dispute() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1466,7 +1466,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Escrow is not disputed")]
+    #[should_panic(expected = "Error(Contract, #10)")]
     fn cannot_resolve_active_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1482,7 +1482,7 @@ mod tests {
     // ── dispute expiry (#731) ─────────────────────────────────────────────────
 
     #[test]
-    #[should_panic(expected = "Dispute has not expired yet")]
+    #[should_panic(expected = "Error(Contract, #11)")]
     fn resolve_expired_dispute_panics_before_expiry() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1524,7 +1524,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Admin already set")]
+    #[should_panic(expected = "Error(Contract, #3)")]
     fn set_admin_can_only_be_called_once() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1539,7 +1539,7 @@ mod tests {
     // ── timelock ──────────────────────────────────────────────────────────────────
 
     #[test]
-    #[should_panic(expected = "Release condition not met")]
+    #[should_panic(expected = "Error(Contract, #6)")]
     fn release_before_timelock_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
@@ -1581,7 +1581,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Milestone already released")]
+    #[should_panic(expected = "Error(Contract, #16)")]
     fn double_milestone_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1594,7 +1594,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only payer can add milestones")]
+    #[should_panic(expected = "Error(Contract, #4)")]
     fn payee_cannot_add_milestone() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1604,7 +1604,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Caller is not an authorized party")]
+    #[should_panic(expected = "Error(Contract, #4)")]
     fn payee_cannot_release_milestone() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1615,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Milestone amount exceeds escrow")]
+    #[should_panic(expected = "Error(Contract, #17)")]
     fn milestone_exceeding_escrow_amount_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1738,7 +1738,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Milestone amounts exceed escrow total")]
+    #[should_panic(expected = "Error(Contract, #17)")]
     fn cumulative_milestone_sum_exceeding_escrow_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1786,7 +1786,7 @@ mod tests {
 
     /// A milestone from escrow A cannot be released against escrow B.
     #[test]
-    #[should_panic(expected = "Milestone not found")]
+    #[should_panic(expected = "Error(Contract, #14)")]
     fn milestone_cross_escrow_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 2000);
@@ -1803,7 +1803,7 @@ mod tests {
 
     /// Depositing a negative amount must be rejected.
     #[test]
-    #[should_panic(expected = "Amount must be positive")]
+    #[should_panic(expected = "Error(Contract, #8)")]
     fn deposit_negative_amount_panics() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1834,7 +1834,7 @@ mod tests {
 
     /// Release one second before the deadline must be rejected.
     #[test]
-    #[should_panic(expected = "Release condition not met")]
+    #[should_panic(expected = "Error(Contract, #6)")]
     fn release_one_second_before_timelock_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
@@ -1869,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only platform admin can pause yield")]
+    #[should_panic(expected = "Error(Contract, #4)")]
     fn non_admin_cannot_pause_yield() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
@@ -1884,7 +1884,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Yield farming is paused")]
+    #[should_panic(expected = "Error(Contract, #19)")]
     fn accrue_yield_blocked_when_paused() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
