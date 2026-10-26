@@ -330,4 +330,80 @@ mod test {
         assert_eq!(unclaimed, 50i128); // 5% of 1000
     }
 
+    fn setup(env: &Env) -> ReferralContractClient<'_> {
+        env.mock_all_auths();
+        let contract = ReferralContractClient::new(env, &env.register(ReferralContract, ()));
+        contract.initialize(&Address::generate(env), &Address::generate(env));
+        contract
+    }
+
+    #[test]
+    fn test_register_referral_requires_referee_auth() {
+        let env = Env::default();
+        let contract = setup(&env);
+        let referrer = Address::generate(&env);
+        let referred = Address::generate(&env);
+
+        contract.register_referral(&referrer, &referred);
+
+        let auths = env.auths();
+        assert_eq!(auths.len(), 1);
+        assert_eq!(auths[0].0, referred);
+    }
+
+    #[test]
+    fn test_rejects_self_referral() {
+        let env = Env::default();
+        let contract = setup(&env);
+        let user = Address::generate(&env);
+
+        assert_eq!(
+            contract.try_register_referral(&user, &user),
+            Err(Ok(ReferralError::SelfReferral))
+        );
+    }
+
+    #[test]
+    fn test_rejects_second_referrer() {
+        let env = Env::default();
+        let contract = setup(&env);
+        let referred = Address::generate(&env);
+        contract.register_referral(&Address::generate(&env), &referred);
+
+        assert_eq!(
+            contract.try_register_referral(&Address::generate(&env), &referred),
+            Err(Ok(ReferralError::ReferralAlreadyRegistered))
+        );
+    }
+
+    #[test]
+    fn test_rejects_two_account_loop() {
+        let env = Env::default();
+        let contract = setup(&env);
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        contract.register_referral(&a, &b);
+
+        assert_eq!(
+            contract.try_register_referral(&b, &a),
+            Err(Ok(ReferralError::ReferralLoop))
+        );
+    }
+
+    #[test]
+    fn test_rejects_referee_who_already_refers() {
+        let env = Env::default();
+        let contract = setup(&env);
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let c = Address::generate(&env);
+        contract.register_referral(&b, &c);
+
+        // b has referred c, so b cannot now be referred by a (this is what
+        // closes A→B→C→A cycles of any length).
+        assert_eq!(
+            contract.try_register_referral(&a, &b),
+            Err(Ok(ReferralError::RefereeIsReferrer))
+        );
+    }
 }
