@@ -15,9 +15,3 @@ soroban-sdk.workspace = true
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-
-[profile.release]
-opt-level = "z"
-strip = true
-lto = true
-codegen-units = 1

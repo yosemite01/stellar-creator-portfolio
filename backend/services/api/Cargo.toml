@@ -57,8 +57,3 @@ integration = []
 [dev-dependencies]
 actix-http = "3"
 tokio-test = { workspace = true }
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
