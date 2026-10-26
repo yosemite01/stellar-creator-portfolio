@@ -186,7 +186,7 @@ impl InsuranceContract {
         }
 
         // Pull tokens into this contract.
-        token::Client::new(&env, &token).transfer(&from, &env.current_contract_address(), &amount);
+        token::Client::new(&env, &token).transfer(&from, env.current_contract_address(), &amount);
 
         let current = Self::get_pool_balance(env.clone(), token.clone());
         env.storage()
@@ -576,7 +576,7 @@ mod tests {
         Env,
     };
 
-    fn setup(env: &Env) -> (InsuranceContractClient, Address) {
+    fn setup(env: &Env) -> (InsuranceContractClient<'_>, Address) {
         let id = env.register(InsuranceContract, ());
         let client = InsuranceContractClient::new(env, &id);
         let admin = Address::generate(env);

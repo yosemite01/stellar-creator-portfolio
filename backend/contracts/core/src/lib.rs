@@ -269,7 +269,7 @@ mod tests {
     use super::*;
     use soroban_sdk::{testutils::Address as _, Env};
 
-    fn deploy(env: &Env, fee_bps: u32) -> (CoreContractClient, Address) {
+    fn deploy(env: &Env, fee_bps: u32) -> (CoreContractClient<'_>, Address) {
         let id = env.register(CoreContract, ());
         let client = CoreContractClient::new(env, &id);
         let admin = Address::generate(env);
@@ -372,7 +372,7 @@ mod tests {
 
     // ── Pause mechanism tests (#820) ──────────────────────────────────────────
 
-    fn deploy_with_guardian(env: &Env, fee_bps: u32) -> (CoreContractClient, Address, Address) {
+    fn deploy_with_guardian(env: &Env, fee_bps: u32) -> (CoreContractClient<'_>, Address, Address) {
         let (client, admin) = deploy(env, fee_bps);
         let guardian = Address::generate(env);
         client.set_guardian(&admin, &guardian);

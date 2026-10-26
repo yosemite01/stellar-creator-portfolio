@@ -5,7 +5,7 @@ use stellar_contract_test_utils::{new_address, test_env};
 
 use crate::{IdentityContract, IdentityContractClient, KycLevel};
 
-fn deploy(env: &Env) -> (IdentityContractClient, Address) {
+fn deploy(env: &Env) -> (IdentityContractClient<'_>, Address) {
     let admin = new_address(env);
     let client = IdentityContractClient::new(env, &env.register(IdentityContract, ()));
     client.initialize(&admin);
@@ -163,7 +163,7 @@ fn test_different_owners_same_hash_are_independent() {
 fn test_unauthorized_signature_panics() {
     let env = test_env();
     let (client, _admin) = deploy(&env);
-    let owner = new_address(&env);
+    let _owner = new_address(&env);
     let unauthorized = new_address(&env);
     let hash = domain_hash(&env, 12);
     let (pk, sig) = sign(&env, &hash);

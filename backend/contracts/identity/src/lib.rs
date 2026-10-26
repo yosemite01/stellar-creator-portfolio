@@ -231,7 +231,7 @@ impl IdentityContract {
             if env.ledger().timestamp() > attestation.expires_at {
                 return false;
             }
-            return (attestation.level as u8) >= (required_level as u8)
+            (attestation.level as u8) >= (required_level as u8)
         } else {
             false
         }

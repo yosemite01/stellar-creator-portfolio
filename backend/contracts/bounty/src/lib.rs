@@ -1126,7 +1126,7 @@ mod tests {
         let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
 
         let creator = Address::generate(&env);
-        let token = Address::generate(&env);
+        let _token = Address::generate(&env);
 
         let bounty_id = contract.create_bounty(
             &creator,
