@@ -1,8 +1,10 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::{Duration, Utc};
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::async_http_client;
-use oauth2::{AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope, TokenResponse, TokenUrl};
+use oauth2::{
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet, RedirectUrl, Scope,
+    TokenResponse, TokenUrl,
+};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -35,11 +37,24 @@ pub struct OAuthAuthorizeRequest {
     pub redirect_uri: Option<String>,
 }
 
+/// An oauth2 v5 client with the auth and token endpoints configured.
+type OAuthClient = BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
+
+/// HTTP client for the token exchange. Redirects are disabled, as oauth2
+/// recommends, so a provider response cannot bounce the request (and the
+/// client secret) to another host.
+fn oauth_http_client() -> Result<oauth2::reqwest::Client, AuthError> {
+    oauth2::reqwest::Client::builder()
+        .redirect(oauth2::reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))
+}
+
 fn build_oauth_client(
     provider: OAuthProvider,
     config: &OAuthProviderConfig,
     redirect_uri: &str,
-) -> Result<BasicClient, AuthError> {
+) -> Result<OAuthClient, AuthError> {
     let (auth_url, token_url, _scopes) = match provider {
         OAuthProvider::Google => (
             "https://accounts.google.com/o/oauth2/v2/auth",
@@ -58,15 +73,13 @@ fn build_oauth_client(
         ),
     };
 
-    let client = BasicClient::new(
-        ClientId::new(config.client_id.clone()),
-        Some(ClientSecret::new(config.client_secret.clone())),
-        AuthUrl::new(auth_url.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
-        Some(TokenUrl::new(token_url.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?),
-    )
-    .set_redirect_uri(
-        RedirectUrl::new(redirect_uri.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
-    );
+    let client = BasicClient::new(ClientId::new(config.client_id.clone()))
+        .set_client_secret(ClientSecret::new(config.client_secret.clone()))
+        .set_auth_uri(AuthUrl::new(auth_url.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?)
+        .set_token_uri(TokenUrl::new(token_url.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?)
+        .set_redirect_uri(
+            RedirectUrl::new(redirect_uri.to_string()).map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?,
+        );
 
     Ok(client)
 }
@@ -253,7 +266,7 @@ pub async fn oauth2_token_exchange(
 
     let token = client
         .exchange_code(AuthorizationCode::new(body.code.clone()))
-        .request_async(async_http_client)
+        .request_async(&oauth_http_client()?)
         .await
         .map_err(|e| AuthError::OAuthFlowFailed(e.to_string()))?;
 
@@ -423,6 +436,7 @@ mod tests {
     }
 
     #[test]
+
     fn build_oauth_client_rejects_an_invalid_redirect_uri() {
         let cfg = OAuthProviderConfig {
             client_id: "id".to_string(),
