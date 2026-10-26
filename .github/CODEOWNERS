@@ -10,7 +10,7 @@
 
 # Authentication and security
 /lib/auth/                  @yosemite01
-/middleware.ts              @yosemite01
+/proxy.ts                   @yosemite01
 /app/api/admin/             @yosemite01
 
 # Database migrations
