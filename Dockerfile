@@ -9,7 +9,7 @@
 # deliberate PR review.
 #
 # Related: #1348
-FROM rust:1.89.0-slim AS builder
+FROM rust:1.94.1-slim AS builder
 
 # Reproducibility: no incremental compilation, deterministic codegen, fixed
 # SOURCE_DATE_EPOCH so embedded timestamps are zeroed out.
@@ -19,19 +19,19 @@ ENV CARGO_INCREMENTAL=0 \
     SOURCE_DATE_EPOCH=0 \
     CARGO_HOME=/usr/local/cargo \
     # Pin the Rust toolchain so `rustup update` in this image cannot change it.
-    RUSTUP_TOOLCHAIN=1.89.0
+    RUSTUP_TOOLCHAIN=1.94.1
 
 # Verify the installed Rust version matches our pin before building anything.
-RUN rustc --version | grep -q "1.89.0" || \
-    (echo "❌ Rust version mismatch — expected 1.89.0" && exit 1)
+RUN rustc --version | grep -q "1.94.1" || \
+    (echo "❌ Rust version mismatch — expected 1.94.1" && exit 1)
 
 RUN rustup target add wasm32v1-none && \
     rustup component add rust-src
 
 # Pin stellar-cli to a specific version so the WASM optimizer it applies is
 # reproducible.  Update this alongside Cargo.toml MSRV bumps.
-RUN cargo install --locked stellar-cli@20.3.1 --features opt 2>/dev/null || \
-    cargo install stellar-cli@20.3.1 --features opt
+RUN cargo install --locked stellar-cli@28.1.0 --features opt 2>/dev/null || \
+    cargo install stellar-cli@28.1.0 --features opt
 
 WORKDIR /build
 
