@@ -80,7 +80,7 @@ pub use db::escrows::{
 
 pub use db::reviews::{
     Review, ReviewSubmission, ReviewAggregation, CreatorReputationPayload,
-    get_mock_reviews, reviews_for_creator, aggregate_reviews, 
+    aggregate_reviews,
     recent_reviews, submit_review
 };
 

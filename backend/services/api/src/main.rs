@@ -770,12 +770,30 @@ async fn get_creator(path: web::Path<String>) -> HttpResponse {
 /// Aggregated reputation and recent reviews for a creator profile.
 async fn get_creator_reputation(
     path: web::Path<String>,
-    _pool: web::Data<PgPool>,
+    pool: web::Data<PgPool>,
 ) -> HttpResponse {
     let creator_id = path.into_inner();
     tracing::info!("Fetching reputation for creator: {}", creator_id);
 
-    let reviews = database::reviews_for_creator(&creator_id);
+    // Aggregates need every review, so ask for an unbounded page.
+    let everything = database::db::reviews::ReviewPagination { limit: i64::MAX, offset: 0 };
+    let reviews = match database::db::reviews::get_filtered_creator_reviews_from_db(
+        pool.get_ref(),
+        &creator_id,
+        &database::db::reviews::ReviewFilters::default(),
+        &everything,
+    )
+    .await
+    {
+        Ok(reviews) => reviews,
+        Err(e) => {
+            tracing::error!("Failed to load reviews for {}: {}", creator_id, e);
+            return HttpResponse::InternalServerError().json(ApiResponse::<()>::err(ApiError::new(
+                ApiErrorCode::InternalServerError,
+                "Failed to load creator reviews",
+            )));
+        }
+    };
     let aggregation = database::aggregate_reviews(&reviews);
     let recent_reviews = database::recent_reviews(&reviews, 8);
 

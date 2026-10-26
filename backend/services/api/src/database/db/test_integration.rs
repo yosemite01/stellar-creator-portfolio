@@ -79,7 +79,11 @@ mod tests {
         let reviews = crate::database::db::reviews::get_mock_reviews();
         assert!(!reviews.is_empty());
         
-        let creator_reviews = crate::database::db::reviews::reviews_for_creator("alex-studio");
+        let creator_reviews: Vec<_> = reviews
+            .iter()
+            .filter(|r| r.creator_id == "alex-studio")
+            .cloned()
+            .collect();
         assert!(!creator_reviews.is_empty());
         
         let aggregation = crate::database::db::reviews::aggregate_reviews(&creator_reviews);
