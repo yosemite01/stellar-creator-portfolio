@@ -136,7 +136,6 @@ struct GetLedgerResult {
 
 #[derive(Debug, Deserialize)]
 struct LedgerInfo {
-    sequence: u32,
     hash: String,
 }
 
@@ -398,8 +397,8 @@ const FREELANCER_EVENT_SIGNATURES: &[&str] = &["freelancer_registered", "freelan
 const ESCROW_EVENT_SIGNATURES: &[&str] =
     &["escrow_deposited", "escrow_released", "escrow_refunded"];
 
-fn allowed_event_signatures<'a>(
-    cfg: &'a Config,
+fn allowed_event_signatures(
+    cfg: &Config,
     contract_id: &str,
 ) -> Option<&'static [&'static str]> {
     if contract_id == cfg.bounty_contract_id {
