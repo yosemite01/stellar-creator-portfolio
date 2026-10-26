@@ -29,6 +29,8 @@ export default defineConfig({
       'infrastructure/**',
       // Playwright specs; run with `pnpm test:e2e`.
       'e2e/**',
+      // Postgres-backed suites; run with `pnpm test:integration`.
+      '__tests__/integration/**',
     ],
     coverage: {
       provider: 'v8',

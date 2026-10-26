@@ -79,7 +79,8 @@ Network passphrase: `Test SDF Network ; September 2015`
 │   ├── stellar/      #   Stellar RPC client, contract calls, Soroban indexer
 │   └── realtime/     #   standalone websocket servers (collab, signalling, messages)
 ├── prisma/           # Database schema & migrations
-├── __tests__/        # Vitest suites (others sit beside the code they test)
+├── __tests__/        # Vitest suites (others sit beside the code they test);
+│   └── integration/  #   Postgres-backed suites, run with `pnpm test:integration`
 ├── e2e/              # Playwright specs
 ├── backend/          # Rust workspace: API services (no top-level contracts/ — see note below)
 │   └── contracts/    #   Canonical Soroban contracts (see note below)

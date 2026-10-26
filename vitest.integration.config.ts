@@ -10,9 +10,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
-    globalSetup: ['./tests/integration/setup/global-setup.ts'],
+    globalSetup: ['./__tests__/integration/setup/global-setup.ts'],
     setupFiles: ['./vitest.setup.ts'],
-    include: ['tests/integration/**/*.integration.test.ts'],
+    include: ['__tests__/integration/**/*.integration.test.ts'],
     testTimeout: 30000,
   },
 });
