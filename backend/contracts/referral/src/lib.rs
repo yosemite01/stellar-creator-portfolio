@@ -235,7 +235,7 @@ impl ReferralContract {
             .get::<DataKey, Address>(&DataKey::Admin)
             .expect("Not initialized");
         let accepted = stellar_upgradeable::accept_admin(&env, &new_admin, &stored_admin);
-        <class 'set'>
+        env.storage().persistent().set(&DataKey::Admin, &accepted);
     }
 
     /// Withdraw a pending admin nomination. Admin-only. Emits `(admin, cancelled)`.
