@@ -151,7 +151,7 @@ fn votes_at(env: &Env, account: &Address, ledger: u32) -> i128 {
     // Largest index whose checkpoint ledger is <= `ledger`.
     let (mut lo, mut hi) = (0u32, n - 1);
     while lo < hi {
-        let mid = lo + (hi - lo + 1) / 2;
+        let mid = lo + (hi - lo).div_ceil(2);
         if ckpt_at(env, account, mid).ledger <= ledger {
             lo = mid;
         } else {
@@ -647,7 +647,7 @@ impl GovernanceContract {
 
         soroban_sdk::token::Client::new(&env, &token).transfer(
             &account,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &amount,
         );
 

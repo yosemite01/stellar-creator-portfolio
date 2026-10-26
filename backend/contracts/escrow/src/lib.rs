@@ -265,7 +265,7 @@ impl EscrowContract {
         // preventing funds from being locked with an unrecoverable address.
         let token_client = TokenClient::new(&env, &token);
         let _ = token_client.balance(&payer);
-        token_client.transfer(&payer, &env.current_contract_address(), &amount);
+        token_client.transfer(&payer, env.current_contract_address(), &amount);
 
         let counter_key = Symbol::new(&env, "escrow_counter");
         let mut counter: u64 = env.storage().persistent().get::<Symbol, u64>(&counter_key).unwrap_or(0);
