@@ -10,7 +10,6 @@ mod db;
 mod error;
 #[allow(dead_code)]
 mod handlers;
-#[allow(dead_code)]
 mod tokens;
 
 use actix_web::{middleware, web, App, HttpResponse, HttpServer};
