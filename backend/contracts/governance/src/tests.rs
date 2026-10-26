@@ -87,7 +87,7 @@ fn test_quorum_not_met_panics() {
 
 #[test]
 fn test_quorum_threshold_is_governance_updatable() {
-    let (env, client, admin) = setup();
+    let (_env, client, admin) = setup();
 
     // Default is 10%
     assert_eq!(client.get_quorum_percent(), 10_u64);
@@ -130,7 +130,7 @@ fn test_set_quorum_percent_requires_auth() {
 
 #[test]
 fn test_initialize_sets_admin() {
-    let (env, client, admin) = setup();
+    let (_env, client, admin) = setup();
     let config = client.get_config();
     assert_eq!(config.admin_address, admin);
     assert_eq!(config.platform_fee_percent, 50);
