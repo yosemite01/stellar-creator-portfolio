@@ -27,14 +27,6 @@ export async function computeSha256(file: Blob | ArrayBuffer): Promise<string> {
     .join('');
 }
 
-/**
- * Derive a content-addressed CID placeholder from SHA-256.
- * Production deployments should replace with proper multibase CID (e.g. via ipfs-only-hash).
- */
-export function sha256ToCid(sha256: string): string {
-  return `bafy${sha256.slice(0, 52)}`;
-}
-
 /** Upload file directly from the browser to the pinning API. */
 export async function uploadToIpfs(
   file: File,

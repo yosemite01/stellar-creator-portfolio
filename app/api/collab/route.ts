@@ -4,11 +4,22 @@
  */
 import { type NextRequest, NextResponse } from 'next/server'
 import { WebSocket } from 'ws'
+import { getServerSession } from '@/lib/auth/auth'
 
 export const runtime = 'nodejs'
 
+async function requireSession() {
+  const session = await getServerSession()
+  return session?.user?.id
+    ? null
+    : NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+}
+
 // WebSocket upgrade handler
 export async function GET(req: NextRequest) {
+  const unauthorized = await requireSession()
+  if (unauthorized) return unauthorized
+
   const upgradeHeader = req.headers.get('upgrade')
   
   if (upgradeHeader !== 'websocket') {
@@ -33,6 +44,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const unauthorized = await requireSession()
+  if (unauthorized) return unauthorized
+
   try {
     const body = await req.json()
     const { action, docName, clientId } = body

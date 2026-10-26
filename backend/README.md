@@ -524,20 +524,105 @@ instantiation. Treat them as a regression signal, not a fee quote.
 
 ## Testing
 
-### Unit Tests
+### Unit tests (no database required)
+
 ```bash
-cargo test --lib
+# All workspace members — fast, no external services needed
+cd backend
+cargo test --workspace --all-features
 ```
 
-### Integration Tests
+This covers every crate in the workspace, including `contracts/insurance`,
+`contracts/referral`, `contracts/stellar_insights`, `contracts/upgradeable`,
+and all service crates (`services/api`, `services/auth`, etc.).
+
+### Contract tests
+
 ```bash
-cargo test --test '*' -- --test-threads=1
+# All contracts at once (recommended):
+cd backend
+cargo test --workspace --all-features
+
+# A single contract:
+cargo test -p stellar-insurance-contract
+cargo test -p stellar-bounty-contract
 ```
 
-### Contract Testing
+### Running integration tests locally (issues #1584)
+
+The Rust API integration tests (`services/api/src/integration_tests.rs`) require
+a live PostgreSQL instance.  They are gated behind the `integration` feature flag
+so normal `cargo test` stays fast.
+
 ```bash
-cargo test --manifest-path contracts/bounty/Cargo.toml
+# 1. Start Postgres via Docker:
+docker run -d --name pg-test \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 5432:5432 postgres:16-alpine
+
+# 2. Set the connection URL:
+export TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test_db
+
+# 3. Install sqlx-cli and apply migrations:
+cargo install sqlx-cli --no-default-features --features postgres --locked
+sqlx database create --database-url "$TEST_DATABASE_URL"
+sqlx migrate run \
+  --source backend/migrations \
+  --database-url "$TEST_DATABASE_URL"
+
+# 4. Run the integration tests:
+cd backend
+cargo test -p stellar-api --features integration -- --test-output immediate
+
+# 5. (Optional) Stop and remove the test container:
+docker stop pg-test && docker rm pg-test
 ```
+
+> **Note:** Set `DATABASE_URL` to the same value if sqlx-cli cannot find the URL
+> automatically (`export DATABASE_URL="$TEST_DATABASE_URL"`).
+
+### Coverage (issue #1586)
+
+```bash
+# Install cargo-llvm-cov once:
+cargo install cargo-llvm-cov --locked
+
+# Generate an lcov report:
+cd backend
+cargo llvm-cov \
+  --workspace \
+  --all-features \
+  --lcov \
+  --output-path lcov.info \
+  --ignore-filename-regex '(build\.rs|\.cargo/registry|__generated__)'
+
+# Open an HTML summary in your browser:
+cargo llvm-cov \
+  --workspace \
+  --all-features \
+  --html \
+  --ignore-filename-regex '(build\.rs|\.cargo/registry|__generated__)'
+open target/llvm-cov/html/index.html
+```
+
+Frontend (Vitest) coverage:
+
+```bash
+# From the repo root:
+pnpm run test:coverage
+open coverage/index.html
+```
+
+### Contract benchmarks
+
+```bash
+cargo test -p contract-benchmarks -- --nocapture             # compare
+UPDATE_BENCHMARKS=1 cargo test -p contract-benchmarks        # refresh baseline after an intentional change
+```
+
+Contracts run natively in these tests, so the numbers exclude VM instantiation.
+Treat them as a regression signal, not a fee quote.
+
 
 ## Monitoring & Logging
 

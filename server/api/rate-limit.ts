@@ -98,15 +98,17 @@ export function rateLimitKey(
 
 /**
  * Tiered check for a request: authenticated callers get the higher limit,
- * anonymous callers are limited per IP.
+ * anonymous callers are limited per IP.  Pass a `scope` to give a route its
+ * own bucket instead of sharing the global one.
  */
 export function checkRateLimit(
   req: { headers: Headers },
   identity: RateLimitIdentity,
+  scope = 'global',
 ): RateLimitResult {
   const authenticated = identity.isAuthenticated ?? Boolean(identity.userId || identity.apiKeyId);
   const limit = authenticated ? AUTHENTICATED_LIMIT_PER_MINUTE : ANONYMOUS_LIMIT_PER_MINUTE;
-  return checkRate(rateLimitKey(req.headers, identity), limit, 60);
+  return checkRate(rateLimitKey(req.headers, identity, scope), limit, 60);
 }
 
 /** Thrown when a caller has exhausted its bucket. */

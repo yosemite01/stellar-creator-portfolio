@@ -1,6 +1,10 @@
 # Tamgora
 
+[![CI](https://github.com/yosemite01/stellar-creator-portfolio/actions/workflows/ci.yml/badge.svg)](https://github.com/yosemite01/stellar-creator-portfolio/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/yosemite01/stellar-creator-portfolio/branch/main/graph/badge.svg)](https://codecov.io/gh/yosemite01/stellar-creator-portfolio)
+
 A full-stack platform connecting non-technical tech professionals (designers, writers, marketers, PMs) with bounties, clients, and collaborators — powered by Stellar/Soroban smart contracts.
+
 
 ## Live Contracts — Stellar Testnet
 
@@ -73,7 +77,7 @@ Network passphrase: `Test SDF Network ; September 2015`
 │   ├── graphql/      #   GraphQL schema, resolvers, context
 │   ├── services/     #   audit log, events, KMS, tracing, notifications
 │   ├── stellar/      #   Stellar RPC client, contract calls, Soroban indexer
-│   └── realtime/     #   standalone websocket servers (collab, signalling)
+│   └── realtime/     #   standalone websocket servers (collab, signalling, messages)
 ├── prisma/           # Database schema & migrations
 ├── __tests__/        # Vitest suites (others sit beside the code they test)
 ├── e2e/              # Playwright specs
@@ -229,6 +233,8 @@ commented in `.env.example` with what it does:
 | Key management | `KMS_PROVIDER`, `KMS_SECRET_PREFIX` | Defaults to `env` locally; `aws` pulls from Secrets Manager |
 | Storage | `AWS_*` | S3 uploads |
 | Payments | `STRIPE_*` | Stripe checkout and webhooks |
+| Paymaster relay | `PAYMASTER_RELAY_ENABLED`, `STELLAR_FEE_ACCOUNT`, `STELLAR_SPONSOR_*`, `STELLAR_FEE_ACCOUNT_MIN_BALANCE` | Fee-bump relay. Callers must be signed in, may only sponsor calls into our contracts (`deployments/<network>.json`) plus any classic ops in `STELLAR_SPONSOR_ALLOWED_OPS`, and are capped by `STELLAR_SPONSOR_DAILY_BUDGET`; sponsoring pauses when the fee account runs low |
+| Semantic search | `OPENAI_API_KEY`, `EMBED_*` | `/api/search/vector` and `/api/search/hybrid`. Vector search is rate limited per IP (30/min) or signed-in user (300/min). Also set a usage alert and a hard monthly cap in the OpenAI dashboard |
 
 #### Check it worked
 
@@ -373,6 +379,8 @@ The app uses `output: 'standalone'` (Next.js) and can be deployed to:
 7. Freelancer payouts and receipt generation: See [`docs/PAYMENTS.md`](./docs/PAYMENTS.md)
 8. Running integration tests against a Docker PostgreSQL instance: See [`docs/TEST_DATABASE.md`](./docs/TEST_DATABASE.md)
 9. Playwright multi-context messaging E2E tests: See [`e2e/README.md`](./e2e/README.md)
+11. **Messages API (persisted + realtime)** — `GET`/`POST /api/messages` are REST-only (paginated history and create). Messages are stored in Postgres via Prisma (`Thread` / `ThreadMember` / `Message`); ciphertext and iv are opaque blobs the server never decrypts. Live delivery runs on the standalone server [`server/realtime/messages.ts`](./server/realtime/messages.ts) (default port `3002`), with Redis pub/sub fan-out when `REDIS_URL` is set. Clients fetch history over REST, obtain a 60s token from `POST /api/messages/token`, and subscribe at `NEXT_PUBLIC_MESSAGES_WS_URL`. Identity (`senderId` / `userId` / `moderatorId`) always comes from the session or token — client-supplied values are ignored. `moderate` requires `ADMIN`. See [ADR 0007](./docs/adr/0007-messages-persistence-realtime.md).
+12. **Collab websocket auth** — the Yjs collaboration server (`server/realtime/collab.ts`) now rejects upgrades without a valid token (HTTP 401, or 403 for a token issued for another room). Clients get a 60 second token from `POST /api/collab/token { roomId }`, which requires a session and membership of the bounty behind the room (its owner or an accepted creator), and pass it as `?token=` — `CollaborativeEditor` does this and refreshes it on reconnect. Set `REALTIME_JWT_SECRET` to the same value on the Next.js app and the collab server (required in production; falls back to `NEXTAUTH_SECRET`). `GET`/`POST /api/collab` also require a session.
 10. Audit/cleanup decisions for contracts and rate-limiting live in [`docs/issues/`](./docs/issues/) with matching ADRs in [`docs/adr/`](./docs/adr/): [#1552](./docs/issues/1552-legacy-contracts-tree.md) (legacy `contracts/` tree archived — [ADR 0003](./docs/adr/0003-legacy-contracts-tree-archived.md)), [#1553](./docs/issues/1553-stellar-insights-contract.md) (`stellar_insights` → `reputation` rename — [ADR 0004](./docs/adr/0004-stellar-insights-contract-purpose.md)), [#1554](./docs/issues/1554-insurance-contract.md) (`insurance` contract wiring — [ADR 0005](./docs/adr/0005-insurance-contract-status.md)), [#1555](./docs/issues/1555-backend-limit-package.md) (`backend/limit` removal — [ADR 0006](./docs/adr/0006-backend-limit-rate-limiter.md))
 
 ## License

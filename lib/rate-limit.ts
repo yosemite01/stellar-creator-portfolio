@@ -11,7 +11,9 @@ interface RateLimitEntry {
 const rateLimitStore = new Map<string, RateLimitEntry>();
 
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 const MAX_EXPORTS_PER_HOUR = 3;
+const MAX_PINS_PER_DAY = Number(process.env.MAX_IPFS_PINS_PER_DAY) || 20;
 
 /**
  * Check if a user can export.
@@ -55,4 +57,25 @@ export function getRemainingExports(userId: string): number {
     return MAX_EXPORTS_PER_HOUR;
   }
   return Math.max(0, MAX_EXPORTS_PER_HOUR - entry.count);
+}
+
+/**
+ * Per-user daily IPFS pin quota (#1508).
+ * Returns true if the user is still under their daily limit, false if exceeded.
+ * Override the limit with MAX_IPFS_PINS_PER_DAY.
+ */
+export function checkPinRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const key = `pin:${userId}`;
+  const entry = rateLimitStore.get(key);
+
+  if (!entry || now >= entry.resetAt) {
+    rateLimitStore.set(key, { count: 1, resetAt: now + DAY_MS });
+    return true;
+  }
+  if (entry.count >= MAX_PINS_PER_DAY) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
 }

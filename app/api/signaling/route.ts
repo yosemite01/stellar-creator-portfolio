@@ -2,35 +2,33 @@
  * GET  /api/signaling  — Returns ICE server configuration (STUN/TURN credentials)
  * POST /api/signaling  — HTTP fallback for SDP offer/answer relay
  *
- * This route is used by:
- *  1. Mobile clients (mobile/src/services/streaming.service.ts) that call
- *     `/api/signaling` for SDP signaling before switching to the standalone
- *     WebSocket signaling server.
- *  2. Web clients that need ICE server credentials without connecting to the
- *     signaling WebSocket first (e.g., to pre-warm the TURN connection).
- *
- * For production, clients should connect directly to the signaling WebSocket
- * server (server/realtime/signaling.ts) for the lowest latency.
+ * Call membership is a short-lived HMAC token bound to userId + callId + peerId.
+ * The standalone WebSocket server (server/realtime/signaling.ts) checks the same
+ * token. Messages are dropped when they exceed 16KB or 50 messages / 10s, and
+ * a relay is delivered only to a peer in the same room.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createHmac } from 'crypto';
 import { getServerSession } from '@/lib/auth/auth';
+import {
+  DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
+  allowSignalingMessage,
+  fieldWithinLimit,
+  messageTooLarge,
+  relayAllowed,
+  signCallToken,
+  signalingTokenSecret,
+  verifyCallToken,
+} from '@/server/realtime/signaling-policy';
 
 const MAX_PEERS_PER_ROOM = parseInt(process.env.MAX_PEERS_PER_ROOM ?? '2', 10);
 
-// Tracks which authenticated user owns a given peerId, and which
-// authenticated users are members of a given room. Both are populated
-// on first use (first-come, first-served up to MAX_PEERS_PER_ROOM) since
-// there is no separate call/stream-invite record in this codebase to check
-// membership against — this is a real, self-contained substitute: it stops
-// an unauthenticated caller from reading/writing at all, stops one
-// authenticated user from impersonating another peerId, and caps how many
-// distinct users can ever inject into a guessed/observed roomId.
-const peerOwners = new Map<string, { userId: string; lastSeen: number }>(); // peerId -> owner
-const roomMembers = new Map<string, Map<string, number>>(); // roomId -> userId -> lastSeen
+const peerOwners = new Map<string, { userId: string; lastSeen: number }>();
+const roomMembers = new Map<string, Map<string, number>>();
+const peerRooms = new Map<string, string>();
+const messageTimestamps = new Map<string, number[]>();
 
-/** Registers (or verifies) that `userId` owns `peerId`. Returns false on conflict. */
 function claimPeerId(peerId: string, userId: string): boolean {
   const owner = peerOwners.get(peerId);
   if (owner === undefined) {
@@ -42,8 +40,7 @@ function claimPeerId(peerId: string, userId: string): boolean {
   return true;
 }
 
-/** Registers (or verifies) `userId` as a member of `roomId`. Returns false if the room is full. */
-function claimRoomMembership(roomId: string, userId: string): boolean {
+function claimRoomMembership(roomId: string, userId: string, peerId: string): boolean {
   let members = roomMembers.get(roomId);
   if (!members) {
     members = new Map();
@@ -51,6 +48,7 @@ function claimRoomMembership(roomId: string, userId: string): boolean {
   }
   if (!members.has(userId) && members.size >= MAX_PEERS_PER_ROOM) return false;
   members.set(userId, Date.now());
+  peerRooms.set(peerId, roomId);
   return true;
 }
 
@@ -59,10 +57,11 @@ const TURN_HOST = process.env.TURN_HOST ?? 'turn.example.com';
 const TURN_PORT = parseInt(process.env.TURN_PORT ?? '3478', 10);
 const TURN_TLS_PORT = parseInt(process.env.TURN_TLS_PORT ?? '5349', 10);
 const STUN_URL = process.env.STUN_URL ?? 'stun:stun.l.google.com:19302';
-const TURN_CREDENTIAL_TTL = parseInt(process.env.TURN_CREDENTIAL_TTL ?? '86400', 10);
+const TURN_CREDENTIAL_TTL = parseInt(
+  process.env.TURN_CREDENTIAL_TTL ?? String(DEFAULT_TURN_CREDENTIAL_TTL_SECONDS),
+  10,
+);
 
-// In-memory relay store for HTTP signaling fallback
-// In production this should be replaced with Redis for multi-instance support
 interface SignalingEntry {
   type: string;
   sdp?: string;
@@ -75,7 +74,6 @@ interface SignalingEntry {
 
 const signalingStore = new Map<string, SignalingEntry[]>();
 
-// Prune entries older than 5 minutes
 const STORE_TTL_MS = 5 * 60 * 1000;
 setInterval(() => {
   const cutoff = Date.now() - STORE_TTL_MS;
@@ -85,7 +83,10 @@ setInterval(() => {
     else signalingStore.set(key, fresh);
   }
   for (const [peerId, owner] of peerOwners) {
-    if (owner.lastSeen <= cutoff) peerOwners.delete(peerId);
+    if (owner.lastSeen <= cutoff) {
+      peerOwners.delete(peerId);
+      peerRooms.delete(peerId);
+    }
   }
   for (const [roomId, members] of roomMembers) {
     for (const [userId, lastSeen] of members) {
@@ -116,9 +117,13 @@ function generateIceServers(peerId: string) {
   ];
 }
 
+function issueCallToken(userId: string, callId: string, peerId: string) {
+  return signCallToken({ userId, callId, peerId }, signalingTokenSecret());
+}
+
 /**
- * GET /api/signaling?peerId=<id>
- * Returns ICE server configuration including STUN and time-limited TURN credentials.
+ * GET /api/signaling?peerId=<id>&roomId=<id>
+ * Returns ICE servers and a call token bound to that room.
  *
  * GET /api/signaling?roomId=<id>&peerId=<id>&since=<ts>
  * Polls for inbound signaling messages (HTTP fallback for mobile clients).
@@ -133,27 +138,28 @@ export async function GET(req: NextRequest) {
   const roomId = req.nextUrl.searchParams.get('roomId');
   const sinceParam = req.nextUrl.searchParams.get('since');
   const peerIdParam = req.nextUrl.searchParams.get('peerId');
+  const isPoll = Boolean(roomId && peerIdParam && sinceParam !== null);
 
-  if (roomId && peerIdParam) {
+  if (isPoll && roomId && peerIdParam) {
     if (!claimPeerId(peerIdParam, userId)) {
       return NextResponse.json(
         { error: 'peerId is already registered to another user' },
         { status: 403 },
       );
     }
-    if (!claimRoomMembership(roomId, userId)) {
-      return NextResponse.json(
-        { error: 'Room is full' },
-        { status: 403 },
-      );
+    if (!claimRoomMembership(roomId, userId, peerIdParam)) {
+      return NextResponse.json({ error: 'Room is full' }, { status: 403 });
     }
 
-    const since = sinceParam ? Number(sinceParam) : 0;
+    const since = Number(sinceParam);
     const key = `${roomId}:${peerIdParam}`;
     const entries = signalingStore.get(key) ?? [];
     const messages = entries.filter((entry) => entry.ts > since && entry.peerId !== peerIdParam);
 
-    return NextResponse.json({ messages });
+    return NextResponse.json({
+      messages,
+      callToken: issueCallToken(userId, roomId, peerIdParam),
+    });
   }
 
   const peerId = peerIdParam ?? `${userId}-${Date.now().toString(36)}`;
@@ -164,26 +170,24 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const callToken = roomId ? issueCallToken(userId, roomId, peerId) : undefined;
+  if (roomId && !claimRoomMembership(roomId, userId, peerId)) {
+    return NextResponse.json({ error: 'Room is full' }, { status: 403 });
+  }
+
   return NextResponse.json({
     iceServers: generateIceServers(peerId),
     signalingWsUrl: process.env.NEXT_PUBLIC_SIGNALING_URL ?? 'ws://localhost:3001',
     peerId,
+    ...(callToken ? { callToken } : {}),
   });
 }
 
 /**
  * POST /api/signaling
  *
- * HTTP fallback relay for SDP and ICE candidates.
- * Clients poll GET /api/signaling?roomId=<id>&peerId=<id>&since=<ts> to fetch messages.
- *
- * Body:
- *   roomId   string   The signaling room
- *   peerId   string   Sender peer ID
- *   type     string   "offer" | "answer" | "ice"
- *   sdp      string?  SDP string (for offer/answer)
- *   candidate object? ICE candidate (for ice)
- *   to       string?  Target peer ID (optional, broadcasts if omitted)
+ * HTTP fallback relay. Requires the call token from GET, and only stores a
+ * message for a peer that has joined the same room.
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession();
@@ -193,8 +197,23 @@ export async function POST(req: NextRequest) {
   const userId = session.user.id;
 
   try {
-    const body = await req.json();
-    const { roomId, peerId, type, sdp, candidate, to, amount, asset } = body;
+    const raw = await req.text();
+    if (messageTooLarge(Buffer.byteLength(raw, 'utf8'))) {
+      return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
+    }
+
+    const body = JSON.parse(raw) as {
+      roomId?: string;
+      peerId?: string;
+      type?: string;
+      sdp?: string;
+      candidate?: RTCIceCandidateInit;
+      to?: string;
+      amount?: string;
+      asset?: string;
+      token?: string;
+    };
+    const { roomId, peerId, type, sdp, candidate, to, amount, asset, token } = body;
 
     if (!roomId || !peerId || !type) {
       return NextResponse.json(
@@ -203,17 +222,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (!fieldWithinLimit(sdp) || !fieldWithinLimit(candidate)) {
+      return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
+    }
+
+    const claims = token ? verifyCallToken(token, signalingTokenSecret()) : null;
+    if (!claims || claims.userId !== userId || claims.callId !== roomId || claims.peerId !== peerId) {
+      return NextResponse.json({ error: 'Invalid call token' }, { status: 401 });
+    }
+
     if (!claimPeerId(peerId, userId)) {
       return NextResponse.json(
         { error: 'peerId is already registered to another user' },
         { status: 403 },
       );
     }
-    if (!claimRoomMembership(roomId, userId)) {
-      return NextResponse.json(
-        { error: 'Room is full' },
-        { status: 403 },
-      );
+    if (!claimRoomMembership(roomId, userId, peerId)) {
+      return NextResponse.json({ error: 'Room is full' }, { status: 403 });
+    }
+
+    if (to && !relayAllowed(roomId, peerRooms.get(to))) {
+      return NextResponse.json({ error: 'Peer is not in this room' }, { status: 403 });
+    }
+
+    const decision = allowSignalingMessage(messageTimestamps.get(userId) ?? []);
+    messageTimestamps.set(userId, decision.timestamps);
+    if (!decision.allowed) {
+      return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
     }
 
     const key = to ? `${roomId}:${to}` : roomId;

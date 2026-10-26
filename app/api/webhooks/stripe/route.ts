@@ -5,6 +5,9 @@ import { processStripeWebhookEvent } from '@/lib/payments/stripe-webhook'
 
 export const runtime = 'nodejs'
 
+/** Reject signed events older than this. Matches Stripe's default tolerance. */
+export const STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300
+
 /**
  * POST /api/webhooks/stripe
  *
@@ -27,7 +30,12 @@ export async function POST(request: NextRequest) {
   let event: Stripe.Event
   try {
     const stripe = await getStripe()
-    event = stripe.webhooks.constructEvent(payload, signature, await getStripeWebhookSecret())
+    event = stripe.webhooks.constructEvent(
+      payload,
+      signature,
+      await getStripeWebhookSecret(),
+      STRIPE_WEBHOOK_TOLERANCE_SECONDS,
+    )
   } catch (error) {
     console.warn('[stripe-webhook] signature verification failed:', error)
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 })
