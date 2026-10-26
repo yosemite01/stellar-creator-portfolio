@@ -4807,6 +4807,7 @@ dependencies = [
 name = "stellar-indexer"
 version = "0.1.0"
 dependencies = [
+ "actix-rt",
  "actix-web",
  "anyhow",
  "dotenvy",
