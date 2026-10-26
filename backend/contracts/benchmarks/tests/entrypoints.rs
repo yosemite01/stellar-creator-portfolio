@@ -165,7 +165,7 @@ fn entrypoint_costs() {
         return;
     }
 
-    let mut table = String::from(
+    let mut table = std::string::String::from(
         "| Entrypoint | CPU insns | Δ CPU | Mem bytes | Δ Mem |\n|---|---:|---:|---:|---:|\n",
     );
     let mut regressions = Vec::new();
