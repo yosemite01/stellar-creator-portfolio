@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use sqlx::{PgPool, Error as SqlxError};
-use futures::future::BoxFuture;
 
 /// Review from a client or employer about a creator's work
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -635,7 +634,7 @@ pub fn parse_review_filters(
         }
     }
 
-    let mut parse_rating = |key: &str, errors: &mut Vec<String>| -> Option<u8> {
+    let parse_rating = |key: &str, errors: &mut Vec<String>| -> Option<u8> {
         let raw = get(key)?;
         match raw.parse::<u8>() {
             Ok(value) if (1..=5).contains(&value) => Some(value),
@@ -673,7 +672,7 @@ pub fn parse_review_filters(
         }
     }
 
-    let mut parse_date =
+    let parse_date =
         |key: &str, errors: &mut Vec<String>| -> Option<chrono::DateTime<chrono::Utc>> {
             let raw = get(key)?;
             match chrono::DateTime::parse_from_rfc3339(raw) {

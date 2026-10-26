@@ -6,4 +6,3 @@ pub mod stripe;
 pub mod soroban;
 
 pub use stripe::payment_webhook;
-pub use soroban::{register_webhook, list_webhooks, delete_webhook, trigger_webhooks};

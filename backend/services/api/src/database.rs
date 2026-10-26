@@ -57,7 +57,7 @@ pub(crate) fn select_database_engine_from(
 
 // Re-export all database functionality for convenient access
 pub use db::creators::{
-    Creator, Project, CreatorStats,
+    Creator,
     get_mock_creators, filter_creators, get_creator_by_id
 };
 
@@ -73,13 +73,12 @@ pub use db::freelancers::{
 };
 
 pub use db::escrows::{
-    Escrow, EscrowCreateRequest, EscrowRefundRequest,
-    get_mock_escrows, get_escrow_by_id, create_escrow, 
+    Escrow, EscrowCreateRequest, EscrowRefundRequest, get_escrow_by_id, create_escrow, 
     release_escrow, refund_escrow
 };
 
 pub use db::reviews::{
-    Review, ReviewSubmission, ReviewAggregation, CreatorReputationPayload,
+    ReviewSubmission, CreatorReputationPayload,
     aggregate_reviews,
     recent_reviews, submit_review
 };

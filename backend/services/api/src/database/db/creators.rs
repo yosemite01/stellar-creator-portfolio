@@ -1,6 +1,4 @@
-use actix_web::{web, HttpResponse};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Project {

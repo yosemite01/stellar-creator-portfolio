@@ -77,7 +77,7 @@ pub fn create_bounty(request: BountyRequest) -> Bounty {
     }
 }
 
-pub fn apply_for_bounty(bounty_id: u64, application: BountyApplication) -> Result<(), String> {
+pub fn apply_for_bounty(_bounty_id: u64, application: BountyApplication) -> Result<(), String> {
     if application.proposal.trim().is_empty() {
         return Err("Proposal cannot be empty".to_string());
     }

@@ -84,7 +84,7 @@ fn strkey_encode_gaddress(raw_key: &[u8; 32]) -> String {
 
 /// Encode bytes to RFC 4648 base32 (upper-case, no padding).
 fn base32_encode(input: &[u8]) -> String {
-    let mut out = String::with_capacity((input.len() * 8 + 4) / 5);
+    let mut out = String::with_capacity((input.len() * 8).div_ceil(5));
     let mut buf: u16 = 0;
     let mut bits: u8 = 0;
     for &byte in input {
