@@ -48,8 +48,15 @@ utoipa = "6"
 deadpool-redis = "0.23"
 subtle = "2"
 
+# The `integration` feature gates tests that require a real PostgreSQL instance.
+# In CI, `cargo test -p stellar-api --features integration` runs these tests.
+# Locally: see backend/README.md § "Running integration tests locally".
+[features]
+integration = []
+
 [dev-dependencies]
 actix-http = "3"
+tokio-test = { workspace = true }
 
 [profile.release]
 opt-level = 3

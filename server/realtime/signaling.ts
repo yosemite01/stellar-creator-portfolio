@@ -43,6 +43,16 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createHmac } from 'crypto';
 import { IncomingMessage } from 'http';
+import {
+  DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
+  MAX_SIGNALING_MESSAGE_BYTES,
+  allowSignalingMessage,
+  fieldWithinLimit,
+  messageTooLarge,
+  relayAllowed,
+  signalingTokenSecret,
+  verifyCallToken,
+} from './signaling-policy';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -53,7 +63,10 @@ const TURN_HOST = process.env.TURN_HOST ?? 'turn.example.com';
 const TURN_PORT = parseInt(process.env.TURN_PORT ?? '3478', 10);
 const TURN_TLS_PORT = parseInt(process.env.TURN_TLS_PORT ?? '5349', 10);
 const STUN_URL = process.env.STUN_URL ?? 'stun:stun.l.google.com:19302';
-const TURN_CREDENTIAL_TTL = parseInt(process.env.TURN_CREDENTIAL_TTL ?? '86400', 10);
+const TURN_CREDENTIAL_TTL = parseInt(
+  process.env.TURN_CREDENTIAL_TTL ?? String(DEFAULT_TURN_CREDENTIAL_TTL_SECONDS),
+  10,
+);
 const MAX_CONNECTIONS = parseInt(process.env.SIGNALING_MAX_CONNECTIONS ?? '10000', 10);
 const HEARTBEAT_MS = parseInt(process.env.SIGNALING_HEARTBEAT_MS ?? '30000', 10);
 const PONG_DEADLINE_MS = parseInt(process.env.WS_PONG_DEADLINE_MS ?? '10000', 10);
@@ -66,7 +79,10 @@ const MAX_PEERS_PER_ROOM = parseInt(process.env.MAX_PEERS_PER_ROOM ?? '2', 10);
 
 interface PeerState {
   peerId: string;
+  userId: string;
+  callId: string;
   roomId: string | null;
+  recentMessageTimestamps: number[];
   awaitingPong: boolean;
   pongDeadlineTimer: ReturnType<typeof setTimeout> | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -239,6 +255,9 @@ function handleJoin(
   if (!peerId || typeof peerId !== 'string' || peerId.length > 64) {
     return sendError(ws, 'Invalid peerId');
   }
+  if (roomId !== state.callId || peerId !== state.peerId) {
+    return sendError(ws, 'Room membership rejected');
+  }
 
   // Check room capacity
   const room = rooms.get(roomId) ?? new Set<WebSocket>();
@@ -276,21 +295,38 @@ function handleJoin(
 function handleRelay(
   ws: WebSocket,
   state: PeerState,
-  msg: { type: string; to: string; sdp?: unknown; candidate?: unknown },
+  msg: { type: string; to: string; sdp?: unknown; candidate?: unknown; amount?: unknown; asset?: unknown },
 ): void {
   const { to } = msg;
 
   if (!to || typeof to !== 'string') {
     return sendError(ws, 'Missing "to" field');
   }
-
-  const targetWs = findPeerSocket(to);
-  if (!targetWs) {
-    return sendError(ws, `Peer ${to} not found`);
+  if (!state.roomId) {
+    return sendError(ws, 'Not in a room');
+  }
+  if (!fieldWithinLimit(msg.sdp) || !fieldWithinLimit(msg.candidate)) {
+    return sendError(ws, 'Payload too large');
   }
 
-  // Relay the message with the sender's peerId
-  send(targetWs, { ...msg, from: state.peerId });
+  const targetWs = findPeerSocket(to);
+  const targetState = targetWs ? peers.get(targetWs) : undefined;
+  if (!targetWs || !targetState || !relayAllowed(state.roomId, targetState.roomId)) {
+    return sendError(ws, 'Peer is not in this room');
+  }
+
+  const decision = allowSignalingMessage(state.recentMessageTimestamps);
+  state.recentMessageTimestamps = decision.timestamps;
+  if (!decision.allowed) {
+    return sendError(ws, 'Rate limit exceeded');
+  }
+
+  const relayed: Record<string, unknown> = { type: msg.type, to, from: state.peerId };
+  if (msg.sdp !== undefined) relayed.sdp = msg.sdp;
+  if (msg.candidate !== undefined) relayed.candidate = msg.candidate;
+  if (typeof msg.amount === 'string') relayed.amount = msg.amount;
+  if (typeof msg.asset === 'string') relayed.asset = msg.asset;
+  send(targetWs, relayed);
   totalMessagesRelayed++;
   state.messageCount++;
 }
@@ -298,6 +334,10 @@ function handleRelay(
 function handleMessage(ws: WebSocket, rawData: string): void {
   const state = peers.get(ws);
   if (!state) return;
+
+  if (messageTooLarge(Buffer.byteLength(rawData, 'utf8'))) {
+    return sendError(ws, 'Payload too large');
+  }
 
   resetIdleTimer(ws, state);
 
@@ -380,9 +420,26 @@ const httpServer = createServer((req, res) => {
   res.end('Not found');
 });
 
-const wss = new WebSocketServer({ server: httpServer, maxPayload: 64 * 1024 }); // 64KB max frame
+const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_SIGNALING_MESSAGE_BYTES });
+
+function claimsFromRequest(req: IncomingMessage) {
+  try {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const token = url.searchParams.get('token');
+    if (!token) return null;
+    return verifyCallToken(token, signalingTokenSecret());
+  } catch {
+    return null;
+  }
+}
 
 wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+  const claims = claimsFromRequest(req);
+  if (!claims) {
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
+
   // Reject if at connection limit
   if (peers.size >= MAX_CONNECTIONS) {
     ws.close(1013, 'Server at capacity');
@@ -392,8 +449,11 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   totalConnections++;
 
   const state: PeerState = {
-    peerId: `anon-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    peerId: claims.peerId,
+    userId: claims.userId,
+    callId: claims.callId,
     roomId: null,
+    recentMessageTimestamps: [],
     awaitingPong: false,
     pongDeadlineTimer: null,
     idleTimer: null,

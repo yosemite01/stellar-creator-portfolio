@@ -1,46 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getReviewsForCreator } from '@/lib/services/review-service';
+import { parseCreatorBatchBody } from '@/lib/validations/creator-batch';
+import { getCachedReviewsForCreators } from '@/lib/services/review-service';
 
 /**
  * POST /api/creators/reviews/batch
- * Batch fetch reviews for multiple creators
- * Prevents N+1 queries by fetching all reviews in a single request
+ * Read-only batch of approved reviews. Bodies are capped at 50 cuid ids
+ * and served from one lookup plus a 60s per-creator cache.
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as { creatorIds: string[] };
-    const { creatorIds } = body;
-
-    if (!Array.isArray(creatorIds) || creatorIds.length === 0) {
-      return NextResponse.json(
-        { error: 'creatorIds must be a non-empty array' },
-        { status: 400 },
-      );
+    const body = await request.json();
+    const parsed = parseCreatorBatchBody(body);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
     }
 
-    // Limit batch size to prevent abuse
-    if (creatorIds.length > 100) {
-      return NextResponse.json(
-        { error: 'Maximum 100 creators per batch' },
-        { status: 400 },
-      );
+    const batch = getCachedReviewsForCreators(parsed.creatorIds);
+    const results: Record<string, { reviews: unknown[]; total: number }> = {};
+    for (const creatorId of parsed.creatorIds) {
+      const { reviews, total } = batch[creatorId] ?? { reviews: [], total: 0 };
+      results[creatorId] = { reviews: reviews.slice(0, 10), total };
     }
-
-    // Fetch reviews for all creators in parallel
-    const results: Record<string, any> = {};
-    await Promise.all(
-      creatorIds.map(async (creatorId) => {
-        try {
-          const { reviews, total } = await getReviewsForCreator(creatorId, {
-            limit: 10,
-            page: 1,
-          });
-          results[creatorId] = { reviews, total };
-        } catch (error) {
-          results[creatorId] = { reviews: [], total: 0, error: String(error) };
-        }
-      }),
-    );
 
     return NextResponse.json(results);
   } catch (error) {

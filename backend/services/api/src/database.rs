@@ -26,7 +26,7 @@ pub fn select_database_engine() -> DatabaseEngine {
     )
 }
 
-fn select_database_engine_from(
+pub(crate) fn select_database_engine_from(
     db_engine: Option<&str>,
     database_url: Option<&str>,
     node_env: Option<&str>,

@@ -111,6 +111,7 @@ export function createReview(
     updatedAt: now,
   }
   reviewStore.set(id, review)
+  invalidateCreatorReviewCache(review.creatorId)
   return review
 }
 
@@ -142,6 +143,7 @@ export function voteOnReview(
 
   review.updatedAt = new Date().toISOString()
   reviewStore.set(reviewId, review)
+  invalidateCreatorReviewCache(review.creatorId)
   return review
 }
 
@@ -151,6 +153,7 @@ export function moderateReview(reviewId: string, status: 'approved' | 'rejected'
   review.status = status
   review.updatedAt = new Date().toISOString()
   reviewStore.set(reviewId, review)
+  invalidateCreatorReviewCache(review.creatorId)
   return review
 }
 
@@ -176,6 +179,49 @@ export function getReviewsForCreatorsBatch(
     )
     result[id] = { reviews, total: reviews.length }
   }
+  return result
+}
+
+const REVIEW_CACHE_TTL_MS = 60_000
+const reviewCache = new Map<string, { expiresAt: number; reviews: Review[]; total: number }>()
+
+export function invalidateCreatorReviewCache(creatorId: string) {
+  reviewCache.delete(creatorId)
+}
+
+/**
+ * One pass over the review store for cache misses, then a 60s per-creator TTL.
+ * Writes invalidate the creator entry so a moderation is visible immediately.
+ */
+export function getCachedReviewsForCreators(
+  creatorIds: string[],
+  now = Date.now(),
+): Record<string, { reviews: Review[]; total: number }> {
+  const missing: string[] = []
+  const result: Record<string, { reviews: Review[]; total: number }> = {}
+
+  for (const id of creatorIds) {
+    const hit = reviewCache.get(id)
+    if (hit && hit.expiresAt > now) {
+      result[id] = { reviews: hit.reviews, total: hit.total }
+    } else {
+      missing.push(id)
+    }
+  }
+
+  if (missing.length > 0) {
+    const fresh = getReviewsForCreatorsBatch(missing)
+    for (const id of missing) {
+      const value = fresh[id] ?? { reviews: [], total: 0 }
+      reviewCache.set(id, {
+        expiresAt: now + REVIEW_CACHE_TTL_MS,
+        reviews: value.reviews,
+        total: value.total,
+      })
+      result[id] = { reviews: value.reviews, total: value.total }
+    }
+  }
+
   return result
 }
 

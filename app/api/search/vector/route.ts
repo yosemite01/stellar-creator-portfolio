@@ -7,9 +7,17 @@
  * 2. Queries the database for the nearest-neighbour creators using
  *    pgvector's <=> operator (cosine distance) via Supabase RPC.
  * 3. Applies optional tag filters and returns ranked results.
+ *
+ * Every call can trigger a paid embeddings request, so callers are rate
+ * limited (per IP when anonymous, per user when signed in), the body is
+ * validated and `limit` is clamped before anything is embedded (#1511).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from '@/lib/auth/auth';
+import { getCachedEmbedding } from '@/lib/search/embeddingCache';
+import { vectorSearchSchema } from '@/lib/search/schema';
+import { checkRateLimit } from '@/server/api/rate-limit';
 
 const EMBED_ENDPOINT =
   process.env.EMBED_ENDPOINT ?? 'https://api.openai.com/v1/embeddings';
@@ -43,13 +51,25 @@ async function embedQuery(query: string): Promise<number[]> {
 
 export async function POST(req: NextRequest) {
   try {
-    const { query, limit = 10, threshold = 0.5, tags = [] } = await req.json();
-
-    if (!query || typeof query !== 'string') {
-      return NextResponse.json({ error: 'Missing query' }, { status: 400 });
+    const session = await getServerSession();
+    const limited = checkRateLimit(req, { userId: session?.user?.id }, 'search-vector');
+    if (!limited.allowed) {
+      return NextResponse.json(
+        { error: 'Too many requests' },
+        { status: 429, headers: { 'Retry-After': String(limited.retryAfter) } },
+      );
     }
 
-    const embedding = await embedQuery(query.trim());
+    const parsed = vectorSearchSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid request body', details: parsed.error.flatten() },
+        { status: 400 },
+      );
+    }
+    const { query, limit, threshold, tags } = parsed.data;
+
+    const embedding = await getCachedEmbedding(query, embedQuery);
 
     // Dynamic import to avoid bundling the DB client in edge runtimes.
     const { supabaseServer } = await import('@/lib/db');

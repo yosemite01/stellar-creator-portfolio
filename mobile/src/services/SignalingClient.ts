@@ -13,6 +13,7 @@ export interface SignalingConfig {
   iceServers: IceServerConfig[];
   signalingWsUrl: string;
   peerId: string;
+  callToken?: string;
 }
 
 export type SignalingServerMessage =
@@ -49,14 +50,18 @@ export class SignalingClient {
     private readonly peerId: string,
     private readonly onMessage: (msg: SignalingServerMessage) => void,
     private readonly onConnectionChange?: (connected: boolean) => void,
+    private callToken?: string,
   ) {}
 
   async connect(wsUrl: string): Promise<void> {
     if (this.disposed) return;
+    const url = this.callToken
+      ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(this.callToken)}`
+      : wsUrl;
 
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(wsUrl);
+        this.ws = new WebSocket(url);
 
         this.ws.onopen = () => {
           this.reconnectAttempts = 0;
@@ -177,6 +182,7 @@ export class SignalingClient {
       roomId: this.roomId,
       peerId: this.peerId,
       type: message.type,
+      token: this.callToken,
     };
 
     if ('to' in message) body.to = message.to;
@@ -234,8 +240,15 @@ export class SignalingClient {
   }
 }
 
-export async function fetchSignalingConfig(baseUrl: string, peerId?: string): Promise<SignalingConfig> {
-  const query = peerId ? `?peerId=${encodeURIComponent(peerId)}` : '';
+export async function fetchSignalingConfig(
+  baseUrl: string,
+  peerId?: string,
+  roomId?: string,
+): Promise<SignalingConfig> {
+  const params = new URLSearchParams();
+  if (peerId) params.set('peerId', peerId);
+  if (roomId) params.set('roomId', roomId);
+  const query = params.toString() ? `?${params.toString()}` : '';
   const response = await fetch(`${baseUrl}/api/signaling${query}`);
   if (!response.ok) {
     throw new Error('Failed to fetch signaling configuration');

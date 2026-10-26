@@ -1,31 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getReviewsForCreatorsBatch } from '@/lib/services/review-service';
+import { parseCreatorBatchBody } from '@/lib/validations/creator-batch';
+import { getCachedReviewsForCreators } from '@/lib/services/review-service';
 
+/**
+ * POST /api/creators/reputation/batch
+ * Read-only reputation summaries. Same 50-id cap and 60s cache as reviews.
+ */
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as { creatorIds: string[] };
-    const { creatorIds } = body;
-
-    if (!Array.isArray(creatorIds) || creatorIds.length === 0) {
-      return NextResponse.json(
-        { error: 'creatorIds must be a non-empty array' },
-        { status: 400 },
-      );
+    const body = await request.json();
+    const parsed = parseCreatorBatchBody(body);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
     }
 
-    if (creatorIds.length > 100) {
-      return NextResponse.json(
-        { error: 'Maximum 100 creators per batch' },
-        { status: 400 },
-      );
-    }
+    const batchResults = getCachedReviewsForCreators(parsed.creatorIds);
+    const results: Record<string, unknown> = {};
 
-    const batchResults = getReviewsForCreatorsBatch(creatorIds);
-
-    const results: Record<string, any> = {};
-
-    for (const creatorId of creatorIds) {
-      const { reviews, total } = batchResults[creatorId];
+    for (const creatorId of parsed.creatorIds) {
+      const { reviews, total } = batchResults[creatorId] ?? { reviews: [], total: 0 };
 
       const avgRating =
         reviews.length > 0

@@ -19,6 +19,7 @@
 
 export type SecretName =
   | 'STELLAR_ADMIN_SECRET'
+  | 'STELLAR_FEE_ACCOUNT_SECRET'
   | 'JWT_SECRET'
   | 'ENCRYPTION_KEY'
   | 'STRIPE_SECRET_KEY'

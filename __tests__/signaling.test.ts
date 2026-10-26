@@ -187,6 +187,9 @@ vi.mock('next/server', () => ({
     async json() {
       return JSON.parse(this._body ?? '{}');
     }
+    async text() {
+      return this._body ?? '';
+    }
     _body?: string;
   },
   NextResponse: {
@@ -246,9 +249,21 @@ describe('GET /api/signaling', () => {
   });
 });
 
+async function joinRoom(roomId: string, peerId: string) {
+  const { NextRequest } = await import('next/server');
+  const req = new NextRequest(
+    `http://localhost:3000/api/signaling?roomId=${roomId}&peerId=${peerId}&since=0`,
+  );
+  const res = await GET(req as any);
+  const data = await res.json();
+  return data.callToken as string;
+}
+
 describe('POST /api/signaling', () => {
   it('returns { ok: true } on valid payload', async () => {
     const { NextRequest } = await import('next/server');
+    await joinRoom('room-1', 'peer-B');
+    const token = await joinRoom('room-1', 'peer-A');
     const req = new NextRequest('http://localhost:3000/api/signaling', {
       method: 'POST',
     });
@@ -258,6 +273,7 @@ describe('POST /api/signaling', () => {
       type: 'offer',
       sdp: 'v=0\r\n...',
       to: 'peer-B',
+      token,
     });
     const res = await POST(req as any);
     const data = await res.json();
@@ -278,6 +294,7 @@ describe('POST /api/signaling', () => {
 
   it('handles ICE candidate relay', async () => {
     const { NextRequest } = await import('next/server');
+    const token = await joinRoom('room-2', 'peer-C');
     const req = new NextRequest('http://localhost:3000/api/signaling', {
       method: 'POST',
     });
@@ -286,9 +303,29 @@ describe('POST /api/signaling', () => {
       peerId: 'peer-C',
       type: 'ice',
       candidate: { candidate: 'candidate:0 1 UDP 2122260223 192.168.1.1 56789 typ host' },
+      token,
     });
     const res = await POST(req as any);
     const data = await res.json();
     expect(data.ok).toBe(true);
+  });
+
+  it('refuses to relay an offer into a different room', async () => {
+    const { NextRequest } = await import('next/server');
+    await joinRoom('room-a', 'peer-A');
+    await joinRoom('room-b', 'peer-B');
+    const token = await joinRoom('room-a', 'peer-A');
+    const req = new NextRequest('http://localhost:3000/api/signaling', { method: 'POST' });
+    req._body = JSON.stringify({
+      roomId: 'room-a',
+      peerId: 'peer-A',
+      type: 'offer',
+      sdp: 'v=0',
+      to: 'peer-B',
+      token,
+    });
+    const res = await POST(req as any);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe('Peer is not in this room');
   });
 });

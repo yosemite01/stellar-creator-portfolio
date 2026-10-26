@@ -1416,7 +1416,7 @@ dependencies = [
  "curve25519-dalek 5.0.0",
  "ed25519 3.0.0",
  "rand_core 0.10.1",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "signature 3.0.0",
  "subtle",
  "zeroize",
@@ -2986,6 +2986,7 @@ name = "oracle"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4061,9 +4062,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
@@ -4629,7 +4630,7 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "soroban-sdk",
  "sqlx",
  "subtle",
@@ -4660,7 +4661,7 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "sqlx",
  "thiserror 2.0.21",
  "tokio",
@@ -4683,7 +4684,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tokio",
  "tokio-tungstenite",
 ]
@@ -4694,6 +4695,7 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4723,6 +4725,7 @@ dependencies = [
  "serde",
  "serde_json",
  "soroban-sdk",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4744,6 +4747,7 @@ name = "stellar-escrow-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4751,6 +4755,7 @@ name = "stellar-freelancer-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4759,6 +4764,7 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4769,6 +4775,7 @@ dependencies = [
  "rand_core 0.6.4",
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4787,7 +4794,7 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "sqlx",
  "stellar-common",
  "stellar-discovery",
@@ -4802,6 +4809,7 @@ name = "stellar-insurance-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4827,6 +4835,7 @@ name = "stellar-referral-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -4848,6 +4857,13 @@ dependencies = [
  "crate-git-revision 0.0.6",
  "data-encoding",
  "heapless",
+]
+
+[[package]]
+name = "stellar-upgradeable"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]

@@ -6,6 +6,11 @@
  * Listens on WS_PORT (default 1234) and handles Yjs CRDT sync
  * for all document rooms identified by the URL path.
  *
+ * Upgrades require a short-lived token (`?token=...`) issued by
+ * POST /api/collab/token for the same room. Requests without a valid token
+ * are answered with HTTP 401 (or 403 for another room's token) and never
+ * upgrade; the socket is bound to the token's userId.
+ *
  * Memory-leak mitigations:
  *  - Heartbeat ping/pong with configurable interval and deadline.
  *    Sockets that miss a pong are terminated, releasing all closures.
@@ -18,10 +23,17 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { IncomingMessage } from 'http'
 import { setupWSConnection } from 'y-websocket/bin/utils.js'
+import {
+  collabTokenSecret,
+  collabVerifyClient,
+  roomFromUrl,
+  type CollabRequest,
+} from './collab-policy'
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.WS_PORT ?? '1234', 10)
 const HOST = process.env.WS_HOST ?? 'localhost'
+const TOKEN_SECRET = collabTokenSecret()
 
 /** How often to send a ping frame (ms). */
 const HEARTBEAT_INTERVAL_MS = parseInt(
@@ -43,6 +55,8 @@ const IDLE_TIMEOUT_MS = parseInt(
 
 // ── Connection state ──────────────────────────────────────────────────────────
 interface ConnState {
+  /** Authenticated user from the upgrade token. */
+  userId: string
   /** True while we are waiting for a pong reply. */
   awaitingPong: boolean
   /** Timer that fires if pong is not received in time. */
@@ -91,13 +105,23 @@ function terminateAndCleanup(ws: WebSocket): void {
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────
-const wss = new WebSocketServer({ host: HOST, port: PORT })
+const wss = new WebSocketServer({
+  host: HOST,
+  port: PORT,
+  verifyClient: collabVerifyClient(TOKEN_SECRET),
+})
 
 wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-  const docName = (req.url ?? '/').replace(/^\//, '') || 'default'
+  const claims = (req as CollabRequest).collabClaims
+  if (!claims) {
+    ws.close(1008, 'Unauthorized')
+    return
+  }
+  const docName = roomFromUrl(req.url)
 
   // Initialise per-connection state
   const state: ConnState = {
+    userId: claims.userId,
     awaitingPong: false,
     pongDeadlineTimer: null,
     idleTimer: null,
@@ -136,7 +160,7 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   })
 
   ws.on('error', (err: Error) => {
-    console.error('[collab] Socket error:', err.message)
+    console.error(`[collab] Socket error (user ${state.userId}):`, err.message)
     terminateAndCleanup(ws)
   })
 
