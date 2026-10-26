@@ -942,9 +942,12 @@ impl GovernanceContract {
     /// Accept a nomination (step 2 of 2). Must be signed by the nominee.
     /// Emits `(admin, accepted)`.
     pub fn accept_admin(env: Env, new_admin: Address) {
-        let stored_admin: Address = Self::get_config(env.clone()).admin_address;
-        let accepted = stellar_upgradeable::accept_admin(&env, &new_admin, &stored_admin);
-        <class 'set'>
+        let mut config = Self::get_config(env.clone());
+        let accepted = stellar_upgradeable::accept_admin(&env, &new_admin, &config.admin_address);
+        config.admin_address = accepted;
+        env.storage()
+            .persistent()
+            .set(&Symbol::new(&env, "governance_config"), &config);
     }
 
     /// Withdraw a pending admin nomination. Admin-only. Emits `(admin, cancelled)`.
