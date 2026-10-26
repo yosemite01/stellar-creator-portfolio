@@ -1105,7 +1105,7 @@ mod tests {
 
     #[test]
     fn reorg_depth_constant_is_positive() {
-        assert!(REORG_DEPTH > 0, "REORG_DEPTH must be > 0");
+        const { assert!(REORG_DEPTH > 0, "REORG_DEPTH must be > 0") };
     }
 
     #[test]
