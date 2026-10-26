@@ -1,4 +1,9 @@
 #![no_std]
+// `Events::publish` and `update_current_contract_wasm` are deprecated in
+// soroban-sdk 23+. Moving to `#[contractevent]` changes the on-chain topic/data
+// layout that indexers decode (see the event docs on each function), so keep
+// the existing calls until that migration is done for all contracts at once.
+#![allow(deprecated)]
 
 //! Shared upgrade and admin-transfer pattern for the canonical contracts
 //! (Issue #1564).
