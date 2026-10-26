@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 actix-web.workspace = true
+# actix-server 2.9 pulls actix-rt without its net/signal features; enable them
+# here so the crate also builds on its own (`cargo test -p stellar-auth`).
+actix-rt.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
