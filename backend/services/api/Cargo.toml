@@ -29,7 +29,7 @@ clap.workspace = true
 dotenvy.workspace = true
 futures.workspace = true
 jsonwebtoken.workspace = true
-hmac = { version = "0.12", features = ["std"] }
+hmac = "0.13"
 # Pinned below the workspace default (0.11): hmac 0.12 depends on the 0.10
 # line of the `digest` crate, and sha2 0.11 implements the newer 0.11 line —
 # using the workspace version here makes HmacSha256::new_from_slice's trait

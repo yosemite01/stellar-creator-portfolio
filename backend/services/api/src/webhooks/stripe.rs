@@ -8,7 +8,7 @@
 /// `WEBHOOK_SECRET` environment variable.
 use actix_web::{web, HttpRequest, HttpResponse};
 use deadpool_redis::{redis::AsyncCommands, Pool};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn, error};
