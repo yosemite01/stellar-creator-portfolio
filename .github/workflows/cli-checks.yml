@@ -33,8 +33,9 @@ jobs:
         run: pnpm run frontend:orbit-check
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@1.120.0
+        uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.94.1"
           components: clippy
 
       - name: Rust Cache
