@@ -25,6 +25,11 @@ mod verification_rewards;
 mod webhooks;
 mod websocket;
 
+// Integration tests — compiled only when `--features integration` is passed.
+// See backend/services/api/src/integration_tests.rs for usage instructions.
+#[cfg(feature = "integration")]
+mod integration_tests;
+
 pub const API_VERSION: &str = "1";
 pub const API_PREFIX: &str = "/api/v1";
 

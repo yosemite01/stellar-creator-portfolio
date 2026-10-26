@@ -34,8 +34,10 @@ const reviews = await Promise.all(creators.map((c) => loader.load(c.id)));
 - `POST /api/creators/reviews/batch` — [`app/api/creators/reviews/batch/route.ts`](../app/api/creators/reviews/batch/route.ts)
 - `POST /api/creators/reputation/batch` — [`app/api/creators/reputation/batch/route.ts`](../app/api/creators/reputation/batch/route.ts)
 
-Both accept `{ "creatorIds": [...] }` (up to 100 per request) and return an
-object keyed by creator id.
+Both accept `{ "creatorIds": [...] }` (1–50 cuid values per request; `ids`
+is accepted as the same list) and return an object keyed by creator id.
+Results are cached per creator for 60 seconds and invalidated when a review
+is created, voted on, or moderated.
 
 ### Request deduplication — [`lib/api-client.ts`](../lib/api-client.ts)
 

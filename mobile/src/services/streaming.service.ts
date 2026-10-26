@@ -74,7 +74,7 @@ export class WebRTCStreamingService {
     try {
       this.setState('connecting');
 
-      const config = await fetchSignalingConfig(this.signalingServerUrl);
+      const config = await fetchSignalingConfig(this.signalingServerUrl, undefined, this.roomId);
       this.peerId = config.peerId;
       this.wsUrl = config.signalingWsUrl;
 
@@ -109,6 +109,7 @@ export class WebRTCStreamingService {
             this.setState('connecting');
           }
         },
+        config.callToken,
       );
 
       await this.signaling.connect(this.wsUrl);

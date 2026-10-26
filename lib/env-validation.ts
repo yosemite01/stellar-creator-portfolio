@@ -44,6 +44,17 @@ export function validateEnvironment(): void {
     }
   }
 
+  // Paymaster relay: when enabled, the platform fee account must be configured
+  // so sponsored transactions can actually be fee-bumped (issue #1509).
+  if (process.env.PAYMASTER_RELAY_ENABLED === 'true') {
+    if (!process.env.STELLAR_FEE_ACCOUNT) {
+      errors.push(
+        'STELLAR_FEE_ACCOUNT is required when PAYMASTER_RELAY_ENABLED=true: ' +
+        'the fee-bump relay has no account to fund sponsored transactions.'
+      );
+    }
+  }
+
   if (errors.length > 0) {
     const errorMessage = 'Environment configuration errors:\n  - ' + errors.join('\n  - ');
     console.error(errorMessage);

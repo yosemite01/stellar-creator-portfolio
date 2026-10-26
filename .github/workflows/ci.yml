@@ -1,8 +1,17 @@
 # CI workflow: ci
 # Purpose: Main CI matrix — runs frontend lint/typecheck/unit-tests/build,
-# Prisma migration health, Rust backend clippy+tests, reproducible WASM
-# contract hash verification, Lighthouse performance audit, Playwright E2E
-# tests, and a Docker image smoke-test on every push/PR to main or dev.
+# Prisma migration health, Rust backend clippy+tests (including sqlx integration
+# tests against a real Postgres service container), all contract crate tests,
+# reproducible WASM contract hash verification, coverage reporting (Vitest +
+# cargo-llvm-cov → Codecov), Lighthouse performance audit, and Playwright E2E
+# tests on every push/PR to main or dev.
+#
+# Issues addressed in this file:
+#   #1584 — Rust API integration tests run in CI with a real Postgres container
+#   #2585 — cargo test --workspace covers every contract crate (incl. insurance)
+#   #1586 — Vitest --coverage + cargo-llvm-cov uploaded to Codecov; badge in README
+#   #1587 — pnpm typecheck (tsc --noEmit) is a mandatory, loud-failing CI step
+#
 # Caching: pnpm store (actions/setup-node cache:'pnpm') and Cargo registry
 # + target directory (Swatinem/rust-cache) are restored on every run.
 name: CI
@@ -14,23 +23,36 @@ on:
     branches: [ main, dev ]
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Issue #1587 — Frontend: typecheck is a mandatory, loudly-failing step.
+  # tsc --noEmit runs unconditionally; any type error fails this job immediately.
+  # ─────────────────────────────────────────────────────────────────────────────
   frontend:
+    name: Frontend (lint · typecheck · test · build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v6
         with:
           version: 10
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      # #1587 — TypeScript type errors fail CI loudly with a clear message.
+      - name: Typecheck (tsc --noEmit)
+        run: |
+          echo "::group::Running tsc --noEmit"
+          pnpm run typecheck
+          echo "::endgroup::"
+        # Explicit failure message so reviewers immediately know what failed.
+        # The step name already says "Typecheck" so the annotation is clear.
+
       - name: Lint
         run: pnpm run lint
-      - name: Typecheck
-        run: pnpm run typecheck
       - name: i18n key parity (web + mobile locales)
         run: pnpm run i18n:check
       - name: Route auth declarations
@@ -40,25 +62,56 @@ jobs:
       - name: Build
         run: pnpm run build
       - name: Upload build artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: next-build-${{ github.sha }}
           path: .next/
           if-no-files-found: error
 
-  migration-health:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Issue #1586 — Frontend coverage (Vitest + v8) uploaded to Codecov.
+  # Runs separately from the main frontend job so it doesn't block the build.
+  # ─────────────────────────────────────────────────────────────────────────────
+  frontend-coverage:
+    name: Frontend Coverage (Vitest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run tests with coverage
+        run: pnpm run test:coverage
+      - name: Upload frontend coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/lcov.info
+          flags: frontend
+          name: frontend-coverage
+          fail_ci_if_error: false   # coverage upload is best-effort; don't block green CI
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  migration-health:
+    name: Migration health (no duplicate prefixes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - name: Check no duplicate migration prefixes
         run: |
           cd backend/migrations
           duplicates=$(ls *.sql 2>/dev/null | sed 's/_.*//' | sort | uniq -d)
           if [ -n "$duplicates" ]; then
-            echo "Duplicate migration prefixes found: $duplicates"
+            echo "::error::Duplicate migration prefixes found: $duplicates"
             exit 1
           fi
-          echo "Migration prefixes are unique"
+          echo "Migration prefixes are unique ✓"
 
   prisma-migrations:
     name: Prisma migrations apply to an empty database
@@ -80,11 +133,11 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app
       DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v6
         with:
           version: 10
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -92,20 +145,20 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Apply all migrations
         run: pnpm exec prisma migrate deploy
-      - name: Fail if the schema has tables or columns no migration creates
+      - name: Fail if schema has objects no migration creates (drift check)
         run: |
           pnpm exec prisma migrate diff \
             --from-url "$DATABASE_URL" \
             --to-schema-datamodel prisma/schema.prisma \
             --script > drift.sql
           if grep -qE 'CREATE TABLE|ADD COLUMN|CREATE TYPE' drift.sql; then
-            echo "schema.prisma declares objects that no migration creates:"
+            echo "::error::schema.prisma declares objects that no migration creates:"
             grep -E 'CREATE TABLE|ADD COLUMN|CREATE TYPE' drift.sql
             exit 1
           fi
 
   integration-tests:
-    name: Integration Tests (PostgreSQL)
+    name: Integration Tests – Next.js API routes (PostgreSQL)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -123,47 +176,202 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5433/test_db
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v6
         with:
           version: 10
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
       - name: Run Integration Tests
         run: pnpm run test:integration
 
-  backend:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Issue #1584 — Rust API integration tests run against a real Postgres container.
+  #
+  # How it works:
+  #   1. A postgres:16-alpine service container starts alongside the runner.
+  #   2. sqlx-cli applies the backend/migrations/*.sql files so the schema matches
+  #      what the Rust code expects.
+  #   3. `cargo test -p stellar-api --features integration` runs only the tests
+  #      gated behind #[cfg(feature = "integration")] so regular unit tests are
+  #      always fast and network-free.
+  #
+  # To run locally:
+  #   docker run -d -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16-alpine
+  #   export TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test_db
+  #   cargo sqlx database create
+  #   cargo sqlx migrate run --source backend/migrations
+  #   cd backend && cargo test -p stellar-api --features integration
+  # ─────────────────────────────────────────────────────────────────────────────
+  rust-api-integration:
+    name: Rust API integration tests (PostgreSQL)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d test_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5434/test_db
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5434/test_db
     steps:
-      - uses: actions/checkout@v7
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.120.0
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.84.0"
           components: clippy
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+          # Include features in cache key so integration and unit caches are separate
+          key: rust-api-integration
+
+      - name: Install sqlx-cli (for migrations)
+        run: cargo install sqlx-cli --no-default-features --features postgres --locked
+
+      - name: Wait for Postgres to be ready
+        run: |
+          for i in $(seq 1 20); do
+            pg_isready -h localhost -p 5434 -U postgres && break
+            echo "Waiting for postgres... ($i/20)"
+            sleep 2
+          done
+          pg_isready -h localhost -p 5434 -U postgres || \
+            { echo "::error::Postgres did not become healthy in time"; exit 1; }
+
+      - name: Run sqlx migrations
+        run: |
+          cd backend
+          sqlx database create --database-url "$DATABASE_URL"
+          sqlx migrate run --source migrations --database-url "$DATABASE_URL"
+
+      - name: Clippy – api crate (integration feature)
+        run: |
+          cd backend
+          cargo clippy -p stellar-api --features integration --all-targets -- -D warnings
+
+      - name: Run Rust API integration tests
+        run: |
+          cd backend
+          cargo test -p stellar-api --features integration -- --test-output immediate
+        # --test-output immediate prints each test result as it runs, making
+        # failures easy to find in the CI log without scrolling to the summary.
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Issue #2585 — All contract crates are covered by cargo test --workspace.
+  # `contracts/insurance` (and every other workspace member) is exercised here.
+  # Clippy runs with -D warnings so lint regressions fail the job immediately.
+  # Issue #1584 — Unit tests for the api service also run here (no DB needed).
+  # ─────────────────────────────────────────────────────────────────────────────
+  backend:
+    name: Rust workspace (clippy · test · benchmarks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.84.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.84.0"
+          components: clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
       - name: No unwrap/panic in contract code
         run: ./scripts/check-contract-panics.sh
-      - name: Clippy
-        run: cd backend && cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Test
+
+      # #2585 — clippy covers every workspace member including insurance, referral,
+      # stellar_insights, upgradeable, etc. — no crate can rot silently.
+      - name: Clippy (all workspace members, -D warnings)
+        run: |
+          cd backend
+          echo "Workspace members:"
+          cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import sys,json; [print(' -', m['name']) for m in json.load(sys.stdin)['packages']]"
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # #2585 — --workspace tests every crate; --all-features ensures no crate
+      # is skipped because of a missing feature flag.
+      - name: Test all workspace crates
         run: cd backend && cargo test --workspace --all-features
+
       - name: Contract resource benchmarks
-        # Emits ::warning:: annotations for entrypoints >10% over
-        # backend/contracts/benchmarks.json without failing the job.
+        # Emits ::warning:: annotations for entrypoints >10% over budget
+        # (backend/contracts/benchmarks.json) without failing the job.
         run: cd backend && cargo test -p contract-benchmarks -- --nocapture
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Issue #1586 — Rust coverage via cargo-llvm-cov → Codecov.
+  # Excludes generated code (Soroban WASM glue, build.rs artifacts).
+  # Runs on a separate job so it doesn't slow down the main backend job.
+  # ─────────────────────────────────────────────────────────────────────────────
+  rust-coverage:
+    name: Rust Coverage (cargo-llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly for llvm-cov)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.84.0"
+          components: llvm-tools-preview
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: rust-coverage
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate coverage report (lcov)
+        run: |
+          cd backend
+          cargo llvm-cov \
+            --workspace \
+            --all-features \
+            --lcov \
+            --output-path lcov.info \
+            --ignore-filename-regex '(build\.rs|\.cargo/registry|contracts/.*/wasm_bindgen|__generated__|test_utils)'
+
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: backend/lcov.info
+          flags: rust
+          name: rust-coverage
+          fail_ci_if_error: false
 
   contract-bindings:
     name: Contract TypeScript Bindings
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -173,12 +381,12 @@ jobs:
         with:
           workspaces: backend
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
       - name: Regenerate bindings
         run: ./scripts/generate-contract-bindings.sh
       - name: Fail if committed bindings are stale
@@ -196,11 +404,11 @@ jobs:
     name: Verify Reproducible Contract Hashes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - name: Build & verify hashes
         run: ./scripts/verify.sh
       - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: soroban-contracts-${{ github.sha }}
           path: artifacts/
@@ -211,29 +419,28 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v6
         with:
           version: 10
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
       - name: Download build artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: next-build-${{ github.sha }}
           path: .next/
       - name: Run Lighthouse CI
-        run: |
-          pnpm exec lhci autorun
+        run: pnpm exec lhci autorun
         env:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
       - name: Comment PR with Lighthouse scores
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v9
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');

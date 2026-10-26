@@ -82,19 +82,47 @@ export function CollaborativeEditor({
   const [session, setSession] = useState<CollabSession | null>(null)
 
   useEffect(() => {
-    const ydoc = new Y.Doc()
-    const provider = new WebsocketProvider(serverUrl, docId, ydoc)
+    let cancelled = false
+    let ydoc: Y.Doc | null = null
+    let provider: WebsocketProvider | null = null
 
-    // Broadcast our presence
-    provider.awareness.setLocalStateField('user', user)
-    setSession({ ydoc, provider })
+    // Tokens last a minute and are only issued to members of the document,
+    // so fetch a fresh one for the first connect and for every reconnect.
+    const fetchToken = async (): Promise<string | null> => {
+      try {
+        const res = await fetch('/api/collab/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId: docId }),
+        })
+        if (!res.ok) return null
+        return ((await res.json()) as { token: string }).token
+      } catch {
+        return null
+      }
+    }
+
+    void fetchToken().then((token) => {
+      if (cancelled || !token) return
+      ydoc = new Y.Doc()
+      provider = new WebsocketProvider(serverUrl, docId, ydoc, { params: { token } })
+      provider.on('connection-close', async () => {
+        const fresh = await fetchToken()
+        if (fresh && provider) provider.params = { token: fresh }
+      })
+
+      // Broadcast our presence
+      provider.awareness.setLocalStateField('user', user)
+      setSession({ ydoc, provider })
+    })
 
     return () => {
+      cancelled = true
       setSession(null)
       // Destroy provider first (closes WS + clears awareness), then the
       // Y.Doc to release all CRDT state and event listeners.
-      provider.destroy()
-      ydoc.destroy()
+      provider?.destroy()
+      ydoc?.destroy()
     }
   }, [docId, serverUrl, user])
 
