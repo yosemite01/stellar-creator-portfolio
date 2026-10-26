@@ -225,7 +225,7 @@ jobs:
       - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.84.0"
+          toolchain: "1.94.1"
           components: clippy
 
       - name: Rust Cache
@@ -281,7 +281,7 @@ jobs:
       - name: Install Rust 1.84.0
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.84.0"
+          toolchain: "1.94.1"
           components: clippy
 
       - name: Rust Cache
@@ -326,7 +326,7 @@ jobs:
       - name: Install Rust (nightly for llvm-cov)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.84.0"
+          toolchain: "1.94.1"
           components: llvm-tools-preview
 
       - name: Rust Cache
