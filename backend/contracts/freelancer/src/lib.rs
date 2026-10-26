@@ -379,7 +379,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Identity metadata not found")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn test_get_nonexistent_identity() {
         let env = Env::default();
         let contract_id = env.register(FreelancerContract, ());
