@@ -958,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Duplicate approver")]
+    #[should_panic(expected = "Error(Contract, #17)")]
     fn test_multisig_rejects_duplicate_approver() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1002,7 +1002,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not a configured multi-sig signer")]
+    #[should_panic(expected = "Error(Contract, #16)")]
     fn test_multisig_rejects_outsider_approver() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1046,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Insufficient multi-sig authorisations")]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn test_multisig_rejects_too_few_approvers() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1157,7 +1157,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unauthorized")]
+    #[should_panic(expected = "Error(Contract, #8)")]
     fn test_set_escrow_contract_rejects_non_admin() {
         let env = Env::default();
         env.mock_all_auths();
