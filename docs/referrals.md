@@ -19,15 +19,18 @@ their own referrer. Two colluding accounts could also refer each other
 
 | Code | Variant | Rule |
 |---|---|---|
-| 1 | `SelfReferral` | `referrer == referred` |
-| 2 | `AlreadyReferred` | `referred` already has a referrer |
-| 3 | `ReferralLoop` | `referrer` was referred by `referred` (a two-account loop) |
-| 4 | `RefereeIsReferrer` | `referred` has already referred someone |
+| 7 | `SelfReferral` | `referrer == referred` |
+| 3 | `ReferralAlreadyRegistered` | `referred` already has a referrer |
+| 8 | `ReferralLoop` | `referrer` was referred by `referred` (a two-account loop) |
+| 9 | `RefereeIsReferrer` | `referred` has already referred someone |
 
-Rule 4 means every referee is a new participant. A cycle of any length needs
+The new variants are appended after the existing `ReferralError` codes (see
+[contracts.md](contracts.md)); existing codes are never renumbered.
+
+The `RefereeIsReferrer` rule means every referee is a new participant. A cycle of any length needs
 some account to be referred after it has already referred someone, so this
 rule blocks all cycles with one O(1) storage read. It relies on the new
-`HasReferred(Address)` storage key. Rule 3 also covers referrers who were
+`HasReferred(Address)` storage key. `ReferralLoop` also covers referrers who were
 registered before that key existed. The 50-per-referrer-per-month cap is
 unchanged.
 

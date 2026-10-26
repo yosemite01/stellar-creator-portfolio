@@ -306,6 +306,9 @@ should match on the code instead.
 | 4 | `MonthlyLimitReached` | Referrer hit 50 referrals this month |
 | 5 | `ReferralNotFound` | No referral for that address |
 | 6 | `NoUnclaimedRewards` | Nothing to claim |
+| 7 | `SelfReferral` | `register_referral` with `referrer == referred` |
+| 8 | `ReferralLoop` | `referrer` was referred by `referred` |
+| 9 | `RefereeIsReferrer` | `referred` has already referred someone |
 
 ### Insurance (`InsuranceError`)
 

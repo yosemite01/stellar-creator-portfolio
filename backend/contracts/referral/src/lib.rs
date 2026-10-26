@@ -10,21 +10,6 @@ use soroban_sdk::{
 
 /// Errors raised by `register_referral` (Issue #1566). Surface on-chain as
 /// `Error(Contract, #n)`.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum ReferralError {
-    /// `referrer == referred`.
-    SelfReferral = 1,
-    /// `referred` already has a referrer; a user can be referred only once.
-    AlreadyReferred = 2,
-    /// `referrer` was itself referred by `referred` (A→B then B→A).
-    ReferralLoop = 3,
-    /// `referred` has already referred someone else, so is an existing
-    /// participant rather than a new user. Closes loops of any length.
-    RefereeIsReferrer = 4,
-}
-
 #[contracttype]
 #[derive(Clone)]
 pub struct Referral {
@@ -57,6 +42,13 @@ pub enum ReferralError {
     MonthlyLimitReached = 4,
     ReferralNotFound = 5,
     NoUnclaimedRewards = 6,
+    /// `referrer == referred` (#1566).
+    SelfReferral = 7,
+    /// `referrer` was itself referred by `referred` (A→B then B→A) (#1566).
+    ReferralLoop = 8,
+    /// `referred` has already referred someone else, so is an existing
+    /// participant rather than a new user. Closes loops of any length (#1566).
+    RefereeIsReferrer = 9,
 }
 
 #[contract]
@@ -78,9 +70,35 @@ impl ReferralContract {
     }
 
     pub fn register_referral(env: Env, referrer: Address, referred: Address) -> Result<(), ReferralError> {
+        // #1566: only the referee can attach themselves to a referrer, so
+        // nobody can register referrals on another account's behalf.
+        referred.require_auth();
+
+        if referrer == referred {
+            return Err(ReferralError::SelfReferral);
+        }
+
         let key = DataKey::Referral(referred.clone());
         if env.storage().persistent().has(&key) {
             return Err(ReferralError::ReferralAlreadyRegistered);
+        }
+
+        // A→B then B→A. Also covers referrers registered before HasReferred
+        // existed.
+        if let Some(upstream) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Referral>(&DataKey::Referral(referrer.clone()))
+        {
+            if upstream.referrer == referred {
+                return Err(ReferralError::ReferralLoop);
+            }
+        }
+
+        // Every referee must be a new participant; this blocks cycles of any
+        // length with a single read.
+        if env.storage().persistent().has(&DataKey::HasReferred(referred.clone())) {
+            return Err(ReferralError::RefereeIsReferrer);
         }
 
         let month = env.ledger().timestamp() / ONE_MONTH_SECS;
@@ -311,4 +329,5 @@ mod test {
         let unclaimed = contract.get_unclaimed_rewards(&referrer);
         assert_eq!(unclaimed, 50i128); // 5% of 1000
     }
+
 }
