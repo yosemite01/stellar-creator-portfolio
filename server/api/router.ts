@@ -5,6 +5,7 @@ import { writeAuditLog } from '@/server/services/audit';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { creatorCardSelect, toCreator } from './creator-mapper';
+import { listCreatorsFromDB, getCreatorByIdFromDB } from '@/server/services/creators-directory';
 import { getJwtSecret } from './jwt-secret';
 import jwt from 'jsonwebtoken';
 import { TRPCError } from '@trpc/server';
@@ -220,37 +221,12 @@ export const appRouter = router({
       )
       .use(rateLimit({ windowMs: 60_000, max: 60 }))
       .query(async ({ input }) => {
-        const where: Prisma.CreatorProfileWhereInput = {};
-        if (input.discipline) {
-          where.discipline = input.discipline;
-        }
-        if (input.search) {
-          where.OR = [
-            { displayName: { contains: input.search, mode: 'insensitive' } },
-            { bio: { contains: input.search, mode: 'insensitive' } },
-          ];
-        }
-
-        const creatorProfiles = await prisma.creatorProfile.findMany({
-          take: input.take + 1,
-          ...(input.cursor && { cursor: { id: input.cursor }, skip: 1 }),
-          where,
-          select: creatorCardSelect,
-          orderBy: { createdAt: 'desc' },
+        return listCreatorsFromDB({
+          take: input.take,
+          cursor: input.cursor,
+          discipline: input.discipline,
+          search: input.search,
         });
-
-        const hasNextPage = creatorProfiles.length > input.take;
-        if (hasNextPage) creatorProfiles.pop();
-
-        const nextCursor = creatorProfiles.length > 0 ? creatorProfiles[creatorProfiles.length - 1].id : null;
-
-        const creators = creatorProfiles.map(toCreator);
-
-        return {
-          creators,
-          nextCursor,
-          hasNextPage,
-        };
       }),
 
     get: publicProcedure

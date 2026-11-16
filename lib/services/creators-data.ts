@@ -68,6 +68,11 @@ export interface Creator {
   verification?: VerificationInfo;
 }
 
+/**
+ * @deprecated Legacy static creators data (Issue #1824).
+ * The directory and profile lookups have migrated to DB-backed cursor pagination.
+ * This array is retained for offline tests and seeding fallback.
+ */
 export const creators: Creator[] = [
   {
     id: 'alex-studio',
