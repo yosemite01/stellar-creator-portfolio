@@ -5,7 +5,7 @@ import { RichTextEditor } from '@/components/ui/rich-text';
 import { hasRichTextContent } from '@/lib/rich-text/sanitize';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc-client';
-import { BOUNTY_TEMPLATES, type BountyTemplate } from '@/lib/bounty-templates';
+import { BOUNTY_TEMPLATES, renderSafeTemplate, type BountyTemplate } from '@/lib/bounty-templates';
 
 /**
  * Loads templates from `GET /api/bounty-templates` — system templates plus
@@ -22,7 +22,7 @@ function useTemplates(): { templates: BountyTemplate[]; categories: string[] } {
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`${res.status}`))))
       .then((data: { templates: BountyTemplate[] }) => {
         if (!cancelled && Array.isArray(data.templates) && data.templates.length > 0) {
-          setTemplates(data.templates);
+          setTemplates(data.templates.map(renderSafeTemplate));
         }
       })
       .catch(() => {
@@ -154,10 +154,11 @@ export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps
   });
 
   const handleTemplateSelect = (tpl: BountyTemplate) => {
-    setTitle(tpl.title);
-    setCategory(tpl.category);
-    setDescription(tpl.description);
-    setTags(tpl.requiredSkills.join(', '));
+    const safe = renderSafeTemplate(tpl);
+    setTitle(safe.title);
+    setCategory(safe.category);
+    setDescription(safe.description);
+    setTags(safe.requiredSkills.join(', '));
     setStep('form');
   };
 

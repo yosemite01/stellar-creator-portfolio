@@ -1,15 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
-import { deleteOwnTemplate, updateOwnTemplate } from '@/lib/services/bounty-template-service';
+import {
+  deleteOwnTemplate,
+  getTemplateById,
+  getTemplateVersion,
+  updateOwnTemplate,
+} from '@/lib/services/bounty-template-service';
 
 /**
- * PATCH  /api/bounty-templates/[id]   update a template the caller owns
+ * GET    /api/bounty-templates/[id]   get a template or specific historical version
+ * PATCH  /api/bounty-templates/[id]   update a template the caller owns (increments version)
  * DELETE /api/bounty-templates/[id]   delete a template the caller owns
  *
- * Both return 404 for a system template, another user's template, or an
+ * PATCH and DELETE return 404 for a system template, another user's template, or an
  * unknown id — indistinguishable on purpose, see
- * lib/services/bounty-template-service.ts (Issue #1611).
+ * lib/services/bounty-template-service.ts (Issue #1611, Issue #1821).
  */
 
 const templatePatchSchema = z
@@ -23,6 +29,36 @@ const templatePatchSchema = z
   })
   .partial()
   .refine((data) => Object.keys(data).length > 0, { message: 'No fields to update' });
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const session = await getServerSession();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { id } = await params;
+  const versionParam = req.nextUrl?.searchParams?.get('version');
+  if (versionParam) {
+    const version = parseInt(versionParam, 10);
+    if (!isNaN(version) && version > 0) {
+      const template = await getTemplateVersion(id, version);
+      if (!template) {
+        return NextResponse.json({ error: 'Template version not found' }, { status: 404 });
+      }
+      return NextResponse.json({ template });
+    }
+  }
+
+  const template = await getTemplateById(id);
+  if (!template) {
+    return NextResponse.json({ error: 'Template not found' }, { status: 404 });
+  }
+
+  return NextResponse.json({ template });
+}
 
 export async function PATCH(
   req: NextRequest,
