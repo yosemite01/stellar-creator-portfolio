@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const STROOP_SCALE: u128 = 10_000_000;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DeclaredReserves {
     pub asset_code: String,
     pub asset_issuer: String,
@@ -13,21 +13,21 @@ pub struct DeclaredReserves {
     pub treasury_reserve: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ObservedReserves {
     pub issuer_balance: String,
     pub treasury_balance: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProofOfReserveReport {
     pub valid: bool,
     pub mismatches: Vec<ReserveMismatch>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReserveMismatch {
-    pub account_role: &'static str,
+    pub account_role: String,
     pub account_id: String,
     pub declared: String,
     pub observed: String,
@@ -63,7 +63,7 @@ pub fn validate_proof_of_reserve(
     let mut mismatches = Vec::new();
     if declared_issuer != observed_issuer {
         mismatches.push(ReserveMismatch {
-            account_role: "issuer",
+            account_role: "issuer".to_string(),
             account_id: declared.issuer_account.clone(),
             declared: declared.issuer_reserve.clone(),
             observed: observed.issuer_balance.clone(),
@@ -72,7 +72,7 @@ pub fn validate_proof_of_reserve(
 
     if declared_treasury != observed_treasury {
         mismatches.push(ReserveMismatch {
-            account_role: "treasury",
+            account_role: "treasury".to_string(),
             account_id: declared.treasury_account.clone(),
             declared: declared.treasury_reserve.clone(),
             observed: observed.treasury_balance.clone(),
@@ -260,5 +260,82 @@ mod tests {
     fn parses_stellar_decimal_precision_without_float_rounding() {
         assert_eq!(parse_stroops("1.0000001").expect("amount"), 10_000_001);
         assert!(parse_stroops("1.00000001").is_err());
+    }
+
+    #[test]
+    fn test_shared_reserves_verification_vectors() {
+        let vectors_json = include_str!("../../../../fixtures/stellar-parity/vectors.json");
+        let parsed_json: serde_json::Value =
+            serde_json::from_str(vectors_json).expect("valid vectors json");
+        let reserve_vectors = parsed_json["reserves_verification"]
+            .as_array()
+            .expect("reserves_verification array");
+
+        for vector in reserve_vectors {
+            let id = vector["id"].as_str().unwrap();
+            let declared: Result<DeclaredReserves, _> =
+                serde_json::from_value(vector["declared"].clone());
+            let observed: Result<ObservedReserves, _> =
+                serde_json::from_value(vector["observed"].clone());
+            let valid_input = vector["valid_input"].as_bool().unwrap();
+
+            assert!(declared.is_ok(), "Vector {}: declared reserves should deserialize", id);
+            assert!(observed.is_ok(), "Vector {}: observed reserves should deserialize", id);
+
+            let result = validate_proof_of_reserve(&declared.unwrap(), &observed.unwrap());
+            if valid_input {
+                let report = result.expect("should produce report for valid input");
+                let expected_valid = vector["expected_valid"].as_bool().unwrap();
+                assert_eq!(
+                    report.valid, expected_valid,
+                    "Vector {}: report.valid mismatch",
+                    id
+                );
+                let expected_mismatches = vector["expected_mismatches"].as_array().unwrap();
+                assert_eq!(
+                    report.mismatches.len(),
+                    expected_mismatches.len(),
+                    "Vector {}: mismatches count mismatch",
+                    id
+                );
+                for (idx, expected_m) in expected_mismatches.iter().enumerate() {
+                    let actual_m = &report.mismatches[idx];
+                    assert_eq!(
+                        actual_m.account_role,
+                        expected_m["account_role"].as_str().unwrap(),
+                        "Vector {} mismatch {}: account_role mismatch",
+                        id,
+                        idx
+                    );
+                    assert_eq!(
+                        actual_m.account_id,
+                        expected_m["account_id"].as_str().unwrap(),
+                        "Vector {} mismatch {}: account_id mismatch",
+                        id,
+                        idx
+                    );
+                    assert_eq!(
+                        actual_m.declared,
+                        expected_m["declared"].as_str().unwrap(),
+                        "Vector {} mismatch {}: declared mismatch",
+                        id,
+                        idx
+                    );
+                    assert_eq!(
+                        actual_m.observed,
+                        expected_m["observed"].as_str().unwrap(),
+                        "Vector {} mismatch {}: observed mismatch",
+                        id,
+                        idx
+                    );
+                }
+            } else {
+                assert!(
+                    result.is_err(),
+                    "Vector {}: expected error for invalid input",
+                    id
+                );
+            }
+        }
     }
 }

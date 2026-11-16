@@ -1,19 +1,20 @@
-/// SEP-23 muxed account parsing for Stellar accounts.
-///
-/// Muxed accounts (StrKey type `MUXED_ACCOUNT_MED25519`) allow multiple logical
-/// accounts to share a single base ed25519 keypair, distinguished by a u64 ID.
-///
-/// Wire format (before base32 encoding):
-///   version_byte (1)  = 0x60
-///   muxed_id     (8)  = big-endian u64
-///   raw_pub_key  (32) = 32-byte ed25519 public key
-///   checksum     (2)  = CRC-16/XModem of the preceding 41 bytes, little-endian
-///
-/// The 43-byte payload is encoded with RFC 4648 base32 (no padding) and prefixed
-/// with the letter "M".  Regular G-addresses use version byte 0x06 and omit the
-/// muxed ID field.
+//! SEP-23 muxed account parsing for Stellar accounts.
+//!
+//! Muxed accounts (StrKey type `MUXED_ACCOUNT_MED25519`) allow multiple logical
+//! accounts to share a single base ed25519 keypair, distinguished by a u64 ID.
+//!
+//! Wire format (before base32 encoding):
+//!   version_byte (1)  = 0x60
+//!   muxed_id     (8)  = big-endian u64
+//!   raw_pub_key  (32) = 32-byte ed25519 public key
+//!   checksum     (2)  = CRC-16/XModem of the preceding 41 bytes, little-endian
+//!
+//! The 43-byte payload is encoded with RFC 4648 base32 (no padding) and prefixed
+//! with the letter "M".  Regular G-addresses use version byte 0x06 and omit the
+//! muxed ID field.
 
 use std::fmt;
+use serde::{Deserialize, Serialize};
 
 // ── Base32 (RFC 4648, no padding) ──────────────────────────────────────────
 
@@ -105,12 +106,34 @@ fn base32_encode(input: &[u8]) -> String {
 // ── Public types ──────────────────────────────────────────────────────────
 
 /// Represents a parsed Stellar account, either regular or muxed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StellarAccount {
     /// The base account public key (G-address).
     pub base_account: String,
     /// Optional multiplexed ID for distinguishing sub-accounts.
     pub muxed_id: Option<u64>,
+}
+
+/// Detailed account response format for API consumers and serialization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StellarAccountResponse {
+    pub base_account: String,
+    pub muxed_id: Option<u64>,
+    pub is_muxed: bool,
+    pub analytics_id: String,
+}
+
+impl From<StellarAccount> for StellarAccountResponse {
+    fn from(account: StellarAccount) -> Self {
+        let is_muxed = account.is_muxed();
+        let analytics_id = account.analytics_id();
+        Self {
+            base_account: account.base_account,
+            muxed_id: account.muxed_id,
+            is_muxed,
+            analytics_id,
+        }
+    }
 }
 
 impl StellarAccount {
@@ -203,7 +226,7 @@ impl fmt::Display for StellarAccount {
 }
 
 /// Errors that can occur during account parsing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParseError {
     EmptyAccount,
     InvalidFormat,
@@ -409,5 +432,69 @@ mod tests {
         let s = parsed.to_string();
         assert!(s.contains(':'), "expected '<G-addr>:<id>', got {}", s);
         assert!(s.ends_with(":42"), "expected ':42' suffix, got {}", s);
+    }
+
+    // ── Shared Test Vectors ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_shared_muxed_account_vectors() {
+        let vectors_json = include_str!("../../../../fixtures/stellar-parity/vectors.json");
+        let parsed_json: serde_json::Value =
+            serde_json::from_str(vectors_json).expect("valid vectors json");
+        let muxed_vectors = parsed_json["muxed_accounts"]
+            .as_array()
+            .expect("muxed_accounts array");
+
+        for vector in muxed_vectors {
+            let id = vector["id"].as_str().unwrap();
+            let input = vector["input"].as_str().unwrap();
+            let is_valid = vector["valid"].as_bool().unwrap();
+
+            match StellarAccount::parse(input) {
+                Ok(account) => {
+                    assert!(
+                        is_valid,
+                        "Vector {}: expected invalid, but parsed successfully: {:?}",
+                        id, account
+                    );
+                    let expected = &vector["expected"];
+                    assert_eq!(
+                        account.base_account,
+                        expected["base_account"].as_str().unwrap(),
+                        "Vector {}: base_account mismatch",
+                        id
+                    );
+                    if expected["muxed_id"].is_null() {
+                        assert_eq!(account.muxed_id, None, "Vector {}: muxed_id mismatch", id);
+                    } else {
+                        assert_eq!(
+                            account.muxed_id,
+                            Some(expected["muxed_id"].as_u64().unwrap()),
+                            "Vector {}: muxed_id mismatch",
+                            id
+                        );
+                    }
+                    assert_eq!(
+                        account.is_muxed(),
+                        expected["is_muxed"].as_bool().unwrap(),
+                        "Vector {}: is_muxed mismatch",
+                        id
+                    );
+                    assert_eq!(
+                        account.analytics_id(),
+                        expected["analytics_id"].as_str().unwrap(),
+                        "Vector {}: analytics_id mismatch",
+                        id
+                    );
+                }
+                Err(err) => {
+                    assert!(
+                        !is_valid,
+                        "Vector {}: expected valid, but failed with {:?}",
+                        id, err
+                    );
+                }
+            }
+        }
     }
 }
