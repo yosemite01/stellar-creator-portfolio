@@ -15,3 +15,5 @@ soroban-sdk.workspace = true
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

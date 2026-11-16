@@ -292,3 +292,24 @@ export async function fetchBounties(params?: {
   const query = qs.toString() ? `?${qs}` : '';
   return dedupedFetch(`${API_BASE}/bounties${query}`);
 }
+
+/** POST /api/v1/escrow/transaction — submit an escrow transaction (deposit, release, refund, dispute) */
+export async function submitEscrowTransaction(
+  payload: EscrowTransactionRequest,
+): Promise<EscrowTransactionResponse> {
+  return apiFetch(`${API_BASE}/escrow/transaction`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** POST /api/v1/escrow/:id/release — release funds from an escrow */
+export async function releaseEscrow(
+  escrowId: string,
+  authorizerAddress: string,
+): Promise<EscrowTransactionResponse> {
+  return apiFetch(`${API_BASE}/escrow/${escrowId}/release`, {
+    method: 'POST',
+    body: JSON.stringify({ authorizerAddress }),
+  });
+}
