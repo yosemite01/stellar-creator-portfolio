@@ -115,6 +115,7 @@ Handles secure payment escrow between creators and clients.
 - Hold payments in escrow
 - Release funds on milestones
 - Automated refunds if disputes occur
+- Auto-resolution of expired disputes via frozen split/fee snapshots (`SettledByTimeout`)
 - Multi-signature support for high-value bounties
 
 **Contract Interface:**

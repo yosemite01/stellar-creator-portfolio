@@ -95,7 +95,10 @@ impl<'a> ReentrancyGuard<'a> {
             .get::<Symbol, bool>(&key)
             .unwrap_or(false);
 
-        assert!(!locked, "Reentrancy detected: contract is already executing");
+        assert!(
+            !locked,
+            "Reentrancy detected: contract is already executing"
+        );
 
         // Set lock with a TTL of 1 ledger – it will be cleared automatically
         // even if the transaction panics, preventing permanent lock-up.
@@ -123,11 +126,19 @@ impl Drop for ReentrancyGuard<'_> {
 /// Returns `err` instead of panicking so callers surface a typed error code.
 #[inline(always)]
 pub fn require_active_escrow<E>(status_is_active: bool, err: E) -> Result<(), E> {
-    if status_is_active { Ok(()) } else { Err(err) }
+    if status_is_active {
+        Ok(())
+    } else {
+        Err(err)
+    }
 }
 
 /// Check that the caller is authorised to act on an escrow.
 #[inline(always)]
 pub fn require_authorized_party<E>(caller_is_party: bool, err: E) -> Result<(), E> {
-    if caller_is_party { Ok(()) } else { Err(err) }
+    if caller_is_party {
+        Ok(())
+    } else {
+        Err(err)
+    }
 }

@@ -55,6 +55,7 @@ safety net.
 | `released` | `Released` or `Complete` |
 | `refunded` | `Refunded` |
 | `disputed` | `Disputed` |
+| `settled_by_timeout` | `SettledByTimeout` |
 
 - **Record drift** in an `EscrowDrift` table: `escrowId`, `kind`, `dbValue`,
   `chainValue`, `detectedAt`, `lastSeenAt`, `resolvedAt`, with `@@unique([escrowId, kind])`
