@@ -1,13 +1,31 @@
 import { Header } from '@/components/layout/header'
 import { Footer } from '@/components/layout/footer'
 import { EarningsDashboard } from '@/components/analytics/earnings-dashboard'
+import { getServerSession } from '@/lib/auth/auth'
+import { prisma } from '@/lib/prisma'
+import { getLedgerEarningsTransactions } from '@/server/services/earnings-service'
+import { mockTransactions } from '@/lib/earnings-data'
 
 export const metadata = {
   title: 'Earnings | Tamgora',
   description: 'Track your freelance earnings and export tax documents.',
 }
 
-export default function EarningsPage() {
+export default async function EarningsPage() {
+  let initialTransactions = mockTransactions
+
+  try {
+    const session = await getServerSession().catch(() => null)
+    if (session?.user?.id) {
+      const realTxs = await getLedgerEarningsTransactions(session.user.id, prisma)
+      if (realTxs.length > 0) {
+        initialTransactions = realTxs
+      }
+    }
+  } catch {
+    // Fall back to mock fixture in development/offline
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Header />
@@ -18,7 +36,7 @@ export default function EarningsPage() {
             Track your income, filter by date range, and export tax documents.
           </p>
         </div>
-        <EarningsDashboard />
+        <EarningsDashboard initialTransactions={initialTransactions} />
       </main>
       <Footer />
     </div>
