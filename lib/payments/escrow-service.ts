@@ -10,6 +10,7 @@ export type EscrowStatus =
   | 'released'
   | 'refunded'
   | 'failed'
+  | 'settled_by_timeout'
 
 export interface EscrowRecord {
   id: string
@@ -126,6 +127,14 @@ export function markRefunded(escrowId: string): EscrowRecord | null {
   const e = getStore().escrows.get(escrowId)
   if (!e) return null
   e.status = 'refunded'
+  e.updatedAt = nowIso()
+  return e
+}
+
+export function markSettledByTimeout(escrowId: string): EscrowRecord | null {
+  const e = getStore().escrows.get(escrowId)
+  if (!e) return null
+  e.status = 'settled_by_timeout'
   e.updatedAt = nowIso()
   return e
 }

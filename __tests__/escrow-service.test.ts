@@ -8,6 +8,7 @@ import {
   markFundedAuthorized,
   markReleased,
   markRefunded,
+  markSettledByTimeout,
   getEscrow,
 } from '@/lib/payments/escrow-service'
 
@@ -57,5 +58,15 @@ describe('escrow-service', () => {
     })
     markRefunded(e.id)
     expect(getEscrow(e.id)?.status).toBe('refunded')
+  })
+
+  it('supports settled_by_timeout path', () => {
+    const e = createEscrow({
+      bountyId: 'b-1',
+      clientUserId: 'user-1',
+      amountCents: 2000,
+    })
+    markSettledByTimeout(e.id)
+    expect(getEscrow(e.id)?.status).toBe('settled_by_timeout')
   })
 })

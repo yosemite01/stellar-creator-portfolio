@@ -17,7 +17,8 @@ import {Address} from '@stellar/stellar-sdk';
   { tag: "DisputeSplit"; values: void } |
   { tag: "FeeConfig"; values: void } |
   { tag: "OracleStalenessSecs"; values: void } |
-  { tag: "OracleAddress"; values: void };
+  { tag: "OracleAddress"; values: void } |
+  { tag: "DisputeSplitSnapshot"; values: readonly [bigint] };
 
 /**
  * Governance-configurable fee configuration stored on-chain (#722).
@@ -80,7 +81,11 @@ export enum EscrowStatus {
   /**
    * Enum Case: Complete
    */
-  Complete = 4
+  Complete = 4,
+  /**
+   * Enum Case: SettledByTimeout
+   */
+  SettledByTimeout = 5,
 }
 
 /**
@@ -101,6 +106,9 @@ export interface EscrowAccount {
   amount: bigint;
   bounty_id: bigint;
   created_at: bigint;
+  dispute_fee_bps: bigint | null;
+  dispute_fee_cap: bigint | null;
+  dispute_split_bps: number | null;
   fee_collected: bigint;
   id: bigint;
   payee: string;

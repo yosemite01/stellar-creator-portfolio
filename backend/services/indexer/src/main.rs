@@ -394,8 +394,14 @@ const BOUNTY_EVENT_SIGNATURES: &[&str] = &[
 
 const FREELANCER_EVENT_SIGNATURES: &[&str] = &["freelancer_registered", "freelancer_verified"];
 
-const ESCROW_EVENT_SIGNATURES: &[&str] =
-    &["escrow_deposited", "escrow_released", "escrow_refunded"];
+const ESCROW_EVENT_SIGNATURES: &[&str] = &[
+    "escrow_deposited",
+    "escrow_released",
+    "escrow_refunded",
+    "escrow_settled_by_timeout",
+    "settled_by_timeout",
+    "auto_res",
+];
 
 fn allowed_event_signatures(
     cfg: &Config,
@@ -600,6 +606,14 @@ async fn handle_escrow_event(pool: &PgPool, event: &SorobanEvent, name: &str) ->
                 .execute(pool)
                 .await?;
             info!("Escrow {id} refunded");
+        }
+        "escrow_settled_by_timeout" | "settled_by_timeout" | "auto_res" => {
+            let id = value["id"].as_i64().unwrap_or(0);
+            sqlx::query("UPDATE chain_escrows SET status = 'SETTLED_BY_TIMEOUT' WHERE chain_id = $1")
+                .bind(id)
+                .execute(pool)
+                .await?;
+            info!("Escrow {id} settled by timeout");
         }
         _ => {
             warn!("Unknown escrow event topic: {name}");

@@ -128,11 +128,12 @@ export interface Client {
   /**
    * Auto-resolve a stale dispute after its expiry window has elapsed.
    * Anyone may call this — no auth required.
-   * Default resolution: 50/50 split (configurable via `set_dispute_split`).
+   * Resolves the dispute using the frozen split and fee snapshot recorded when the dispute was raised (#1830).
+   * Transitions escrow to SettledByTimeout and emits settled_by_timeout.
    *
-   * Panics if:
-   * - escrow is not in Disputed state
-   * - the expiry window has not yet elapsed
+   * Fails with:
+   * - EscrowNotDisputed if escrow is not in Disputed state
+   * - DisputeNotExpired if the expiry window has not yet elapsed
    */
   resolve_expired_dispute({ escrow_id }: { escrow_id: bigint }, options?: MethodOptions): Promise<AssembledTransaction<boolean>>;
   /**
