@@ -30,6 +30,8 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
     "backfill:embeddings": "node scripts/backfill-embeddings.mjs",
+    "fixtures:generate": "node scripts/generate-escrow-event-fixtures.mjs",
+    "fixtures:check": "node scripts/generate-escrow-event-fixtures.mjs --check",
     "i18n:web": "node scripts/i18n-validate.mjs",
     "i18n:mobile": "node mobile/scripts/i18n-validate.mjs",
     "i18n:check": "pnpm run i18n:web && pnpm run i18n:mobile",

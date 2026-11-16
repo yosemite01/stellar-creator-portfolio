@@ -1926,4 +1926,77 @@ mod tests {
         assert_eq!(withdrawn, accrued);
     }
 
+    // ── Issue #1828: Shared escrow event test fixtures verification ───────────
+
+    extern crate std;
+    use std::string::String;
+    use std::vec::Vec;
+
+    #[derive(serde::Deserialize, Debug)]
+    #[allow(dead_code)]
+    struct FixtureEvent {
+        id: String,
+        name: String,
+        operation: String,
+        ledger: u64,
+        #[serde(rename = "txHash")]
+        tx_hash: String,
+        timestamp: String,
+        topics: Vec<String>,
+        #[serde(rename = "contractData")]
+        contract_data: serde_json::Value,
+        #[serde(rename = "apiResponse")]
+        api_response: serde_json::Value,
+    }
+
+    #[derive(serde::Deserialize, Debug)]
+    #[allow(dead_code)]
+    struct LifecycleFixtures {
+        version: String,
+        #[serde(rename = "contractId")]
+        contract_id: String,
+        network: String,
+        events: Vec<FixtureEvent>,
+    }
+
+    #[test]
+    fn test_shared_escrow_event_fixtures_lifecycle() {
+        let json_data = include_str!("../../../../fixtures/escrow-events/v1/lifecycle.json");
+        let lifecycle: LifecycleFixtures =
+            serde_json::from_str(json_data).expect("Failed to parse shared escrow event fixtures");
+
+        assert_eq!(lifecycle.version, "1.0.0");
+        assert_eq!(lifecycle.network, "testnet");
+        assert!(
+            !lifecycle.events.is_empty(),
+            "Events list should not be empty"
+        );
+
+        let expected_names = [
+            "escrow_deposited",
+            "escrow_released",
+            "escrow_refunded",
+            "escrow_disputed",
+            "escrow_resolved",
+            "settled_by_timeout",
+            "milestone_released",
+        ];
+
+        for name in expected_names {
+            let found = lifecycle.events.iter().find(|e| e.name == name);
+            assert!(
+                found.is_some(),
+                "Expected event fixture '{}' not found in lifecycle.json",
+                name
+            );
+            let event = found.unwrap();
+            assert!(!event.id.is_empty());
+            assert!(!event.tx_hash.is_empty());
+            assert!(!event.timestamp.is_empty());
+            assert_eq!(event.topics.first().map(|s| s.as_str()), Some("escrow"));
+            assert!(event.contract_data.is_object());
+            assert!(event.api_response.is_object());
+        }
+    }
+
 }

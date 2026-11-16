@@ -1,0 +1,188 @@
+{
+  "version": "1.0.0",
+  "generatedAt": "2026-04-23T12:00:00.000Z",
+  "contractId": "CA3D5KRYMCMCZWATHGHAGH274G3T5OXZP36ENXVDL43G5X2O64ZTX4B6",
+  "network": "testnet",
+  "description": "Deterministic testnet escrow contract lifecycle events for testing TS and Rust parsers",
+  "events": [
+    {
+      "id": "evt-001-deposited",
+      "name": "escrow_deposited",
+      "operation": "deposit",
+      "ledger": 1042010,
+      "txHash": "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0",
+      "timestamp": "2026-04-23T12:00:00.000Z",
+      "topics": [
+        "escrow",
+        "deposited"
+      ],
+      "contractData": {
+        "escrowId": 1,
+        "bountyId": 101,
+        "payer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "payee": "GB5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "netAmount": 2438,
+        "fee": 62,
+        "grossAmount": 2500,
+        "token": "GUSDC789MCMCZWATHGHAGH274G3T5OXZP36ENXVDL43G5X2O64ZTX4B6"
+      },
+      "apiResponse": {
+        "escrowId": "1",
+        "txHash": "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0",
+        "operation": "deposit",
+        "status": "confirmed",
+        "timestamp": "2026-04-23T12:00:00.000Z"
+      }
+    },
+    {
+      "id": "evt-002-released",
+      "name": "escrow_released",
+      "operation": "release",
+      "ledger": 1042050,
+      "txHash": "b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01a",
+      "timestamp": "2026-04-23T13:00:00.000Z",
+      "topics": [
+        "escrow",
+        "released"
+      ],
+      "contractData": {
+        "escrowId": 1,
+        "bountyId": 101,
+        "payee": "GB5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "amount": 2438
+      },
+      "apiResponse": {
+        "escrowId": "1",
+        "txHash": "b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01a",
+        "operation": "release",
+        "status": "confirmed",
+        "timestamp": "2026-04-23T13:00:00.000Z"
+      }
+    },
+    {
+      "id": "evt-003-refunded",
+      "name": "escrow_refunded",
+      "operation": "refund",
+      "ledger": 1042100,
+      "txHash": "c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef012ab",
+      "timestamp": "2026-04-23T14:00:00.000Z",
+      "topics": [
+        "escrow",
+        "refunded"
+      ],
+      "contractData": {
+        "escrowId": 2,
+        "bountyId": 102,
+        "payer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "amount": 1000
+      },
+      "apiResponse": {
+        "escrowId": "2",
+        "txHash": "c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef012ab",
+        "operation": "refund",
+        "status": "confirmed",
+        "timestamp": "2026-04-23T14:00:00.000Z"
+      }
+    },
+    {
+      "id": "evt-004-disputed",
+      "name": "escrow_disputed",
+      "operation": "dispute",
+      "ledger": 1042150,
+      "txHash": "d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0123abc",
+      "timestamp": "2026-04-23T15:00:00.000Z",
+      "topics": [
+        "escrow",
+        "disputed"
+      ],
+      "contractData": {
+        "escrowId": 3,
+        "bountyId": 103,
+        "authorizer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "expiresAt": 1777032000
+      },
+      "apiResponse": {
+        "escrowId": "3",
+        "txHash": "d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0123abc",
+        "operation": "dispute",
+        "status": "pending",
+        "timestamp": "2026-04-23T15:00:00.000Z"
+      }
+    },
+    {
+      "id": "evt-005-resolved",
+      "name": "escrow_resolved",
+      "operation": "resolve",
+      "ledger": 1042200,
+      "txHash": "e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01234abcd",
+      "timestamp": "2026-04-23T16:00:00.000Z",
+      "topics": [
+        "escrow",
+        "resolved"
+      ],
+      "contractData": {
+        "escrowId": 3,
+        "bountyId": 103,
+        "recipient": "GB5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "releaseToPayee": true
+      },
+      "apiResponse": {
+        "escrowId": "3",
+        "txHash": "e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01234abcd",
+        "operation": "release",
+        "status": "confirmed",
+        "timestamp": "2026-04-23T16:00:00.000Z"
+      }
+    },
+    {
+      "id": "evt-006-settled-by-timeout",
+      "name": "settled_by_timeout",
+      "operation": "timeout",
+      "ledger": 1042250,
+      "txHash": "f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef012345abcde",
+      "timestamp": "2026-04-23T17:00:00.000Z",
+      "topics": [
+        "escrow",
+        "auto_res"
+      ],
+      "contractData": {
+        "escrowId": 4,
+        "bountyId": 104,
+        "payeeAmount": 1200,
+        "payerAmount": 1200
+      },
+      "apiResponse": {
+        "escrowId": "4",
+        "txHash": "f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef012345abcde",
+        "operation": "refund",
+        "status": "confirmed",
+        "timestamp": "2026-04-23T17:00:00.000Z"
+      }
+    },
+    {
+      "id": "evt-007-milestone-released",
+      "name": "milestone_released",
+      "operation": "milestone_release",
+      "ledger": 1042300,
+      "txHash": "0718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0123456abcdef",
+      "timestamp": "2026-04-23T18:00:00.000Z",
+      "topics": [
+        "escrow",
+        "ms_rel"
+      ],
+      "contractData": {
+        "escrowId": 5,
+        "index": 0,
+        "payee": "GB5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "amount": 500
+      },
+      "apiResponse": {
+        "escrowId": "5",
+        "txHash": "0718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0123456abcdef",
+        "operation": "release",
+        "status": "confirmed",
+        "timestamp": "2026-04-23T18:00:00.000Z"
+      }
+    }
+  ]
+}

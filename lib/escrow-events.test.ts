@@ -36,39 +36,32 @@ beforeEach(() => {
   vi.unstubAllGlobals();
 });
 
-// ── Event payload shape ───────────────────────────────────────────────────────
+// ── Event payload shape (backed by versioned fixtures) ───────────────────────
 
-const depositedEvent: EscrowTransactionResponse = {
-  escrowId: '1',
-  txHash: 'abc123def456',
-  operation: 'deposit',
-  status: 'confirmed',
-  timestamp: '2026-04-23T12:00:00Z',
+import lifecycleFixtures from '../fixtures/escrow-events/v1/lifecycle.json';
+
+const getEventFixture = (name: string) => {
+  const item = lifecycleFixtures.events.find((e) => e.name === name);
+  if (!item) throw new Error(`Missing fixture for event ${name}`);
+  return item;
 };
 
-const releasedEvent: EscrowTransactionResponse = {
-  escrowId: '1',
-  txHash: 'release789xyz',
-  operation: 'release',
-  status: 'confirmed',
-  timestamp: '2026-04-23T13:00:00Z',
-};
+const depositedFixture = getEventFixture('escrow_deposited');
+const releasedFixture = getEventFixture('escrow_released');
+const refundedFixture = getEventFixture('escrow_refunded');
+const disputedFixture = getEventFixture('escrow_disputed');
+const resolvedFixture = getEventFixture('escrow_resolved');
+const timeoutFixture = getEventFixture('settled_by_timeout');
+const milestoneFixture = getEventFixture('milestone_released');
 
-const refundedEvent: EscrowTransactionResponse = {
-  escrowId: '2',
-  txHash: 'refund000aaa',
-  operation: 'refund',
-  status: 'confirmed',
-  timestamp: '2026-04-23T14:00:00Z',
-};
-
-const disputedEvent: EscrowTransactionResponse = {
-  escrowId: '3',
-  txHash: 'dispute111bbb',
-  operation: 'dispute',
-  status: 'pending',
-  timestamp: '2026-04-23T15:00:00Z',
-};
+const depositedEvent: EscrowTransactionResponse =
+  depositedFixture.apiResponse as EscrowTransactionResponse;
+const releasedEvent: EscrowTransactionResponse =
+  releasedFixture.apiResponse as EscrowTransactionResponse;
+const refundedEvent: EscrowTransactionResponse =
+  refundedFixture.apiResponse as EscrowTransactionResponse;
+const disputedEvent: EscrowTransactionResponse =
+  disputedFixture.apiResponse as EscrowTransactionResponse;
 
 // ── submitEscrowTransaction — deposit event ───────────────────────────────────
 
@@ -88,7 +81,7 @@ describe('submitEscrowTransaction — deposit', () => {
     expect(result.escrowId).toBe('1');
     expect(result.operation).toBe('deposit');
     expect(result.status).toBe('confirmed');
-    expect(result.txHash).toBe('abc123def456');
+    expect(result.txHash).toBe(depositedEvent.txHash);
   });
 
   it('POSTs to /api/escrow/transaction', async () => {
@@ -188,7 +181,7 @@ describe('EscrowTransactionResponse data formatting', () => {
     });
     expect(result.operation).toBe('refund');
     expect(result.escrowId).toBe('2');
-    expect(result.txHash).toBe('refund000aaa');
+    expect(result.txHash).toBe(refundedEvent.txHash);
   });
 
   it('parses disputed event correctly', async () => {
@@ -213,7 +206,7 @@ describe('EscrowTransactionResponse data formatting', () => {
       payeeAddress: 'GPAYEE456',
       tokenAddress: 'GUSDC789',
     });
-    expect(result.timestamp).toBe('2026-04-23T12:00:00Z');
+    expect(result.timestamp).toBe(depositedEvent.timestamp);
   });
 });
 
@@ -309,5 +302,49 @@ describe('ApiClientError propagation from escrow endpoints', () => {
       code: 'UNPROCESSABLE_ENTITY',
       status: 422,
     });
+  });
+});
+
+// ── Issue #1828: Shared escrow event fixtures validation ─────────────────────
+
+describe('Escrow event lifecycle test fixtures', () => {
+  it('contains versioned lifecycle metadata', () => {
+    expect(lifecycleFixtures.version).toBe('1.0.0');
+    expect(lifecycleFixtures.network).toBe('testnet');
+    expect(lifecycleFixtures.events.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('has valid topics and data for all lifecycle events', () => {
+    const requiredEvents = [
+      'escrow_deposited',
+      'escrow_released',
+      'escrow_refunded',
+      'escrow_disputed',
+      'escrow_resolved',
+      'settled_by_timeout',
+      'milestone_released',
+    ];
+
+    for (const name of requiredEvents) {
+      const fixture = getEventFixture(name);
+      expect(fixture.topics[0]).toBe('escrow');
+      expect(fixture.txHash).toMatch(/^[0-9a-f]{64,67}$/i);
+      expect(fixture.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(fixture.contractData).toBeDefined();
+      expect(fixture.apiResponse).toBeDefined();
+    }
+  });
+
+  it('validates deposit fixture against validateEscrowTransaction', () => {
+    const depositData = depositedFixture.contractData;
+    const req: EscrowTransactionRequest = {
+      bountyId: `bounty-${depositData.bountyId}`,
+      operation: 'deposit',
+      amount: depositData.grossAmount,
+      payerAddress: depositData.payer,
+      payeeAddress: depositData.payee,
+      tokenAddress: depositData.token,
+    };
+    expect(validateEscrowTransaction(req)).toBeNull();
   });
 });
