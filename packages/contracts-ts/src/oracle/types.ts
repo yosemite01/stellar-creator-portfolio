@@ -1,6 +1,25 @@
 
 
-    /**
+/**
+ * Errors returned by the oracle contract.
+ */
+export enum OracleError {
+  AmountMustBePositive = 1,
+  PriceUnavailable = 2,
+  InvalidDecimals = 3,
+  Overflow = 4,
+  DivisionByZero = 5,
+}
+
+/**
+ * Rounding direction for token valuation.
+ */
+export enum Rounding {
+  Floor = 0,
+  Ceil = 1,
+}
+
+/**
  * A single price observation from the oracle network.
  */
 export interface PriceData {
@@ -23,11 +42,19 @@ export interface PriceData {
  */
 export interface ValuationResult {
   /**
-   * Price used for the conversion (micro-USD per token).
+   * Token decimals used for the conversion.
+   */
+  decimals: number;
+  /**
+   * Price used for the conversion (micro-USD per whole token).
    */
   price_used: bigint;
   /**
-   * Equivalent token amount at the locked-in price.
+   * Rounding direction applied during valuation.
+   */
+  rounding: Rounding;
+  /**
+   * Equivalent token amount at the locked-in price, in smallest token units (e.g. stroops).
    */
   token_amount: bigint;
   /**
@@ -35,7 +62,7 @@ export interface ValuationResult {
    */
   usd_amount_micro: bigint;
   /**
-   * Whether the fallback price was used instead of the live oracle price.
+   * Whether the fallback price was used instead of the live oracle price (always false on success).
    */
   used_fallback: boolean;
 }

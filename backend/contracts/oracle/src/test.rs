@@ -9,7 +9,7 @@
 //! previously open.
 
 use super::*;
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Ledger as _};
 
 fn setup() -> (Env, OracleContractClient<'static>, Address, Address) {
     let env = Env::default();
@@ -166,4 +166,163 @@ fn deviation_within_bound_is_accepted() {
     // +5%, inside the bound.
     client.update_price(&oracle, &price(&env, 105_000));
     assert_eq!(client.get_price().price_micro_usd, 105_000);
+}
+
+// ── Value in tokens tests (Issue #1829) ──────────────────────────────────────
+
+fn setup_active_oracle(price_micro_usd: i128) -> (Env, OracleContractClient<'static>) {
+    let (env, client, admin, oracle) = setup();
+    client.initialize(&admin);
+    client.set_oracle(&admin, &oracle);
+    client.update_price(&oracle, &price(&env, price_micro_usd));
+    (env, client)
+}
+
+#[test]
+fn value_in_tokens_rejects_fallback_price() {
+    let (_env, client, admin, _oracle) = setup();
+    client.initialize(&admin);
+
+    // No live price pushed: get_price returns fallback (sources == 0).
+    // Conversions must refuse fallback prices.
+    let res = client.try_value_in_tokens(&100_000_000, &7, &Rounding::Floor);
+    assert_eq!(res, Err(Ok(OracleError::PriceUnavailable)));
+}
+
+#[test]
+fn value_in_tokens_rejects_stale_price() {
+    let (env, client) = setup_active_oracle(1_000_000);
+
+    // Fast-forward past MAX_PRICE_AGE_SECS (300 seconds)
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + MAX_PRICE_AGE_SECS + 1);
+
+    let res = client.try_value_in_tokens(&100_000_000, &7, &Rounding::Floor);
+    assert_eq!(res, Err(Ok(OracleError::PriceUnavailable)));
+}
+
+#[test]
+fn value_in_tokens_rejects_non_positive_amount() {
+    let (_env, client) = setup_active_oracle(1_000_000);
+
+    assert_eq!(
+        client.try_value_in_tokens(&0, &7, &Rounding::Floor),
+        Err(Ok(OracleError::AmountMustBePositive))
+    );
+    assert_eq!(
+        client.try_value_in_tokens(&(-1_000_000), &7, &Rounding::Floor),
+        Err(Ok(OracleError::AmountMustBePositive))
+    );
+}
+
+#[test]
+fn value_in_tokens_rejects_invalid_decimals() {
+    let (_env, client) = setup_active_oracle(1_000_000);
+
+    assert_eq!(
+        client.try_value_in_tokens(&1_000_000, &19, &Rounding::Floor),
+        Err(Ok(OracleError::InvalidDecimals))
+    );
+}
+
+#[test]
+fn value_in_tokens_table_values_no_truncation() {
+    // $1.00 per token = 1_000_000 micro-USD
+    let (_env, client) = setup_active_oracle(1_000_000);
+
+    // Case 1: $0.50 (500_000 micro-USD) at $1.00/token with 7 decimals.
+    // Previously truncated to 0 whole tokens. Now gives 5_000_000 stroops (0.5 XLM).
+    let half_dollar = client.value_in_tokens(&500_000, &7, &Rounding::Floor);
+    assert_eq!(half_dollar.usd_amount_micro, 500_000);
+    assert_eq!(half_dollar.token_amount, 5_000_000);
+    assert_eq!(half_dollar.price_used, 1_000_000);
+    assert_eq!(half_dollar.decimals, 7);
+    assert_eq!(half_dollar.rounding, Rounding::Floor);
+    assert!(!half_dollar.used_fallback);
+
+    // Case 2: $149.99 (149_990_000 micro-USD) at $1.00/token with 7 decimals.
+    // Previously truncated to 149 whole tokens (losing 0.99 tokens).
+    let fractional = client.value_in_tokens(&149_990_000, &7, &Rounding::Floor);
+    assert_eq!(fractional.token_amount, 1_499_900_000);
+
+    // Case 3: $1,000,000,000 ($1e9 = 1_000_000_000_000_000 micro-USD) with 7 decimals.
+    // 1 billion tokens = 10_000_000_000_000_000 stroops.
+    let one_billion_usd: i128 = 1_000_000_000_i128 * 1_000_000;
+    let large_val = client.value_in_tokens(&one_billion_usd, &7, &Rounding::Floor);
+    assert_eq!(large_val.token_amount, 10_000_000_000_000_000);
+
+    // Case 4: 6 decimals (like USDC).
+    let usdc_val = client.value_in_tokens(&500_000, &6, &Rounding::Floor);
+    assert_eq!(usdc_val.token_amount, 500_000);
+
+    // Case 5: 18 decimals (like ETH/EVM standard).
+    let eth_val = client.value_in_tokens(&1_000_000, &18, &Rounding::Floor);
+    assert_eq!(eth_val.token_amount, 1_000_000_000_000_000_000);
+}
+
+#[test]
+fn value_in_tokens_rounding_direction_semantics() {
+    // 1 token = $0.12 = 120_000 micro-USD
+    let (_env, client) = setup_active_oracle(120_000);
+
+    // Convert $1.00 = 1_000_000 micro-USD with 7 decimals:
+    // numerator = 1_000_000 * 10^7 = 10_000_000_000_000
+    // 10_000_000_000_000 / 120_000 = 83_333_333 remainder 40_000
+    let floor_val = client.value_in_tokens(&1_000_000, &7, &Rounding::Floor);
+    assert_eq!(floor_val.token_amount, 83_333_333);
+    assert_eq!(floor_val.rounding, Rounding::Floor);
+
+    let ceil_val = client.value_in_tokens(&1_000_000, &7, &Rounding::Ceil);
+    assert_eq!(ceil_val.token_amount, 83_333_334);
+    assert_eq!(ceil_val.rounding, Rounding::Ceil);
+
+    // Exactly 1 stroop difference when remainder exists
+    assert_eq!(ceil_val.token_amount - floor_val.token_amount, 1);
+}
+
+#[test]
+fn value_in_tokens_round_trip_property() {
+    // Test that converting USD -> token_amount and back preserves amount within 1 stroop
+    let (_env, client) = setup_active_oracle(125_000); // $0.125 / token
+
+    let test_cases = [
+        100_000,       // $0.10
+        500_000,       // $0.50
+        1_000_000,     // $1.00
+        12_345_678,    // $12.345678
+        99_999_999,    // $99.999999
+        1_000_000_000, // $1000.00
+    ];
+
+    let decimals = 7;
+    let factor = 10_i128.pow(decimals);
+    let price_micro = 125_000;
+
+    for &usd in &test_cases {
+        let val_floor = client.value_in_tokens(&usd, &decimals, &Rounding::Floor);
+        // Recover USD from token amount: token_amount * price / factor
+        let recovered_usd = (val_floor.token_amount * price_micro) / factor;
+        // The difference in recovered USD must not exceed 1 token unit in micro-USD (price / factor + 1)
+        let diff = usd - recovered_usd;
+        assert!(
+            diff >= 0,
+            "Floor valuation must not over-credit token value"
+        );
+        assert!(
+            diff <= (price_micro / factor) + 1,
+            "Recovered USD delta must be within 1 token unit (diff={}, usd={})",
+            diff,
+            usd
+        );
+    }
+}
+
+#[test]
+fn value_in_tokens_overflow_boundary() {
+    let (_env, client) = setup_active_oracle(1_000_000);
+
+    // Extremely huge USD value that overflows i128 when scaled by 10^18
+    let huge_usd = i128::MAX / 10;
+    let res = client.try_value_in_tokens(&huge_usd, &18, &Rounding::Floor);
+    assert_eq!(res, Err(Ok(OracleError::Overflow)));
 }

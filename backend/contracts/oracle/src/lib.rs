@@ -12,12 +12,26 @@
 //! - Fallback logic when the oracle reports anomalous (stale or out-of-band) prices.
 //! - Atomic valuation helpers used at exact execution time.
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, Env, Symbol,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
 
 #[cfg(test)]
 mod test;
+
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
+
+/// Errors returned by the oracle contract.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum OracleError {
+    AmountMustBePositive = 1,
+    PriceUnavailable = 2,
+    InvalidDecimals = 3,
+    Overflow = 4,
+    DivisionByZero = 5,
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -37,6 +51,20 @@ pub const FALLBACK_PRICE_MICRO_USD: i128 = 120_000;
 // Data types
 // ---------------------------------------------------------------------------
 
+/// Rounding direction for token valuation.
+///
+/// Use `Floor` (round towards zero) when valuing user payouts or collateral withdrawals
+/// to protect the protocol pool from over-disbursing tokens.
+///
+/// Use `Ceil` (round away from zero) when valuing protocol fees or required deposit amounts
+/// to guarantee the protocol receives at least the targeted USD value.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Rounding {
+    Floor = 0,
+    Ceil = 1,
+}
+
 /// A single price observation from the oracle network.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -51,15 +79,19 @@ pub struct PriceData {
 
 /// Result of an atomic valuation at execution time.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValuationResult {
-    /// USD amount requested (micro-USD).
+    /// USD amount requested (micro-USD, e.g. $100 = 100_000_000).
     pub usd_amount_micro: i128,
-    /// Equivalent token amount at the locked-in price.
+    /// Equivalent token amount at the locked-in price, in smallest token units (e.g. stroops for 7 decimals).
     pub token_amount: i128,
-    /// Price used for the conversion (micro-USD per token).
+    /// Price used for the conversion (micro-USD per whole token).
     pub price_used: i128,
-    /// Whether the fallback price was used instead of the live oracle price.
+    /// Token decimals used for the conversion.
+    pub decimals: u32,
+    /// Rounding direction applied during valuation.
+    pub rounding: Rounding,
+    /// Whether the fallback price was used instead of the live oracle price (always false on success).
     pub used_fallback: bool,
 }
 
@@ -171,7 +203,10 @@ impl OracleContract {
             .set(&DataKey::LastPrice, &price_data);
 
         env.events().publish(
-            (Symbol::new(&env, "oracle"), Symbol::new(&env, "price_updated")),
+            (
+                Symbol::new(&env, "oracle"),
+                Symbol::new(&env, "price_updated"),
+            ),
             (price_data.price_micro_usd, price_data.timestamp),
         );
     }
@@ -204,25 +239,67 @@ impl OracleContract {
     /// Convert a USD-denominated bounty amount to tokens at the current oracle
     /// price, atomically at the moment of execution.
     ///
-    /// `usd_amount_micro` – the bounty value in micro-USD (e.g. $100 = 100_000_000).
-    pub fn value_in_tokens(env: Env, usd_amount_micro: i128) -> ValuationResult {
-        assert!(usd_amount_micro > 0, "Amount must be positive");
+    /// - `usd_amount_micro`: The bounty value in micro-USD (e.g. $100 = 100_000_000).
+    /// - `decimals`: The number of decimal places of the token (e.g. 7 for Stellar assets in stroops, up to 18).
+    /// - `rounding`: Explicit rounding direction:
+    ///   - `Rounding::Floor` (towards zero): Recommended for user payouts and collateral claims to prevent over-disbursing tokens.
+    ///   - `Rounding::Ceil` (away from zero): Recommended for protocol fees and required deposits to ensure full USD coverage.
+    ///
+    /// Returns `Err(OracleError::PriceUnavailable)` if live oracle data is stale or absent
+    /// (refusing silent conversions against fallback constants).
+    pub fn value_in_tokens(
+        env: Env,
+        usd_amount_micro: i128,
+        decimals: u32,
+        rounding: Rounding,
+    ) -> Result<ValuationResult, OracleError> {
+        if usd_amount_micro <= 0 {
+            return Err(OracleError::AmountMustBePositive);
+        }
+        if decimals > 18 {
+            return Err(OracleError::InvalidDecimals);
+        }
 
-        let price_data = Self::get_price(env.clone());
-        let used_fallback = price_data.sources == 0;
+        let price_data = Self::get_price(env);
+        // Refuse conversions on stale or fallback prices (sources == 0 indicates fallback)
+        if price_data.sources == 0 || price_data.price_micro_usd <= 0 {
+            return Err(OracleError::PriceUnavailable);
+        }
 
-        // token_amount = usd_amount_micro / price_micro_usd
-        // Both values are in micro-units so the result is in whole tokens.
-        let token_amount = usd_amount_micro
-            .checked_div(price_data.price_micro_usd)
-            .expect("Division by zero in price conversion");
+        let price_micro_usd = price_data.price_micro_usd;
 
-        ValuationResult {
+        let scaling_factor = 10_i128.checked_pow(decimals).ok_or(OracleError::Overflow)?;
+
+        let numerator = usd_amount_micro
+            .checked_mul(scaling_factor)
+            .ok_or(OracleError::Overflow)?;
+
+        let quotient = numerator
+            .checked_div(price_micro_usd)
+            .ok_or(OracleError::DivisionByZero)?;
+        let remainder = numerator
+            .checked_rem(price_micro_usd)
+            .ok_or(OracleError::DivisionByZero)?;
+
+        let token_amount = match rounding {
+            Rounding::Floor => quotient,
+            Rounding::Ceil => {
+                if remainder > 0 {
+                    quotient.checked_add(1).ok_or(OracleError::Overflow)?
+                } else {
+                    quotient
+                }
+            }
+        };
+
+        Ok(ValuationResult {
             usd_amount_micro,
             token_amount,
-            price_used: price_data.price_micro_usd,
-            used_fallback,
-        }
+            price_used: price_micro_usd,
+            decimals,
+            rounding,
+            used_fallback: false,
+        })
     }
 
     // ── Internal ─────────────────────────────────────────────────────────────
@@ -235,7 +312,11 @@ impl OracleContract {
     /// Propose a WASM upgrade. Admin-only. Returns the ledger timestamp after
     /// which `execute_upgrade` may be called (now + 48h). Emits
     /// `(upgrade, proposed)`.
-    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) -> u64 {
+    pub fn propose_upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+    ) -> u64 {
         let stored_admin: Address = env
             .storage()
             .persistent()
