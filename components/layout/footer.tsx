@@ -94,7 +94,7 @@ export function Footer() {
 
         {/* Bottom */}
         <div className="border-t border-border pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
-          <p className="text-xs sm:text-sm text-muted-foreground">
+          <p className="text-xs sm:text-sm text-muted-foreground" suppressHydrationWarning>
             &copy; {currentYear} Tamgora. All rights reserved.
           </p>
           <div className="flex items-center gap-6">

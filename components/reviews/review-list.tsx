@@ -86,7 +86,7 @@ export function ReviewList({ reviews, creatorName }: ReviewListProps) {
                         </span>
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</p>
+                    <p className="text-xs text-muted-foreground whitespace-nowrap" suppressHydrationWarning>{timeAgo}</p>
                   </div>
 
                   <p className="font-medium text-sm mb-1">{review.title}</p>

@@ -31,7 +31,7 @@ export function TourTooltip({
   const [position, setPosition] = useState({ top: 0, left: 0 });
 
   useEffect(() => {
-    if (!targetRect) return;
+    if (typeof window === 'undefined' || !targetRect) return;
 
     const padding = 16;
     const tooltipHeight = 200;

@@ -217,12 +217,12 @@ export default function FeatureFlagsAdminPage() {
                 </td>
 
                 {/* Evaluations count */}
-                <td className="px-4 py-3 text-muted-foreground tabular-nums">
+                <td className="px-4 py-3 text-muted-foreground tabular-nums" suppressHydrationWarning>
                   {flag._count.evaluations.toLocaleString()}
                 </td>
 
                 {/* Updated at */}
-                <td className="px-4 py-3 text-muted-foreground text-xs">
+                <td className="px-4 py-3 text-muted-foreground text-xs" suppressHydrationWarning>
                   {new Date(flag.updatedAt).toLocaleString()}
                 </td>
 

@@ -72,6 +72,9 @@ provides:
 
 - `HydrationSafe` — wrapper component: renders `fallback` until mounted, the
   real children after.
+- `SafeDate` — formats dates safely across SSR/client with proper `dateTime` attribute and `suppressHydrationWarning`.
+- `SafeNumber` — formats numbers and currency with deterministic locale and `suppressHydrationWarning`.
+- `useMounted()` — `true` only after mount.
 - `useClientOnly()` — `true` only after mount.
 - `useBrowserOnly(getValue, defaultValue)` — safely reads a browser-only
   value, falling back to `defaultValue` on the server/before mount.
@@ -81,12 +84,26 @@ provides:
   hydration-safe.
 
 ```typescript
-import { HydrationSafe } from '@/lib/hydration/hydration-safe';
+import { HydrationSafe, SafeDate, SafeNumber } from '@/lib/hydration/hydration-safe';
 
 <HydrationSafe fallback={<Skeleton />}>
   <ExpensiveChart />
 </HydrationSafe>;
+
+<SafeDate date={bounty.deadline} format="date" />
+<SafeNumber value={bounty.budget} style="currency" />
 ```
+
+## Automated Hydration Detection and CI Gate (Issue #1826)
+
+To prevent hydration regressions from reaching production:
+
+1. **Static Hazard Detection (`pnpm run check:hydration`)**:
+   Runs `scripts/check-hydration-hazards.mjs`, scanning component trees for unguarded `window`/`document` access, `Math.random()` in render bodies, and dynamic date expressions.
+2. **Playwright E2E Hydration Suite (`pnpm run test:hydration`)**:
+   Runs `e2e/hydration.spec.ts`, navigating through all core application routes (`/`, `/creators`, `/bounties`, `/freelancers`) and failing loudly if any React hydration mismatch errors or warnings are emitted in the browser console.
+3. **CI Pipeline Integration**:
+   `check:hydration` runs as a mandatory check in `.github/workflows/ci.yml` on every pull request.
 
 ## Patterns to follow / avoid
 

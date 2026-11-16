@@ -130,7 +130,7 @@ export function KYCReviewPanel() {
                     <td className="px-4 py-3 font-medium">{submission.name}</td>
                     <td className="px-4 py-3 text-muted-foreground">{submission.userEmail}</td>
                     <td className="px-4 py-3">{submission.documentType}</td>
-                    <td className="px-4 py-3 text-muted-foreground">
+                    <td className="px-4 py-3 text-muted-foreground" suppressHydrationWarning>
                       {new Date(submission.uploadedAt).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3">

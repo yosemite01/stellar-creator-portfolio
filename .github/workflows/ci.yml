@@ -55,6 +55,8 @@ jobs:
         run: pnpm run i18n:check
       - name: Route auth declarations
         run: pnpm exec tsx scripts/check-route-auth.ts
+      - name: Hydration safety check
+        run: pnpm run check:hydration
       - name: Unit tests
         run: pnpm test
       - name: Build

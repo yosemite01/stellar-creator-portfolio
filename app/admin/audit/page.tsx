@@ -87,7 +87,7 @@ export default function AdminAuditPage() {
                     {log.note && <span> · {log.note}</span>}
                   </div>
                 </div>
-                <span className="text-xs text-muted-foreground shrink-0 mt-0.5">{formatTimestamp(log.timestamp)}</span>
+                <span className="text-xs text-muted-foreground shrink-0 mt-0.5" suppressHydrationWarning>{formatTimestamp(log.timestamp)}</span>
               </div>
             ))}
             {filtered.length === 0 && (

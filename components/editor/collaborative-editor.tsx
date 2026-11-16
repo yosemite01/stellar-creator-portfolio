@@ -72,8 +72,12 @@ export function CollaborativeEditor({
     process.env.NEXT_PUBLIC_COLLAB_WS_URL ??
     'ws://localhost:1234'
 
-  // Stable user identity for this session
-  const [user] = useState<CollabUser>(() => ({ name: randomName(), color: randomColor() }))
+  // Stable user identity for this session — initialized stably to prevent SSR/hydration mismatch
+  const [user, setUser] = useState<CollabUser>({ name: 'Creator', color: CURSOR_COLORS[0] })
+
+  useEffect(() => {
+    setUser({ name: randomName(), color: randomColor() })
+  }, [])
 
   // Yjs document & provider – both scoped to docId so they are fully
   // destroyed and recreated whenever the document changes, preventing leaks.

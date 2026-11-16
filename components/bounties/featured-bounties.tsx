@@ -83,7 +83,7 @@ export function FeaturedBounties() {
                 </div>
                 <div className="flex items-center gap-2">
                   <Clock size={16} className="text-accent" aria-hidden="true" />
-                  <span className="text-sm text-muted-foreground">
+                  <span className="text-sm text-muted-foreground" suppressHydrationWarning>
                     {Math.ceil(
                       (bounty.deadline.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
                     )}{' '}

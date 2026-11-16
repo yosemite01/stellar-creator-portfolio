@@ -16,6 +16,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:hydration": "playwright test e2e/hydration.spec.ts",
+    "check:hydration": "node scripts/check-hydration-hazards.mjs",
     "db:test:up": "docker compose -f docker-compose.test.yml up -d",
     "db:test:down": "docker compose -f docker-compose.test.yml down -v",
     "check-all": "make check-all",
