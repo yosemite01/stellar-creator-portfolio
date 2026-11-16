@@ -168,6 +168,8 @@ model CreatorProfile {
   hourlyRate        Float?
   projectRateMin    Float?
   projectRateMax    Float?
+  /// Server-side profile completion percentage (0-100, issue #1825)
+  completionScore   Int              @default(0)
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -179,6 +181,7 @@ model CreatorProfile {
   @@index([discipline])
   @@index([verificationTier])
   @@index([acceptingWork])
+  @@index([completionScore])
 }
 
 /// Immutable audit trail of tier changes

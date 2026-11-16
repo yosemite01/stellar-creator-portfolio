@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
-import { prisma } from '@/lib/prisma';
-import { computeProfileCompletion } from '@/lib/profile-completion';
+import { syncCreatorProfileCompletion } from '@/server/services/profile-events';
 
 export async function GET() {
   const session = await getServerSession();
@@ -9,23 +8,16 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const profile = await prisma.creatorProfile.findUnique({
-    where: { userId: session.user.id },
-    select: {
-      displayName: true,
-      avatar: true,
-      bio: true,
-      skills: true,
-      portfolio: true,
-      githubUrl: true,
-      linkedinUrl: true,
-      verified: true,
-    },
-  });
+  const result = await syncCreatorProfileCompletion(session.user.id);
+  return NextResponse.json(result);
+}
 
-  if (!profile) {
-    return NextResponse.json(computeProfileCompletion({}));
+export async function POST() {
+  const session = await getServerSession();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  return NextResponse.json(computeProfileCompletion(profile));
+  const result = await syncCreatorProfileCompletion(session.user.id);
+  return NextResponse.json(result);
 }

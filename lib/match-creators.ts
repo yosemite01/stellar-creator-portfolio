@@ -61,6 +61,7 @@ const CREATOR_SELECT = {
   skills: true,
   rating: true,
   completedProjects: true,
+  completionScore: true,
   acceptingWork: true,
   hourlyRate: true,
   projectRateMin: true,
@@ -76,6 +77,7 @@ function toCreatorFeatures(p: {
   skills: string[];
   rating: number;
   completedProjects: number;
+  completionScore?: number;
   acceptingWork: boolean;
   hourlyRate: number | null;
   projectRateMin: number | null;
@@ -90,6 +92,7 @@ function toCreatorFeatures(p: {
     skills: p.skills,
     rating: p.rating,
     completedProjects: p.completedProjects,
+    completionScore: p.completionScore,
     acceptingWork: p.acceptingWork,
     hourlyRate: p.hourlyRate,
     projectRateMin: p.projectRateMin,

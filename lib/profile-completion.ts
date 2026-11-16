@@ -23,6 +23,13 @@ export interface ProfileCompletionResult {
   missing: ProfileCompletionField[];
 }
 
+export const PROFILE_COMPLETION_THRESHOLDS = {
+  MINIMUM_FOR_MATCHING: 20,
+  RECOMMENDED_MINIMUM: 70,
+  HIGH_VISIBILITY: 85,
+  PERFECT: 100,
+} as const;
+
 function hasPortfolioItem(portfolio: unknown): boolean {
   if (!portfolio) return false;
   if (Array.isArray(portfolio)) return portfolio.length > 0;
