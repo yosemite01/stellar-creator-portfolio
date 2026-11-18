@@ -8,10 +8,17 @@
 mod reentrancy;
 use reentrancy::{require_active_escrow, require_authorized_party, ReentrancyGuard};
 
+// Per-dispute arbitration (#1713)
+pub mod arbitration;
+pub use arbitration::{
+    vote_commitment, ArbitrationConfig, Arbiter, CasePhase, DisputeCase, Evidence,
+};
+
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec,
     token::Client as TokenClient,
 };
+use stellar_contract_ttl::{self as ttl, TtlPolicy};
 
 /// Escrow Status
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -41,7 +48,9 @@ pub const DEFAULT_PLATFORM_FEE_BPS: i128 = 250;
 pub const DEFAULT_PLATFORM_FEE_CAP: i128 = 500;
 
 /// Dispute timeout: 30 days in ledger seconds (#731).
-/// After this window anyone can call `resolve_expired_dispute` for a 50/50 split.
+/// If no arbiter panel could be drawn for a dispute within this window, anyone
+/// can call `resolve_expired_dispute` for a fixed 50/50 split (#1713). The
+/// split is a constant: there is no admin-settable dispute outcome any more.
 pub const DISPUTE_TIMEOUT_SECS: u64 = 30 * 24 * 3600;
 
 /// Bounds for the governance-configurable oracle freshness threshold (#1110).
@@ -152,7 +161,6 @@ pub enum DataKey {
     MilestoneReleasedCount(u64),
     MilestoneReleasedAmount(u64),
     DisputeExpiry(u64),
-    DisputeSplit,
     FeeConfig,
     OracleStalenessSecs,
     OracleAddress,
@@ -268,11 +276,17 @@ fn escrow_key(env: &Env, escrow_id: u64) -> (Symbol, u64) {
     (Symbol::new(env, "escrow"), escrow_id)
 }
 
+/// Loads an escrow and extends its TTL (#1720): every read and every write
+/// path goes through here, so an escrow that is touched stays live.
 fn load_escrow(env: &Env, escrow_id: u64) -> Result<EscrowAccount, EscrowError> {
-    env.storage()
+    let key = escrow_key(env, escrow_id);
+    let escrow = env
+        .storage()
         .persistent()
-        .get::<(Symbol, u64), EscrowAccount>(&escrow_key(env, escrow_id))
-        .ok_or(EscrowError::EscrowNotFound)
+        .get::<(Symbol, u64), EscrowAccount>(&key)
+        .ok_or(EscrowError::EscrowNotFound)?;
+    ttl::extend(env, &key, TtlPolicy::UserEntry);
+    Ok(escrow)
 }
 
 fn stored_admin(env: &Env) -> Result<Address, EscrowError> {
@@ -447,6 +461,9 @@ impl EscrowContract {
             .persistent()
             .set(&(Symbol::new(&env, "b_esc"), bounty_id), &counter);
         env.storage().persistent().set(&counter_key, &counter);
+        ttl::extend(&env, &escrow_key(&env, counter), TtlPolicy::UserEntry);
+        ttl::extend(&env, &(Symbol::new(&env, "b_esc"), bounty_id), TtlPolicy::UserEntry);
+        ttl::extend(&env, &counter_key, TtlPolicy::Config);
 
         // Emit escrow_deposited event for indexers
         env.events().publish(
@@ -741,6 +758,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::DisputeExpiry(escrow_id), &expires_at);
+        ttl::extend(&env, &DataKey::DisputeExpiry(escrow_id), TtlPolicy::UserEntry);
 
         // Emit escrow_disputed event for indexers
         env.events().publish(
@@ -748,45 +766,78 @@ impl EscrowContract {
             (escrow_id, escrow.bounty_id, authorizer, expires_at),
         );
 
+        // #1713: draw an arbiter panel right away when the pool allows it.
+        // If it doesn't, `open_dispute_case` can be called later, and
+        // `resolve_expired_dispute` is the fallback after the expiry window.
+        if arbitration::load_config(&env).is_ok() {
+            let _ = arbitration::open_case(&env, &escrow);
+        }
+
         Ok(true)
     }
 
-    /// Resolve a disputed escrow. Only the platform admin may call this.
-    ///
-    /// `resolution`: `true` → release funds to payee; `false` → refund to payer.
-    pub fn resolve_dispute(
-        env: Env,
-        admin: Address,
-        escrow_id: u64,
-        release_to_payee: bool,
-    ) -> Result<bool, EscrowError> {
+    // ── Issue #1713: per-dispute arbitration ─────────────────────────────────
+    //
+    // The admin-only `resolve_dispute` and the global `set_dispute_split` are
+    // gone. Outcomes are decided per dispute by a randomly drawn, staked
+    // arbiter panel using commit-reveal voting, with one appeal to a larger
+    // panel. See docs/escrow-arbitration.md.
+
+    /// One-time setup of the arbiter stake token and minimum stake. The admin
+    /// cannot change it later and has no say in any outcome.
+    pub fn configure_arbitration(env: Env, admin: Address, stake_token: Address, min_stake: i128) -> Result<(), EscrowError> {
         admin.require_auth();
-        let _guard = ReentrancyGuard::acquire(&env);
-
-        // Verify caller is the stored platform admin
         require_admin(&env, &admin)?;
+        arbitration::configure(&env, stake_token, min_stake)
+    }
 
-        let key = escrow_key(&env, escrow_id);
-        let mut escrow = load_escrow(&env, escrow_id)?;
+    pub fn get_arbitration_config(env: Env) -> Result<ArbitrationConfig, EscrowError> {
+        arbitration::load_config(&env)
+    }
 
+    /// Stake `amount` of the stake token to join (or top up in) the arbiter pool.
+    pub fn register_arbiter(env: Env, arbiter: Address, amount: i128) -> Result<Arbiter, EscrowError> {
+        arbiter.require_auth();
+        let _guard = ReentrancyGuard::acquire(&env);
+        arbitration::register(&env, arbiter, amount)
+    }
+
+    /// Withdraw stake. Not allowed while the arbiter sits on an open panel.
+    pub fn withdraw_arbiter_stake(env: Env, arbiter: Address, amount: i128) -> Result<i128, EscrowError> {
+        arbiter.require_auth();
+        let _guard = ReentrancyGuard::acquire(&env);
+        arbitration::withdraw(&env, arbiter, amount)
+    }
+
+    pub fn get_arbiter(env: Env, arbiter: Address) -> Result<Arbiter, EscrowError> {
+        arbitration::load_arbiter(&env, &arbiter)
+    }
+
+    /// Draw a panel for a disputed escrow that has none yet (e.g. the pool was
+    /// too small when the dispute was raised). Anyone may call.
+    pub fn open_dispute_case(env: Env, escrow_id: u64) -> Result<DisputeCase, EscrowError> {
+        let escrow = load_escrow(&env, escrow_id)?;
         ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        arbitration::open_case(&env, &escrow)
+    }
 
-        let recipient = if release_to_payee {
-            escrow.payee.clone()
-        } else {
-            escrow.payer.clone()
-        };
+    pub fn get_dispute_case(env: Env, escrow_id: u64) -> Result<DisputeCase, EscrowError> {
+        arbitration::load_case(&env, escrow_id)
+    }
 
-        TokenClient::new(&env, &escrow.token)
-            .transfer(&env.current_contract_address(), &recipient, &escrow.amount);
+    /// Anchor an evidence hash on-chain. `hash` is the sha256 returned by
+    /// `POST /api/disputes/:id/evidence` (`evidenceHash`). Payer or payee only.
+    pub fn submit_evidence(env: Env, party: Address, escrow_id: u64, hash: BytesN<32>) -> Result<u32, EscrowError> {
+        party.require_auth();
+        let escrow = load_escrow(&env, escrow_id)?;
+        ensure(party == escrow.payer || party == escrow.payee, EscrowError::Unauthorized)?;
+        ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        arbitration::submit_evidence(&env, escrow_id, party, hash)
+    }
 
-        escrow.status = if release_to_payee {
-            EscrowStatus::Released
-        } else {
-            EscrowStatus::Refunded
-        };
-        escrow.released_at = Some(env.ledger().timestamp());
-        env.storage().persistent().set(&key, &escrow);
+    pub fn get_evidence(env: Env, escrow_id: u64) -> Vec<Evidence> {
+        arbitration::load_evidence(&env, escrow_id)
+    }
 
         // #1711: record the verified outcome for insurance claims.
         let (payer_amount, payee_amount) = if release_to_payee {
@@ -802,37 +853,63 @@ impl EscrowContract {
             (escrow_id, escrow.bounty_id, recipient, release_to_payee),
         );
 
+    /// Reveal a committed vote between the commit and reveal deadlines.
+    pub fn reveal_vote(env: Env, arbiter: Address, escrow_id: u64, payee_bps: u32, salt: BytesN<32>) -> Result<(), EscrowError> {
+        arbiter.require_auth();
+        arbitration::reveal(&env, escrow_id, arbiter, payee_bps, salt)
+    }
+
+    /// Close the current round after its reveal deadline. Anyone may call.
+    /// Round 0 produces an appealable ruling; an appeal round's ruling is
+    /// final and paid out immediately.
+    pub fn tally_dispute(env: Env, escrow_id: u64) -> Result<DisputeCase, EscrowError> {
+        let _guard = ReentrancyGuard::acquire(&env);
+        let mut escrow = load_escrow(&env, escrow_id)?;
+        ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        let case = arbitration::tally(&env, &escrow)?;
+        if case.phase == CasePhase::Final {
+            if let Some(bps) = case.ruling_bps {
+                settle_dispute(&env, &mut escrow, bps);
+            }
+        }
+        Ok(case)
+    }
+
+    /// Appeal a round-0 ruling within the appeal window. Payer or payee only.
+    /// Draws a fresh, larger panel that excludes the first panel.
+    pub fn appeal_ruling(env: Env, party: Address, escrow_id: u64) -> Result<DisputeCase, EscrowError> {
+        party.require_auth();
+        let escrow = load_escrow(&env, escrow_id)?;
+        ensure(party == escrow.payer || party == escrow.payee, EscrowError::Unauthorized)?;
+        ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        arbitration::appeal(&env, &escrow, party)
+    }
+
+    /// Pay out an unappealed round-0 ruling once the appeal window closes.
+    /// Anyone may call.
+    pub fn execute_ruling(env: Env, escrow_id: u64) -> Result<bool, EscrowError> {
+        let _guard = ReentrancyGuard::acquire(&env);
+        let mut escrow = load_escrow(&env, escrow_id)?;
+        ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        let bps = arbitration::finalize_unappealed(&env, escrow_id)?;
+        settle_dispute(&env, &mut escrow, bps);
         Ok(true)
     }
 
-    // ── Issue #731: Dispute resolution timeout ────────────────────────────────
-
-    /// Configure the default auto-resolution split in basis points paid to the
-    /// payee. 5000 = 50/50. Only the platform admin may call this.
-    pub fn set_dispute_split(env: Env, admin: Address, payee_bps: u32) -> Result<(), EscrowError> {
-        admin.require_auth();
-        require_admin(&env, &admin)?;
-        ensure(payee_bps <= 10_000, EscrowError::InvalidBps)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::DisputeSplit, &payee_bps);
-        Ok(())
-    }
-
-    /// Auto-resolve a stale dispute after its expiry window has elapsed.
-    /// Anyone may call this — no auth required.
-    /// Default resolution: 50/50 split (configurable via `set_dispute_split`).
+    /// Fallback for a dispute that never got a panel (no or too few arbiters)
+    /// once its expiry window has elapsed: fixed 50/50 split. Anyone may call.
     ///
     /// Fails with:
     ///   - `EscrowNotDisputed` if escrow is not in Disputed state
+    ///   - `CaseAlreadyOpen` if an arbiter panel is handling the dispute
     ///   - `DisputeNotExpired` if the expiry window has not yet elapsed
     pub fn resolve_expired_dispute(env: Env, escrow_id: u64) -> Result<bool, EscrowError> {
         let _guard = ReentrancyGuard::acquire(&env);
 
-        let key = escrow_key(&env, escrow_id);
         let mut escrow = load_escrow(&env, escrow_id)?;
 
         ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        ensure(!arbitration::has_case(&env, escrow_id), EscrowError::CaseAlreadyOpen)?;
 
         let expires_at: u64 = env
             .storage()
@@ -842,24 +919,7 @@ impl EscrowContract {
 
         ensure(env.ledger().timestamp() >= expires_at, EscrowError::DisputeNotExpired)?;
 
-        // Determine split: default 50/50 unless governance has set otherwise
-        let payee_bps: u32 = env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&DataKey::DisputeSplit)
-            .unwrap_or(5_000); // 50% to payee
-
-        let payee_amount = escrow.amount * (payee_bps as i128) / 10_000;
-        let payer_amount = escrow.amount - payee_amount;
-
-        let token = TokenClient::new(&env, &escrow.token);
-
-        if payee_amount > 0 {
-            token.transfer(&env.current_contract_address(), &escrow.payee, &payee_amount);
-        }
-        if payer_amount > 0 {
-            token.transfer(&env.current_contract_address(), &escrow.payer, &payer_amount);
-        }
+        let (payee_amount, payer_amount) = settle_dispute(&env, &mut escrow, arbitration::DEFAULT_PAYEE_BPS);
 
         escrow.status = EscrowStatus::Refunded; // closest semantic: funds dispersed
         escrow.released_at = Some(env.ledger().timestamp());
