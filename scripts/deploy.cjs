@@ -46,6 +46,10 @@ const NETWORK    = process.env.STELLAR_NETWORK;
 const RPC_URL    = process.env.STELLAR_RPC_URL;
 const PASSPHRASE = process.env.STELLAR_NETWORK_PASSPHRASE;
 const ADMIN_SECRET = process.env.STELLAR_ADMIN_SECRET;
+// Public G... address that becomes the on-chain admin of contracts with a
+// constructor (bounty, escrow). Passed to `__constructor` inside the deploy
+// transaction so admin can't be front-run (issue #1708).
+const CONTRACT_ADMIN = process.env.STELLAR_CONTRACT_ADMIN;
 
 // Guard: refuse to run against mainnet without an explicit network flag.
 if (NETWORK === "mainnet" && !SIMULATE_ONLY && !ADMIN_SECRET) {
@@ -87,8 +91,8 @@ const WASM_DIR = process.env.WASM_DIR || "backend/target/wasm32v1-none/release";
 // is the one package whose Cargo name has no `stellar-*-contract` prefix, so
 // both candidates are identical for it.
 const CONTRACTS = [
-  { name: "bounty",     wasmCandidates: ["stellar_bounty_contract.wasm", "bounty.wasm"],         outputKey: "bounty_contract_id" },
-  { name: "escrow",     wasmCandidates: ["stellar_escrow_contract.wasm", "escrow.wasm"],          outputKey: "escrow_contract_id" },
+  { name: "bounty",     wasmCandidates: ["stellar_bounty_contract.wasm", "bounty.wasm"],         outputKey: "bounty_contract_id", constructorAdmin: true },
+  { name: "escrow",     wasmCandidates: ["stellar_escrow_contract.wasm", "escrow.wasm"],          outputKey: "escrow_contract_id", constructorAdmin: true },
   { name: "freelancer", wasmCandidates: ["stellar_freelancer_contract.wasm", "freelancer.wasm"],  outputKey: "freelancer_contract_id" },
   { name: "governance", wasmCandidates: ["stellar_governance_contract.wasm", "governance.wasm"],  outputKey: "governance_contract_id" },
   { name: "oracle",     wasmCandidates: ["oracle.wasm"],                                          outputKey: "oracle_contract_id" },
@@ -194,6 +198,20 @@ function simulateContract(contract) {
 // Deploy: upload wasm + instantiate contract
 // ---------------------------------------------------------------------------
 
+/**
+ * Constructor args appended to `stellar contract deploy`. Contracts flagged
+ * `constructorAdmin` set their admin atomically at deploy (issue #1708), so
+ * there is no separate, front-runnable `set_admin` / `initialize` call.
+ */
+function constructorArgs(contract) {
+  if (!contract.constructorAdmin) return "";
+  if (!/^G[A-Z2-7]{55}$/.test(CONTRACT_ADMIN || "")) {
+    console.error(`❌ STELLAR_CONTRACT_ADMIN (a G... address) is required to deploy ${contract.name}.`);
+    process.exit(1);
+  }
+  return ` -- --admin "${CONTRACT_ADMIN}"`;
+}
+
 function deployContract(contract) {
   const wasmPath = resolveWasm(contract);
 
@@ -212,7 +230,7 @@ function deployContract(contract) {
       --wasm-hash "${wasmHash}" \
       --rpc-url "${RPC_URL}" \
       --network-passphrase "${PASSPHRASE}" \
-      --source "${ADMIN_SECRET}"`
+      --source "${ADMIN_SECRET}"${constructorArgs(contract)}`
   );
 
   setOutput(contract.outputKey, contractId);

@@ -1010,12 +1010,12 @@ impl EscrowContract {
     pub fn set_admin(env: Env, admin: Address) -> Result<(), EscrowError> {
         admin.require_auth();
         let admin_key = Symbol::new(&env, "platform_admin");
-        ensure(
-            env.storage().persistent().get::<Symbol, Address>(&admin_key).is_none(),
-            EscrowError::AdminAlreadySet,
-        )?;
+        // Defensive: a constructor only ever runs once, but never overwrite.
+        if env.storage().persistent().has(&admin_key) {
+            panic_with_error!(&env, EscrowError::AdminAlreadySet);
+        }
         env.storage().persistent().set(&admin_key, &admin);
-        Ok(())
+        env.events().publish((symbol_short!("escrow"), symbol_short!("admin_set")), admin);
     }
 
     /// Get the current platform admin address.
@@ -1816,7 +1816,7 @@ mod tests {
     fn deposit_net_amount_reflects_fee_deduction() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let escrow = contract.get_escrow(&id);
@@ -1827,7 +1827,7 @@ mod tests {
     #[test]
     fn calculate_fee_public_fn_matches_platform_fee() {
         let env = Env::default();
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         assert_eq!(contract.calculate_fee(&1000), 25);
         assert_eq!(contract.calculate_fee(&30_000), 500);
@@ -1838,7 +1838,7 @@ mod tests {
     fn test_deposit_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         assert_eq!(id, 1);
@@ -1855,7 +1855,7 @@ mod tests {
     fn deposit_zero_amount_panics() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 0);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         contract.deposit(&1u64, &payer, &payee, &0, &token, &ReleaseCondition::OnCompletion);
     }
 
@@ -1865,7 +1865,7 @@ mod tests {
     fn release_moves_balance_once_to_payee() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -1885,7 +1885,7 @@ mod tests {
     fn double_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.release_funds(&payer, &id);
         contract.release_funds(&payer, &id);
@@ -1896,7 +1896,7 @@ mod tests {
     fn release_rejects_non_party_authorizer() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.release_funds(&Address::generate(&env), &id);
     }
@@ -1907,7 +1907,7 @@ mod tests {
     fn refund_returns_funds_to_payer_and_sets_released_at() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 800);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         let id = contract.deposit(&1u64, &payer, &payee, &800, &token, &ReleaseCondition::OnCompletion);
@@ -1924,7 +1924,7 @@ mod tests {
     fn refund_rejects_payee_authorizer() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.refund_escrow(&payee, &id);
     }
@@ -1934,7 +1934,7 @@ mod tests {
     fn double_refund_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.refund_escrow(&payer, &id);
         contract.refund_escrow(&payer, &id);
@@ -1945,7 +1945,7 @@ mod tests {
     fn refund_after_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.release_funds(&payee, &id);
         contract.refund_escrow(&payer, &id);
@@ -1956,7 +1956,7 @@ mod tests {
     fn release_after_refund_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.refund_escrow(&payer, &id);
         contract.release_funds(&payee, &id);
@@ -1968,7 +1968,7 @@ mod tests {
     fn payer_can_dispute_active_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
         assert!(contract.get_escrow(&id).status == EscrowStatus::Disputed);
@@ -1978,7 +1978,7 @@ mod tests {
     fn payee_can_dispute_active_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payee, &id);
         assert!(contract.get_escrow(&id).status == EscrowStatus::Disputed);
@@ -1989,7 +1989,7 @@ mod tests {
     fn stranger_cannot_dispute() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&Address::generate(&env), &id);
     }
@@ -1999,7 +1999,7 @@ mod tests {
     fn cannot_dispute_released_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.release_funds(&payer, &id);
         contract.dispute_escrow(&payer, &id);
@@ -2010,7 +2010,7 @@ mod tests {
     fn cannot_release_disputed_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
         contract.release_funds(&payee, &id);
@@ -2021,8 +2021,9 @@ mod tests {
     #[test]
     fn admin_can_resolve_dispute_to_payee() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (admin.clone(),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
@@ -2042,8 +2043,9 @@ mod tests {
     #[test]
     fn admin_can_resolve_dispute_to_payer() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (admin.clone(),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
@@ -2064,8 +2066,9 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #4)")]
     fn non_admin_cannot_resolve_dispute() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
@@ -2080,8 +2083,9 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #10)")]
     fn cannot_resolve_active_escrow() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
@@ -2098,7 +2102,7 @@ mod tests {
     fn resolve_expired_dispute_panics_before_expiry() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
@@ -2111,7 +2115,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = soroban_sdk::token::Client::new(&env, &token);
 
@@ -2136,16 +2140,39 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #3)")]
-    fn set_admin_can_only_be_called_once() {
+    fn constructor_sets_admin_atomically_at_deploy() {
         let env = Env::default();
-        let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
-        let _ = (token, payer, payee); // suppress unused warnings
-
+        env.mock_all_auths();
         let admin = Address::generate(&env);
-        contract.set_admin(&admin);
-        contract.set_admin(&admin); // second call must panic
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
+        assert_eq!(contract.get_admin(), admin);
+    }
+
+    #[test]
+    fn admin_changes_only_via_two_step_transfer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let next = Address::generate(&env);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
+
+        contract.propose_admin(&admin, &next);
+        // Nomination alone does not move authority.
+        assert_eq!(contract.get_admin(), admin);
+        contract.accept_admin(&next);
+        assert_eq!(contract.get_admin(), next);
+    }
+
+    #[test]
+    #[should_panic]
+    fn stranger_cannot_propose_admin_after_deploy() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin,)));
+        // Regression for #1708: there is no first-caller-wins path left.
+        contract.propose_admin(&attacker, &attacker);
     }
 
     // ── timelock ──────────────────────────────────────────────────────────────────
@@ -2155,7 +2182,7 @@ mod tests {
     fn release_before_timelock_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         env.ledger().set_timestamp(100);
         let id = contract.deposit(&1u64, &payer, &payee, &500, &token, &ReleaseCondition::Timelock(200));
         contract.release_funds(&payer, &id);
@@ -2165,7 +2192,7 @@ mod tests {
     fn release_after_timelock_succeeds() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         env.ledger().set_timestamp(100);
         let id = contract.deposit(&1u64, &payer, &payee, &500, &token, &ReleaseCondition::Timelock(200));
@@ -2180,7 +2207,7 @@ mod tests {
     fn milestone_release_transfers_partial_amount() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -2198,7 +2225,7 @@ mod tests {
     fn double_milestone_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let desc = Symbol::new(&env, "phase1");
         contract.add_milestone(&payer, &id, &0, &desc, &400);
@@ -2212,7 +2239,7 @@ mod tests {
     fn payee_cannot_add_milestone() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payee, &id, &0, &Symbol::new(&env, "x"), &400);
     }
@@ -2222,7 +2249,7 @@ mod tests {
     fn payee_cannot_release_milestone() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "x"), &400);
         contract.release_milestone(&payee, &id, &0);
@@ -2233,7 +2260,7 @@ mod tests {
     fn milestone_exceeding_escrow_amount_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "x"), &1001);
     }
@@ -2245,7 +2272,7 @@ mod tests {
     fn balance_conservation_release() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 2500);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
@@ -2264,7 +2291,7 @@ mod tests {
     fn balance_conservation_refund() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1800);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
@@ -2283,7 +2310,7 @@ mod tests {
     fn releasing_one_escrow_does_not_drain_another() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 3000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
@@ -2306,7 +2333,7 @@ mod tests {
     fn test_get_escrow_id_for_bounty() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let b_id = 99u64;
         let e_id = contract.deposit(&b_id, &payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
@@ -2320,7 +2347,7 @@ mod tests {
     fn escrow_ids_are_monotonically_increasing() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 3000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let id1 = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let id2 = contract.deposit(&2u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -2339,7 +2366,7 @@ mod tests {
     fn disputed_escrow_funds_stay_locked() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract_id = env.register(EscrowContract, ());
+        let contract_id = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &contract_id);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -2356,7 +2383,7 @@ mod tests {
     fn cumulative_milestone_sum_exceeding_escrow_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &975, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
         contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &600);
@@ -2366,7 +2393,7 @@ mod tests {
     fn releasing_all_milestones_marks_escrow_complete() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
         contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &375);
@@ -2384,7 +2411,7 @@ mod tests {
     fn two_milestones_total_payout_equals_deposit() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract_id = env.register(EscrowContract, ());
+        let contract_id = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &contract_id);
         let token_client = TokenClient::new(&env, &token);
 
@@ -2404,7 +2431,7 @@ mod tests {
     fn milestone_cross_escrow_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 2000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let id_a = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let id_b = contract.deposit(&2u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -2421,7 +2448,7 @@ mod tests {
     fn deposit_negative_amount_panics() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         contract.deposit(&1u64, &payer, &payee, &-1, &token, &ReleaseCondition::OnCompletion);
     }
 
@@ -2432,7 +2459,7 @@ mod tests {
     fn release_at_exact_timelock_boundary_succeeds() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         env.ledger().set_timestamp(100);
@@ -2452,7 +2479,7 @@ mod tests {
     fn release_one_second_before_timelock_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         env.ledger().set_timestamp(100);
         let id = contract.deposit(&1u64, &payer, &payee, &500, &token, &ReleaseCondition::Timelock(200));
@@ -2466,12 +2493,11 @@ mod tests {
     #[test]
     fn admin_can_pause_and_unpause_yield() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
         let _ = (token, payer, payee);
 
-        let admin = Address::generate(&env);
-        contract.set_admin(&admin);
 
         assert!(!contract.is_yield_paused());
 
@@ -2486,12 +2512,11 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #4)")]
     fn non_admin_cannot_pause_yield() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
         let _ = (token, payer, payee);
 
-        let admin = Address::generate(&env);
-        contract.set_admin(&admin);
 
         let stranger = Address::generate(&env);
         contract.pause_yield(&stranger);
@@ -2501,8 +2526,9 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #19)")]
     fn accrue_yield_blocked_when_paused() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
@@ -2520,8 +2546,9 @@ mod tests {
     #[test]
     fn withdraw_yield_allowed_when_paused() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 10_000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (admin.clone(),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         let admin = Address::generate(&env);
