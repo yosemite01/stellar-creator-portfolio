@@ -670,3 +670,13 @@ mod test {
         client.migrate_reset_stats(&f);
     }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    FreelancerContract,
+    FreelancerContractClient,
+    |env, id, admin| {
+        FreelancerContractClient::new(&env, &id).initialize(&admin);
+    }
+);

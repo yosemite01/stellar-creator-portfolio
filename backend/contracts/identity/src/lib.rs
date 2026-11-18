@@ -473,6 +473,7 @@ impl IdentityContract {
             Some(a) => attestation_valid(&env, &a) && (a.level as u8) >= (required_level as u8),
             None => false,
         }
+        (level as u8) >= (required_level as u8)
     }
 
     /// The stored attestation (legacy records mapped to schema v1), valid or
@@ -496,11 +497,22 @@ impl IdentityContract {
 
         write_attestation(&env, &user, KycLevel::Basic, &issuer, ONE_YEAR_SECS);
 
+    /// Delete a pre-#1718 plaintext `KycAttestation` for `user`. Admin-only.
+    /// Returns `false` if there was nothing to delete. Ledger history still
+    /// holds the old value; this only removes it from current state.
+    ///
+    /// Event: `(kyc, purged)` → `user`.
+    pub fn purge_legacy_kyc(env: Env, admin: Address, user: Address) -> bool {
+        Self::require_admin(&env, &admin, "Only admin can purge KYC");
+        let legacy = DataKey::KycAttestation(user.clone());
+        if !env.storage().persistent().has(&legacy) {
+            return false;
+        }
+        env.storage().persistent().remove(&legacy);
         env.events().publish(
-            (symbol_short!("kyc"), symbol_short!("verified")),
-            (user, kyc_submission_id),
+            (symbol_short!("kyc"), symbol_short!("purged")),
+            user,
         );
-
         true
     }
 
@@ -519,10 +531,20 @@ impl IdentityContract {
         env.storage().persistent().remove(&DataKey::Kyc(user.clone()));
         env.storage().persistent().remove(&DataKey::KycAttestation(user.clone()));
 
-        env.events().publish(
-            (symbol_short!("kyc"), symbol_short!("revoked")),
-            (user, attestation.level),
+    fn store_commitment(env: &Env, user: &Address, commitment: &BytesN<32>) {
+        let now = env.ledger().timestamp();
+        env.storage().persistent().set(
+            &DataKey::KycCommitment(user.clone()),
+            &KycCommitment {
+                commitment: commitment.clone(),
+                attested_at: now,
+                expires_at: now + ONE_YEAR_SECS,
+            },
         );
+        // Writing a commitment also drops any legacy plaintext record.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::KycAttestation(user.clone()));
     }
 
     /// Attest a creator's verification tier on-chain. Admin-only.
@@ -675,3 +697,13 @@ impl IdentityContract {
 #[cfg(test)]
 mod test;
 
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    IdentityContract,
+    IdentityContractClient,
+    |env, id, admin| {
+        IdentityContractClient::new(&env, &id).initialize(&admin);
+    }
+);

@@ -948,3 +948,13 @@ mod tests {
         c.record_bounty_completion(&admin, &creator, &1);
     }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    StellarInsights,
+    StellarInsightsClient,
+    |env, id, admin| {
+        StellarInsightsClient::new(&env, &id).initialize(&admin, &soroban_sdk::Address::generate(&env));
+    }
+);

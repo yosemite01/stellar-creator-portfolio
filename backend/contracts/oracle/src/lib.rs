@@ -674,3 +674,13 @@ fn deviation_bps(old: i128, new: i128) -> i128 {
     let diff = if new > old { new - old } else { old - new };
     diff * 10_000 / old
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    OracleContract,
+    OracleContractClient,
+    |env, id, admin| {
+        OracleContractClient::new(&env, &id).initialize(&admin);
+    }
+);

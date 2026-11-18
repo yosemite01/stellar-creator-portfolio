@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 stellar-upgradeable = { path = "../upgradeable" }
 soroban-sdk.workspace = true
+stellar-upgradeable = { path = "../upgradeable" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

@@ -1129,3 +1129,13 @@ mod tests {
         assert_eq!(1_000i128 * INSURANCE_BPS / 10_000, 1);
     }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    InsuranceContract,
+    InsuranceContractClient,
+    |env, id, admin| {
+        InsuranceContractClient::new(&env, &id).initialize(&admin);
+    }
+);

@@ -3,7 +3,7 @@
 use soroban_sdk::{Address, BytesN, Env};
 use stellar_contract_test_utils::{new_address, test_env};
 
-use crate::{IdentityContract, IdentityContractClient, KycLevel};
+use crate::{DataKey, IdentityContract, IdentityContractClient, KycAttestation, KycLevel};
 
 fn deploy(env: &Env) -> (IdentityContractClient<'_>, Address) {
     let admin = new_address(env);
@@ -208,17 +208,53 @@ fn test_multiple_proofs_per_user() {
     assert!(client.has_proof(&owner, &hash2));
 }
 
+// ── KYC commitments (Issue #1718) ────────────────────────────────────────────
+
+fn salt(env: &Env, seed: u8) -> BytesN<32> {
+    BytesN::from_array(env, &[seed; 32])
+}
+
+/// Independent re-implementation of the commitment so the test pins the
+/// on-chain encoding: sha256([level as u8] || salt).
+fn commit(env: &Env, level: KycLevel, s: &BytesN<32>) -> BytesN<32> {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update([level as u8]);
+    h.update(s.to_array());
+    let out = h.finalize();
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&out);
+    BytesN::from_array(env, &arr)
+}
+
 #[test]
-fn test_kyc_attestation_by_admin_only() {
+fn test_kyc_commitment_matches_offchain_encoding() {
+    let env = test_env();
+    let (client, _admin) = deploy(&env);
+    let s = salt(&env, 3);
+    for level in [KycLevel::Basic, KycLevel::Enhanced, KycLevel::Institutional] {
+        assert_eq!(client.compute_kyc_commitment(&level, &s), commit(&env, level, &s));
+    }
+}
+
+#[test]
+fn test_attest_kyc_stores_only_commitment() {
     let env = test_env();
     let (client, admin) = deploy(&env);
     let user = new_address(&env);
+    let s = salt(&env, 9);
+    let c = commit(&env, KycLevel::Enhanced, &s);
 
-    // Admin can attest
-    client.attest_kyc(&admin, &user, &KycLevel::Enhanced);
-    let att = client.get_kyc_attestation(&user);
-    assert!(att.is_some());
-    assert_eq!(att.unwrap().level, KycLevel::Enhanced);
+    client.attest_kyc(&admin, &user, &c);
+    let stored = client.get_kyc_commitment(&user).unwrap();
+    assert_eq!(stored.commitment, c);
+    assert!(!client.has_legacy_kyc(&user));
+
+    // No plaintext record exists in storage.
+    let cid = client.address.clone();
+    env.as_contract(&cid, || {
+        assert!(!env.storage().persistent().has(&DataKey::KycAttestation(user.clone())));
+    });
 }
 
 #[test]
@@ -228,31 +264,116 @@ fn test_non_admin_attest_kyc_fails() {
     let (client, _admin) = deploy(&env);
     let user = new_address(&env);
     let non_admin = new_address(&env);
-
-    // Non-admin cannot attest
-    client.attest_kyc(&non_admin, &user, &KycLevel::Basic);
+    let c = commit(&env, KycLevel::Basic, &salt(&env, 1));
+    client.attest_kyc(&non_admin, &user, &c);
 }
 
 #[test]
-fn test_attest_kyc_succeeds() {
+fn test_check_kyc_with_valid_opening() {
     let env = test_env();
     let (client, admin) = deploy(&env);
     let user = new_address(&env);
-    client.attest_kyc(&admin, &user, &KycLevel::Basic);
-    let attestation = client.get_kyc_attestation(&user).unwrap();
-    assert_eq!(attestation.user, user);
-    assert_eq!(attestation.level, KycLevel::Basic);
+    let s = salt(&env, 5);
+    client.attest_kyc(&admin, &user, &commit(&env, KycLevel::Enhanced, &s));
+
+    assert!(client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Enhanced, &s));
+    assert!(client.check_kyc(&user, &KycLevel::Enhanced, &KycLevel::Enhanced, &s));
+    assert!(!client.check_kyc(&user, &KycLevel::Institutional, &KycLevel::Enhanced, &s));
 }
 
 #[test]
-fn test_check_kyc_succeeds() {
+fn test_check_kyc_rejects_forged_level_or_wrong_salt() {
     let env = test_env();
     let (client, admin) = deploy(&env);
     let user = new_address(&env);
-    client.attest_kyc(&admin, &user, &KycLevel::Enhanced);
-    assert!(client.check_kyc(&user, &KycLevel::Basic));
-    assert!(client.check_kyc(&user, &KycLevel::Enhanced));
-    assert!(!client.check_kyc(&user, &KycLevel::Institutional));
+    let s = salt(&env, 5);
+    client.attest_kyc(&admin, &user, &commit(&env, KycLevel::Basic, &s));
+
+    // Claiming a higher level than committed fails.
+    assert!(!client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Institutional, &s));
+    // Wrong salt fails.
+    assert!(!client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 6)));
+    // Another user's opening does not carry over.
+    let other = new_address(&env);
+    assert!(!client.check_kyc(&other, &KycLevel::Basic, &KycLevel::Basic, &s));
+}
+
+#[test]
+fn test_check_kyc_expires_after_one_year() {
+    use soroban_sdk::testutils::Ledger as _;
+    let env = test_env();
+    let (client, admin) = deploy(&env);
+    let user = new_address(&env);
+    let s = salt(&env, 2);
+    client.attest_kyc(&admin, &user, &commit(&env, KycLevel::Basic, &s));
+    let exp = client.get_kyc_commitment(&user).unwrap().expires_at;
+    env.ledger().set_timestamp(exp + 1);
+    assert!(!client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &s));
+}
+
+#[test]
+fn test_verify_kyc_and_revoke() {
+    let env = test_env();
+    let (client, admin) = deploy(&env);
+    let user = new_address(&env);
+    let s = salt(&env, 4);
+    let c = commit(&env, KycLevel::Basic, &s);
+    assert!(client.verify_kyc(&admin, &user, &c, &BytesN::from_array(&env, &[8; 32])));
+    assert!(client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &s));
+
+    client.revoke_kyc(&admin, &user);
+    assert!(client.get_kyc_commitment(&user).is_none());
+    assert!(!client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &s));
+}
+
+#[test]
+fn test_purge_legacy_plaintext_kyc() {
+    let env = test_env();
+    let (client, admin) = deploy(&env);
+    let user = new_address(&env);
+    let cid = client.address.clone();
+
+    // Seed a pre-#1718 plaintext record.
+    env.as_contract(&cid, || {
+        env.storage().persistent().set(
+            &DataKey::KycAttestation(user.clone()),
+            &KycAttestation {
+                user: user.clone(),
+                level: KycLevel::Enhanced,
+                attested_at: 0,
+                expires_at: 1,
+            },
+        );
+    });
+    assert!(client.has_legacy_kyc(&user));
+    assert!(client.purge_legacy_kyc(&admin, &user));
+    assert!(!client.has_legacy_kyc(&user));
+    assert!(!client.purge_legacy_kyc(&admin, &user));
+}
+
+#[test]
+fn test_new_commitment_replaces_legacy_record() {
+    let env = test_env();
+    let (client, admin) = deploy(&env);
+    let user = new_address(&env);
+    let cid = client.address.clone();
+    env.as_contract(&cid, || {
+        env.storage().persistent().set(
+            &DataKey::KycAttestation(user.clone()),
+            &KycAttestation { user: user.clone(), level: KycLevel::Basic, attested_at: 0, expires_at: 1 },
+        );
+    });
+    client.attest_kyc(&admin, &user, &commit(&env, KycLevel::Basic, &salt(&env, 1)));
+    assert!(!client.has_legacy_kyc(&user));
+}
+
+#[test]
+#[should_panic(expected = "Only admin can purge KYC")]
+fn test_non_admin_cannot_purge_legacy_kyc() {
+    let env = test_env();
+    let (client, _admin) = deploy(&env);
+    let user = new_address(&env);
+    client.purge_legacy_kyc(&new_address(&env), &user);
 }
 
 // ── Issue #1717: expiry, issuer registry, rotation and revocation ──────────

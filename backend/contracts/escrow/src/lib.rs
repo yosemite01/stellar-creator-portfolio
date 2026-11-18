@@ -569,6 +569,7 @@ impl EscrowContract {
             ensure(age_secs <= max_staleness, EscrowError::OraclePriceStale)?;
         }
 
+        let payout = remaining_principal(&env, &escrow);
         escrow.status = EscrowStatus::Released;
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
@@ -602,6 +603,7 @@ impl EscrowContract {
         let remaining = remaining_amount(&env, &escrow);
 
         // EFFECTS – mutate state before any cross-contract call
+        let payout = remaining_principal(&env, &escrow);
         escrow.status = EscrowStatus::Refunded;
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
@@ -1173,8 +1175,7 @@ impl EscrowContract {
         env.storage().persistent().set(&m_key, &milestone);
 
         // INTERACTIONS – external call after state is finalised
-        TokenClient::new(&env, &escrow.token)
-            .transfer(&env.current_contract_address(), &escrow.payee, &milestone.amount);
+        pay_liability(&env, escrow_id, &escrow.token, &escrow.payee, milestone.amount)?;
 
         // Emit milestone_released event for indexers: gross / fee / net.
         env.events().publish(
@@ -1430,13 +1431,19 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Accrue yield for an active escrow strictly within the contract.
+    /// Accrue the yield *entitlement* for an active escrow.
     ///
-    /// Yield is calculated as a pro-rata share of the annual rate scaled to the
-    /// elapsed seconds since `last_updated`.  The accrual is capped at
-    /// `max_yield_ratio` of the principal to prevent unbounded growth.
+    /// `accrued` is a cap on what `withdraw_yield` may take for this escrow;
+    /// it is never paid out of principal. Actual payouts are bounded by the
+    /// measured surplus (`get_surplus`), see `withdraw_yield` (#1706).
     ///
-    /// No tokens move during accrual — the number is a credit held internally.
+    /// Path-independent (#1707): the sub-unit remainder of
+    /// `principal * rate_bps * elapsed` is carried in `YieldRemainder`, so N
+    /// calls over Δt accrue exactly what one call over NΔt does. Calling it
+    /// every ledger therefore cannot zero out yield, and the entrypoint can
+    /// safely stay permissionless.
+    ///
+    /// Event: `(yield, accrued)` → `(escrow_id, new_yield, accrued)`.
     pub fn accrue_yield(env: Env, escrow_id: u64) -> Result<(), EscrowError> {
         ensure(!Self::is_yield_paused(env.clone()), EscrowError::YieldPaused)?;
 
@@ -1452,6 +1459,7 @@ impl EscrowContract {
 
         let now = env.ledger().timestamp();
         let yield_key = DataKey::Yield(escrow_id);
+        let rem_key = DataKey::YieldRemainder(escrow_id);
 
         let mut accrual: YieldAccrual = env
             .storage()
@@ -1469,23 +1477,24 @@ impl EscrowContract {
             return Ok(());
         }
 
-        // new_yield = principal * rate_bps * elapsed / (10_000 * SECONDS_PER_YEAR)
-        const SECONDS_PER_YEAR: u64 = 365 * 24 * 3600;
-        let new_yield = accrual.principal
-            * (cfg.rate_bps as i128)
-            * (elapsed as i128)
-            / (10_000_i128 * SECONDS_PER_YEAR as i128);
+        let carry: i128 = env.storage().persistent().get(&rem_key).unwrap_or(0);
+        let (new_yield, new_carry) =
+            accrue_with_carry(accrual.principal, cfg.rate_bps, elapsed, carry)
+                .ok_or(EscrowError::Overflow)?;
 
         accrual.accrued = accrual.accrued.saturating_add(new_yield);
+        let mut carry_out = new_carry;
 
         // Apply max yield cap: accrued must not exceed max_yield_ratio of principal
         let yield_cap = accrual.principal * (cfg.max_yield_ratio as i128) / 10_000;
-        if accrual.accrued > yield_cap {
+        if accrual.accrued >= yield_cap {
             accrual.accrued = yield_cap;
+            carry_out = 0;
         }
 
         accrual.last_updated = now;
         env.storage().persistent().set(&yield_key, &accrual);
+        env.storage().persistent().set(&rem_key, &carry_out);
 
         env.events().publish(
             (symbol_short!("yield"), symbol_short!("accrued")),
@@ -1503,18 +1512,90 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
-    /// Withdraw accrued yield to the platform admin.
+    /// Enable or disable `withdraw_yield` (#1706). Disabled by default.
+    /// Admin-only. Event: `(yield, wd_flag)` → `enabled`.
+    pub fn set_yield_withdraw_enabled(env: Env, admin: Address, enabled: bool) -> Result<(), EscrowError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::YieldWithdrawEnabled, &enabled);
+        env.events().publish(
+            (symbol_short!("yield"), symbol_short!("wd_flag")),
+            enabled,
+        );
+        Ok(())
+    }
+
+    pub fn is_yield_withdraw_enabled(env: Env) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::YieldWithdrawEnabled)
+            .unwrap_or(false)
+    }
+
+    /// Total principal the contract still owes for `token` (#1706).
+    pub fn get_total_liabilities(env: Env, token: Address) -> i128 {
+        liabilities_of(&env, &token)
+    }
+
+    /// Measured surplus: contract balance of `token` minus liabilities.
+    /// This is the only source `withdraw_yield` can pay from (#1706).
+    pub fn get_surplus(env: Env, token: Address) -> i128 {
+        surplus_of(&env, &token)
+    }
+
+    /// Count principal of escrows created before liability tracking existed
+    /// (#1706). Admin-only, idempotent; processes ids `from_id..=to_id` and
+    /// returns how many escrows were newly counted. Run over all existing
+    /// ids before enabling `withdraw_yield` on an upgraded contract.
     ///
-    /// Slashing protection: the withdrawal is rejected if it would leave the
-    /// contract holding less than `min_liquidity_bps` of the escrow principal,
-    /// ensuring payers can always retrieve their funds.
+    /// Event: `(escrow, liab_mig)` → `(from_id, to_id, counted)`.
+    pub fn migrate_liabilities(env: Env, admin: Address, from_id: u64, to_id: u64) -> Result<u32, EscrowError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        let mut counted: u32 = 0;
+        let mut id = from_id;
+        while id <= to_id {
+            if !is_liability_counted(&env, id) {
+                if let Ok(escrow) = load_escrow(&env, id) {
+                    if escrow.status == EscrowStatus::Active || escrow.status == EscrowStatus::Disputed {
+                        let remaining = remaining_principal(&env, &escrow);
+                        add_liability(&env, id, &escrow.token, remaining);
+                        counted += 1;
+                    }
+                }
+            }
+            if id == u64::MAX {
+                break;
+            }
+            id += 1;
+        }
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("liab_mig")),
+            (from_id, to_id, counted),
+        );
+        Ok(counted)
+    }
+
+    /// Withdraw yield for an escrow to the platform admin.
+    ///
+    /// Behind the `YieldWithdrawEnabled` flag (default off). Pays
+    /// `min(accrued entitlement, measured surplus)`: yield is the contract's
+    /// balance above tracked principal (e.g. returns credited by an external
+    /// strategy), never a computed number, so this can never touch another
+    /// escrow's principal. The solvency check
+    /// `balance - amount >= total_liabilities` is enforced on the transfer.
+    ///
+    /// Event: `(yield, withdrawn)` → `(escrow_id, amount, admin)`.
     pub fn withdraw_yield(env: Env, admin: Address, escrow_id: u64) -> Result<i128, EscrowError> {
         admin.require_auth();
         let _guard = ReentrancyGuard::acquire(&env);
 
         require_admin(&env, &admin)?;
+        ensure(Self::is_yield_withdraw_enabled(env.clone()), EscrowError::YieldWithdrawDisabled)?;
 
-        let cfg: YieldConfig = env
+        let _cfg: YieldConfig = env
             .storage()
             .persistent()
             .get::<DataKey, YieldConfig>(&DataKey::YieldCfg)
@@ -1529,19 +1610,15 @@ impl EscrowContract {
 
         ensure(accrual.accrued > 0, EscrowError::NoYieldToWithdraw)?;
 
-        // Liquidity guarantee: after withdrawal, at least min_liquidity_bps of
-        // the principal must remain available in the contract.
-        let min_liquidity = accrual.principal * (cfg.min_liquidity_bps as i128) / 10_000;
         let escrow = load_escrow(&env, escrow_id)?;
+        let surplus = surplus_of(&env, &escrow.token);
+        let to_withdraw = if accrual.accrued < surplus { accrual.accrued } else { surplus };
+        ensure(to_withdraw > 0, EscrowError::NoYieldToWithdraw)?;
 
-        ensure(escrow.amount >= min_liquidity, EscrowError::InsufficientLiquidity)?;
-
-        let to_withdraw = accrual.accrued;
-        accrual.accrued = 0;
+        accrual.accrued -= to_withdraw;
         env.storage().persistent().set(&yield_key, &accrual);
 
-        TokenClient::new(&env, &escrow.token)
-            .transfer(&env.current_contract_address(), &admin, &to_withdraw);
+        pay_surplus(&env, &escrow.token, &admin, to_withdraw)?;
 
         env.events().publish(
             (symbol_short!("yield"), symbol_short!("withdrawn")),
@@ -1768,6 +1845,9 @@ impl EscrowContract {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod solvency_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2564,6 +2644,10 @@ mod tests {
         let accrued = contract.get_accrued_yield(&id);
         assert!(accrued > 0);
 
+        // Real yield arrives from a strategy as surplus over liabilities.
+        StellarAssetClient::new(&env, &token).mint(&cid, &accrued);
+        contract.set_yield_withdraw_enabled(&admin, &true);
+
         contract.pause_yield(&admin);
         let withdrawn = contract.withdraw_yield(&admin, &id);
         assert_eq!(withdrawn, accrued);
@@ -2786,3 +2870,13 @@ mod tests {
         );
     }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    EscrowContract,
+    EscrowContractClient,
+    |env, id, admin| {
+        EscrowContractClient::new(&env, &id).set_admin(&admin);
+    }
+);

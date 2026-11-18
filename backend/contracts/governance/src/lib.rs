@@ -1090,3 +1090,13 @@ impl GovernanceContract {
 }
 
 mod tests;
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    GovernanceContract,
+    GovernanceContractClient,
+    |env, id, admin| {
+        GovernanceContractClient::new(&env, &id).initialize(&admin);
+    }
+);

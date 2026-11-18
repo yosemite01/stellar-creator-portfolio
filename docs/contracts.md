@@ -156,6 +156,27 @@ moves the value into `bounty_admin`, deletes the legacy key and emits
 The instant `upgrade` entrypoint has been **removed**. The timelock is the
 constant `UPGRADE_TIMELOCK_SECS` (48 hours) on every network.
 
+### Uniform semantics and enforcement (Issue #1719)
+
+`stellar_insights` used to expose its own `upgrade` / `cancel_upgrade` pair
+that did not go through the library. It now exposes exactly the same
+entrypoints as every other contract, so there is no weakest-link contract.
+Two things keep it that way:
+
+* **CI check** — `scripts/check-contract-upgrades.sh` (run in the Rust job)
+  fails if `update_current_contract_wasm` appears anywhere outside
+  `backend/contracts/upgradeable`, if a deployable contract does not depend
+  on `stellar-upgradeable`, or if it does not invoke the conformance macro.
+* **Shared conformance tests** — `stellar_upgradeable::upgrade_timelock_tests!`
+  generates the same tests in every contract crate: the delay returned by
+  `propose_upgrade` is the 48h minimum, `execute_upgrade` fails with `902`
+  immediately and one second before `executable_at`, fails with `901` when
+  nothing is pending or after a cancel, and non-admins get `900`.
+
+Off-chain, the indexer should alert on every `(upgrade, proposed)` event
+(see Events below); `get_pending_upgrade()` on each contract is the poll-based
+fallback.
+
 ```mermaid
 sequenceDiagram
     participant A as Admin
@@ -209,13 +230,13 @@ overlap a contract's own error enum.
    optimize`) so the deployed bytecode matches what was reviewed.
 2. Upload it to get its hash:
    `stellar contract upload --wasm <path> --source <admin-identity> --network <network>`.
-3. Simulate the `upgrade` call first (`stellar contract invoke --is-view`
-   where supported, or a Testnet dry run) to confirm the new wasm hash and
-   admin signature are both accepted before touching Mainnet.
-4. Call `upgrade(admin, new_wasm_hash)` from the platform admin key. Because
-   this requires `admin.require_auth()`, only the holder of the stored
-   `platform_admin` address can do this — treat that key with the same care
-   as `MAINNET_DEPLOYER_SECRET`.
+3. Simulate the `propose_upgrade` call first (a Testnet dry run) to confirm
+   the new wasm hash and admin signature are both accepted before touching
+   Mainnet.
+4. Call `propose_upgrade(admin, new_wasm_hash)` from the admin key, announce
+   the returned `executable_at`, wait at least 48h, then call
+   `execute_upgrade(admin)`. Only the stored admin can do either — treat that
+   key with the same care as `MAINNET_DEPLOYER_SECRET`.
 5. Watch for the `(contract, upgraded)` event to confirm the swap landed,
    and smoke-test a read and a write entrypoint against the live contract ID
    immediately after.
@@ -227,9 +248,9 @@ overlap a contract's own error enum.
 Never deploy a *new* contract ID as a stand-in for "upgrading" unless you
 specifically want a breaking migration (new ID, old integrators silently
 pointed at dead code) — that's a distinct, much more disruptive operation
-than calling `upgrade`, and isn't what CI's Mainnet pipeline does on a normal
+than `propose_upgrade` + `execute_upgrade`, and isn't what CI's Mainnet pipeline does on a normal
 release (a normal release only redeploys code behind IDs that didn't already
-exist; it doesn't call `upgrade` on existing ones — that's a deliberate,
+exist; it doesn't upgrade existing ones — that's a deliberate,
 separate, manual step per the procedure above).
 
 ## Error codes
