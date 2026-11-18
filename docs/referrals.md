@@ -44,7 +44,40 @@ hour). It now also rejects:
 - a referrer who was referred by the caller, or a caller who has already
   referred others: `422 referral_loop`
 
+## Rewards tied to real activity (Issue #1716)
+
+Self-referral with fresh wallets is cheap, so rewards are now gated on
+activity and backed by a funded pool.
+
+- **Qualifying activity.** `award_referral_reward(referred, platform_fee,
+  bounty_id)` (admin-only) calls the bounty contract's
+  `is_qualifying_bounty(bounty_id, referred)`. It is `true` only when the
+  bounty is `Completed`, was funded through escrow, and `referred` is its
+  creator or selected freelancer. Each `bounty_id` pays at most one reward.
+  Configure the bounty contract with `set_bounty_contract(admin, bounty)`.
+- **Risk attestations.** `set_risk_attestor(admin, Some(attestor))` turns on
+  the off-chain risk check. `register_referral(referrer, referred,
+  attestation_expires_at)` then also needs the attestor's authorization of
+  `(referrer, referred, expires_at)`. The risk service gives that signature
+  only when the pair shows no self-referral or shared-funding-source signal.
+- **Funded pool.** `fund_pool(funder, amount)` transfers reward tokens into
+  the contract. Each award reserves its amount from the pool (clamped to
+  what is available) so every unclaimed reward is backed. An empty pool
+  returns `PoolEmpty` instead of accruing an unbacked balance, and
+  `claim_referral_reward` also returns `PoolEmpty` rather than trapping if
+  the contract balance is short. `get_pool()` returns
+  `(available, reserved)`.
+- **Per-period cap.** A referrer earns at most `set_reward_cap(admin, cap)`
+  (default `DEFAULT_REWARD_CAP`) per 30-day period; the last award is
+  clamped and further ones fail with `RewardCapReached`.
+
+Events: `(referral, funded)`, `(referral, reward)` now carries `bounty_id`,
+`(referral, bounty)`, `(referral, attestor)`, `(referral, cap)`.
+
+**Breaking for callers:** `register_referral` takes a third argument
+(`Option<u64>`, pass `None` when no attestor is configured) and
+`award_referral_reward` takes `bounty_id` and returns the amount awarded.
+
 ## Deferred
 
-Wallet-level Sybil resistance (one person, many wallets, each a "new user")
-is not addressed. KYC-gating reward claims would be the next step.
+KYC-gating reward claims is still not implemented.

@@ -254,3 +254,195 @@ fn test_check_kyc_succeeds() {
     assert!(client.check_kyc(&user, &KycLevel::Enhanced));
     assert!(!client.check_kyc(&user, &KycLevel::Institutional));
 }
+
+// ── Issue #1717: expiry, issuer registry, rotation and revocation ──────────
+
+mod issuer_registry {
+    use super::*;
+    use crate::{KycError, ADMIN_ISSUER_ID, KYC_SCHEMA_VERSION, MAX_KYC_TTL_SECS};
+    use soroban_sdk::testutils::Ledger;
+
+    const DAY: u64 = 24 * 60 * 60;
+
+    #[test]
+    fn attestation_carries_issuer_and_schema() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let user = new_address(&env);
+        env.ledger().set_timestamp(1_000);
+        client.attest_kyc(&admin, &user, &KycLevel::Basic);
+        let a = client.get_kyc_attestation(&user).unwrap();
+        assert_eq!(a.issuer_id, ADMIN_ISSUER_ID);
+        assert_eq!(a.schema_version, KYC_SCHEMA_VERSION);
+        assert_eq!(a.issued_at, 1_000);
+        assert_eq!(a.expires_at, 1_000 + 365 * DAY);
+    }
+
+    #[test]
+    fn expired_attestation_fails_check() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let signer = new_address(&env);
+        let user = new_address(&env);
+        let issuer = client.register_issuer(&admin, &signer);
+        client.issuer_attest_kyc(&signer, &issuer, &user, &KycLevel::Enhanced, &(30 * DAY));
+        assert!(client.check_kyc(&user, &KycLevel::Enhanced));
+
+        env.ledger().set_timestamp(30 * DAY + 1);
+        assert!(!client.check_kyc(&user, &KycLevel::Basic));
+    }
+
+    #[test]
+    fn revoking_issuer_invalidates_all_its_attestations() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let signer = new_address(&env);
+        let issuer = client.register_issuer(&admin, &signer);
+        let users: [Address; 3] = [new_address(&env), new_address(&env), new_address(&env)];
+        for u in users.iter() {
+            client.issuer_attest_kyc(&signer, &issuer, u, &KycLevel::Basic, &(90 * DAY));
+        }
+        // An admin-issued attestation is unaffected.
+        let other = new_address(&env);
+        client.attest_kyc(&admin, &other, &KycLevel::Basic);
+
+        client.revoke_issuer(&admin, &issuer);
+
+        for u in users.iter() {
+            assert!(!client.check_kyc(u, &KycLevel::Basic));
+        }
+        assert!(client.check_kyc(&other, &KycLevel::Basic));
+        assert!(client.get_issuer(&issuer).revoked);
+    }
+
+    #[test]
+    fn revoked_issuer_cannot_attest() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let signer = new_address(&env);
+        let issuer = client.register_issuer(&admin, &signer);
+        client.revoke_issuer(&admin, &issuer);
+        assert_eq!(
+            client.try_issuer_attest_kyc(&signer, &issuer, &new_address(&env), &KycLevel::Basic, &DAY),
+            Err(Ok(KycError::IssuerRevoked))
+        );
+    }
+
+    #[test]
+    fn rotation_with_invalidation_cuts_off_old_key() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let old_key = new_address(&env);
+        let new_key = new_address(&env);
+        let issuer = client.register_issuer(&admin, &old_key);
+        let user = new_address(&env);
+        client.issuer_attest_kyc(&old_key, &issuer, &user, &KycLevel::Basic, &DAY);
+
+        assert_eq!(client.rotate_issuer_key(&admin, &issuer, &new_key, &true), 2);
+        assert!(!client.check_kyc(&user, &KycLevel::Basic));
+
+        // Old key can no longer attest; the new one can.
+        assert_eq!(
+            client.try_issuer_attest_kyc(&old_key, &issuer, &user, &KycLevel::Basic, &DAY),
+            Err(Ok(KycError::Unauthorized))
+        );
+        client.issuer_attest_kyc(&new_key, &issuer, &user, &KycLevel::Basic, &DAY);
+        assert!(client.check_kyc(&user, &KycLevel::Basic));
+    }
+
+    #[test]
+    fn routine_rotation_keeps_existing_attestations() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let old_key = new_address(&env);
+        let issuer = client.register_issuer(&admin, &old_key);
+        let user = new_address(&env);
+        client.issuer_attest_kyc(&old_key, &issuer, &user, &KycLevel::Basic, &DAY);
+        // The issuer rotates its own key without invalidation.
+        client.rotate_issuer_key(&old_key, &issuer, &new_address(&env), &false);
+        assert!(client.check_kyc(&user, &KycLevel::Basic));
+    }
+
+    #[test]
+    fn non_admin_cannot_register_or_revoke_issuer() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let stranger = new_address(&env);
+        assert_eq!(
+            client.try_register_issuer(&stranger, &stranger),
+            Err(Ok(KycError::Unauthorized))
+        );
+        let issuer = client.register_issuer(&admin, &new_address(&env));
+        assert_eq!(client.try_revoke_issuer(&stranger, &issuer), Err(Ok(KycError::Unauthorized)));
+        assert_eq!(
+            client.try_rotate_issuer_key(&stranger, &issuer, &stranger, &true),
+            Err(Ok(KycError::Unauthorized))
+        );
+    }
+
+    #[test]
+    fn ttl_bounds_enforced() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let signer = new_address(&env);
+        let issuer = client.register_issuer(&admin, &signer);
+        let user = new_address(&env);
+        assert_eq!(
+            client.try_issuer_attest_kyc(&signer, &issuer, &user, &KycLevel::Basic, &0),
+            Err(Ok(KycError::InvalidTtl))
+        );
+        assert_eq!(
+            client.try_issuer_attest_kyc(&signer, &issuer, &user, &KycLevel::Basic, &(MAX_KYC_TTL_SECS + 1)),
+            Err(Ok(KycError::InvalidTtl))
+        );
+    }
+
+    #[test]
+    fn unknown_issuer_rejected() {
+        let env = test_env();
+        let (client, _admin) = deploy(&env);
+        let signer = new_address(&env);
+        assert_eq!(
+            client.try_issuer_attest_kyc(&signer, &42, &new_address(&env), &KycLevel::Basic, &DAY),
+            Err(Ok(KycError::IssuerNotFound))
+        );
+    }
+
+    #[test]
+    fn revoking_admin_issuer_invalidates_admin_and_legacy_attestations() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let user = new_address(&env);
+        let legacy_user = new_address(&env);
+        client.verify_kyc(&admin, &user, &BytesN::from_array(&env, &[1; 32]));
+        // Simulate a record written before #1717.
+        env.as_contract(&client.address, || {
+            env.storage().persistent().set(
+                &crate::DataKey::KycAttestation(legacy_user.clone()),
+                &crate::LegacyKycAttestation {
+                    user: legacy_user.clone(),
+                    level: KycLevel::Basic,
+                    attested_at: 0,
+                    expires_at: 365 * DAY,
+                },
+            );
+        });
+        assert!(client.check_kyc(&legacy_user, &KycLevel::Basic));
+        assert_eq!(client.get_kyc_attestation(&legacy_user).unwrap().schema_version, 1);
+
+        client.revoke_issuer(&admin, &ADMIN_ISSUER_ID);
+        assert!(!client.check_kyc(&user, &KycLevel::Basic));
+        assert!(!client.check_kyc(&legacy_user, &KycLevel::Basic));
+    }
+
+    #[test]
+    fn revoke_kyc_clears_single_user() {
+        let env = test_env();
+        let (client, admin) = deploy(&env);
+        let user = new_address(&env);
+        client.attest_kyc(&admin, &user, &KycLevel::Basic);
+        client.revoke_kyc(&admin, &user);
+        assert!(client.get_kyc_attestation(&user).is_none());
+        assert!(!client.check_kyc(&user, &KycLevel::Basic));
+    }
+}

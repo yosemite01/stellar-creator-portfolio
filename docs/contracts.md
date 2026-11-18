@@ -125,6 +125,21 @@ users. The admin role also couldn't be rotated safely. It was either fixed
 forever or set once through `set_admin`, with nothing to stop a typo from
 handing it to an address no one controls.
 
+### Constructor-based admin (escrow, bounty — issue #1708)
+
+Escrow and Bounty no longer expose `set_admin` (or Bounty's `initialize`).
+Both define `__constructor(admin: Address)` (protocol 22+), so the admin is
+written in the same transaction as the deploy and cannot be front-run by
+whoever calls first. `scripts/deploy.cjs` passes it as
+`stellar contract deploy ... -- --admin $STELLAR_CONTRACT_ADMIN`. All later
+changes go through `propose_admin` / `accept_admin`.
+
+Bounty keeps a single admin key, `bounty_admin`. Contracts deployed before
+this change that still hold an admin under the legacy `admin` key should
+call `migrate_admin_key()` once (signed by that admin) after upgrading; it
+moves the value into `bounty_admin`, deletes the legacy key and emits
+`(bounty, admin_mig)`.
+
 ### Entrypoints (same on every contract)
 
 | Entrypoint | Who signs | Effect |
@@ -238,8 +253,8 @@ should match on the code instead.
 | Code | Variant | Meaning |
 |---|---|---|
 | 1 | `EscrowNotFound` | No escrow with that id |
-| 2 | `AdminNotSet` | Admin-gated call before `set_admin` |
-| 3 | `AdminAlreadySet` | `set_admin` called twice |
+| 2 | `AdminNotSet` | Admin-gated call with no stored admin |
+| 3 | `AdminAlreadySet` | Constructor found an admin already stored |
 | 4 | `Unauthorized` | Caller is not the payer/payee/admin this call requires |
 | 5 | `EscrowNotActive` | Escrow is not `Active` |
 | 6 | `ReleaseConditionNotMet` | Timelock has not elapsed |
@@ -272,8 +287,8 @@ should match on the code instead.
 | 3 | `InsufficientBalance` | Reserved |
 | 4 | `MultisigNotConfigured` | High-value bounty but no signer set |
 | 5 | `InsufficientSigners` | Fewer approvers than `required` |
-| 6 | `AlreadyInitialized` | `initialize` / `set_admin` called twice |
-| 7 | `AdminNotSet` | Admin-gated call before `initialize` |
+| 6 | `AlreadyInitialized` | Constructor found an admin already stored |
+| 7 | `AdminNotSet` | Admin-gated call with no stored admin (run `migrate_admin_key` on legacy deploys) |
 | 8 | `Unauthorized` | Caller is not the admin |
 | 9 | `EscrowContractNotSet` | `create_and_fund_bounty` before `set_escrow_contract` |
 | 10 | `BountyNotFound` | No bounty with that id |
@@ -309,6 +324,15 @@ should match on the code instead.
 | 7 | `SelfReferral` | `register_referral` with `referrer == referred` |
 | 8 | `ReferralLoop` | `referrer` was referred by `referred` |
 | 9 | `RefereeIsReferrer` | `referred` has already referred someone |
+| 10 | `RiskAttestationRequired` | Risk attestor configured but no attestation passed |
+| 11 | `RiskAttestationExpired` | Attestation `expires_at` is in the past |
+| 12 | `BountyContractNotSet` | `award_referral_reward` before `set_bounty_contract` |
+| 13 | `NotQualifyingActivity` | Referred account has not completed that funded bounty |
+| 14 | `BountyAlreadyRewarded` | That bounty already paid a referral reward |
+| 15 | `RewardCapReached` | Referrer hit the per-period reward cap |
+| 16 | `PoolEmpty` | Funded pool cannot cover the award / claim |
+| 17 | `InvalidAmount` | Amount, fee or cap ≤ 0 |
+| 18 | `Unauthorized` | Caller is not the admin |
 
 ### Insurance (`InsuranceError`)
 
