@@ -107,3 +107,54 @@ export function formatFeeBreakdown(breakdown: FeeBreakdown, currency = 'USDC'): 
     `Network fee: ${breakdown.networkFeeXlm} XLM`
   );
 }
+
+// ── Issue #1724: user-side fee caps ──────────────────────────────────────────
+
+/**
+ * Default tolerance (in bps of the quoted fee) a user accepts between quote
+ * and execution. 0 means "never pay more than quoted".
+ */
+export const DEFAULT_MAX_FEE_TOLERANCE_BPS = 0;
+
+/**
+ * Compute the `max_fee` to embed in an escrow deposit from the fee quoted to
+ * the user (e.g. `estimate_fund_escrow_fee`). The escrow contract's
+ * `deposit_with_max_fee` reverts with `FeeExceedsMax` (#26) if the fee
+ * effective at execution is higher, so a fee raised after the quote can never
+ * over-charge the user.
+ */
+export function computeMaxFee(
+  quotedFee: bigint,
+  toleranceBps: number = DEFAULT_MAX_FEE_TOLERANCE_BPS,
+): bigint {
+  if (quotedFee < 0n) throw new Error('Quoted fee must be non-negative');
+  if (!Number.isInteger(toleranceBps) || toleranceBps < 0 || toleranceBps > 10_000) {
+    throw new Error('Tolerance must be an integer between 0 and 10000 bps');
+  }
+  // Round the tolerance up so a non-zero tolerance never truncates to 0.
+  const extra = (quotedFee * BigInt(toleranceBps) + 9_999n) / 10_000n;
+  return quotedFee + extra;
+}
+
+export interface DepositWithMaxFeeArgs<C> {
+  bounty_id: bigint;
+  payer: string;
+  payee: string;
+  amount: bigint;
+  token: string;
+  release_condition: C;
+  max_fee: bigint;
+}
+
+/**
+ * Build the argument object for the escrow contract's `deposit_with_max_fee`
+ * call. Always use this instead of plain `deposit` in user-signed flows.
+ */
+export function buildDepositWithMaxFeeArgs<C>(
+  args: Omit<DepositWithMaxFeeArgs<C>, 'max_fee'>,
+  quotedFee: bigint,
+  toleranceBps: number = DEFAULT_MAX_FEE_TOLERANCE_BPS,
+): DepositWithMaxFeeArgs<C> {
+  if (args.amount <= 0n) throw new Error('Deposit amount must be positive');
+  return { ...args, max_fee: computeMaxFee(quotedFee, toleranceBps) };
+}

@@ -9,6 +9,8 @@ import {
   assertValidFeeBps,
   computeFee,
   computeNet,
+  computeMaxFee,
+  buildDepositWithMaxFeeArgs,
 } from './fee-calculator';
 import sharedFeeVectors from '../fixtures/fee-vectors.json';
 
@@ -121,3 +123,44 @@ describe('aligned contract fee calculation (core/src/fee.rs)', () => {
   });
 });
 
+
+// ── #1724: max fee embedded in deposits ──────────────────────────────────────
+
+describe('computeMaxFee', () => {
+  it('defaults to exactly the quoted fee', () => {
+    expect(computeMaxFee(25n)).toBe(25n);
+  });
+
+  it('adds a rounded-up tolerance', () => {
+    expect(computeMaxFee(25n, 1_000)).toBe(28n); // 25 + ceil(2.5)
+    expect(computeMaxFee(1n, 1)).toBe(2n);
+  });
+
+  it('rejects invalid input', () => {
+    expect(() => computeMaxFee(-1n)).toThrow();
+    expect(() => computeMaxFee(25n, -1)).toThrow();
+    expect(() => computeMaxFee(25n, 10_001)).toThrow();
+    expect(() => computeMaxFee(25n, 1.5)).toThrow();
+  });
+});
+
+describe('buildDepositWithMaxFeeArgs', () => {
+  const base = {
+    bounty_id: 1n,
+    payer: 'GPAYER',
+    payee: 'GPAYEE',
+    amount: 1_000n,
+    token: 'CTOKEN',
+    release_condition: { tag: 'OnCompletion' as const },
+  };
+
+  it('includes max_fee in the transaction args', () => {
+    const args = buildDepositWithMaxFeeArgs(base, 25n);
+    expect(args.max_fee).toBe(25n);
+    expect(args.amount).toBe(1_000n);
+  });
+
+  it('rejects non-positive amounts', () => {
+    expect(() => buildDepositWithMaxFeeArgs({ ...base, amount: 0n }, 0n)).toThrow();
+  });
+});

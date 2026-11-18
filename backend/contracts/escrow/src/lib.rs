@@ -58,8 +58,23 @@ pub struct FeeConfig {
     pub fee_cap: i128,
 }
 
-/// Read the current fee config from storage, falling back to defaults.
-pub fn get_fee_config(env: &Env) -> FeeConfig {
+/// Delay before a fee *increase* takes effect (#1724): 48 hours.
+///
+/// Decreases apply immediately because they can only help users; increases are
+/// announced with a `(escrow, fee_prop)` event and only become effective once
+/// this window has elapsed, so a transaction quoted under the old fee can be
+/// submitted (or abandoned) before the new fee bites.
+pub const FEE_CHANGE_DELAY_SECS: u64 = 48 * 3600;
+
+/// A scheduled fee increase waiting out `FEE_CHANGE_DELAY_SECS` (#1724).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PendingFeeConfig {
+    pub config: FeeConfig,
+    pub effective_at: u64,
+}
+
+fn stored_fee_config(env: &Env) -> FeeConfig {
     env.storage()
         .persistent()
         .get::<DataKey, FeeConfig>(&DataKey::FeeConfig)
@@ -67,6 +82,21 @@ pub fn get_fee_config(env: &Env) -> FeeConfig {
             fee_bps: DEFAULT_PLATFORM_FEE_BPS,
             fee_cap: DEFAULT_PLATFORM_FEE_CAP,
         })
+}
+
+/// Read the *effective* fee config: the stored config, or a pending increase
+/// whose timelock has elapsed (activated lazily, so no keeper is required).
+pub fn get_fee_config(env: &Env) -> FeeConfig {
+    if let Some(p) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, PendingFeeConfig>(&DataKey::PendingFeeConfig)
+    {
+        if env.ledger().timestamp() >= p.effective_at {
+            return p.config;
+        }
+    }
+    stored_fee_config(env)
 }
 
 /// Compute the platform fee for a given gross amount using the current config.
@@ -307,6 +337,10 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Deposit funds into escrow
+    ///
+    /// Charges whatever fee is effective at execution time. Wallet-facing
+    /// flows should prefer [`Self::deposit_with_max_fee`], which reverts if the
+    /// fee rose after the user was quoted (#1724).
     pub fn deposit(
         env: Env,
         bounty_id: u64,
@@ -316,9 +350,51 @@ impl EscrowContract {
         token: Address,
         release_condition: ReleaseCondition,
     ) -> Result<u64, EscrowError> {
+        Self::deposit_inner(env, bounty_id, payer, payee, amount, token, release_condition, None)
+    }
+
+    /// Deposit funds into escrow, reverting with `FeeExceedsMax` if the
+    /// platform fee charged would exceed `max_fee` token units (#1724).
+    ///
+    /// Clients obtain `max_fee` from `estimate_fund_escrow_fee` at quote time
+    /// (optionally plus a tolerance the user accepted) and pass it here, so a
+    /// fee change between quote and execution can never over-charge the user.
+    #[allow(clippy::too_many_arguments)]
+    pub fn deposit_with_max_fee(
+        env: Env,
+        bounty_id: u64,
+        payer: Address,
+        payee: Address,
+        amount: i128,
+        token: Address,
+        release_condition: ReleaseCondition,
+        max_fee: i128,
+    ) -> Result<u64, EscrowError> {
+        ensure(max_fee >= 0, EscrowError::InvalidAmount)?;
+        Self::deposit_inner(env, bounty_id, payer, payee, amount, token, release_condition, Some(max_fee))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn deposit_inner(
+        env: Env,
+        bounty_id: u64,
+        payer: Address,
+        payee: Address,
+        amount: i128,
+        token: Address,
+        release_condition: ReleaseCondition,
+        max_fee: Option<i128>,
+    ) -> Result<u64, EscrowError> {
         payer.require_auth();
         ensure(amount > 0, EscrowError::InvalidAmount)?;
         let _guard = ReentrancyGuard::acquire(&env);
+
+        // #1724: enforce the user's fee cap before any funds move.
+        let fee_cfg = get_fee_config(&env);
+        let fee = platform_fee_with_config(amount, &fee_cfg);
+        if let Some(max) = max_fee {
+            ensure(fee <= max, EscrowError::FeeExceedsMax)?;
+        }
 
         // #179: Validate token implements the SEP-41 interface before accepting funds.
         // Calling balance() will trap if `token` is not a valid token contract,
@@ -339,8 +415,6 @@ impl EscrowContract {
         let mut counter: u64 = env.storage().persistent().get::<Symbol, u64>(&counter_key).unwrap_or(0);
         counter += 1;
 
-        let fee_cfg = get_fee_config(&env);
-        let fee = platform_fee_with_config(amount, &fee_cfg);
         let net_amount = amount - fee;
 
         // Collect platform fee to admin if set, otherwise hold in contract
@@ -714,6 +788,14 @@ impl EscrowContract {
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
 
+        // #1711: record the verified outcome for insurance claims.
+        let (payer_amount, payee_amount) = if release_to_payee {
+            (0, escrow.amount)
+        } else {
+            (escrow.amount, 0)
+        };
+        record_dispute_outcome(&env, &escrow, payer_amount, payee_amount);
+
         // Emit dispute_resolved event for indexers
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("resolved")),
@@ -782,6 +864,7 @@ impl EscrowContract {
         escrow.status = EscrowStatus::Refunded; // closest semantic: funds dispersed
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
+        record_dispute_outcome(&env, &escrow, payer_amount, payee_amount);
 
         // Emit dispute_auto_resolved event
         env.events().publish(
@@ -790,6 +873,15 @@ impl EscrowContract {
         );
 
         Ok(true)
+    }
+
+    /// Verified outcome of a resolved dispute, if the escrow was disputed and
+    /// settled (#1711). `None` for escrows that were never disputed or are
+    /// still in dispute.
+    pub fn get_dispute_outcome(env: Env, escrow_id: u64) -> Option<DisputeOutcome> {
+        env.storage()
+            .persistent()
+            .get::<DataKey, DisputeOutcome>(&DataKey::DisputeOutcome(escrow_id))
     }
 
     /// Set the platform admin address. Can only be called once (bootstrap).
@@ -1239,13 +1331,15 @@ impl EscrowContract {
         Ok(to_withdraw)
     }
 
-    /// Estimate the total fee for funding an escrow with the given amount.
-    /// Returns the platform_fee for the specified amount.
+    /// Quote the platform fee for funding an escrow with `amount`.
     ///
-    /// Note: actual fee may vary by up to 10% from this estimate due to network conditions.
-    /// The estimate is guaranteed not to exceed actual fee by more than 10%.
-    pub fn estimate_fund_escrow_fee(_env: Env, amount: i128) -> i128 {
-        platform_fee(amount)
+    /// Uses the fee config effective *now*. Pass the result (plus any
+    /// tolerance the user accepts) as `max_fee` to `deposit_with_max_fee`: if
+    /// governance raises the fee before the transaction lands, the deposit
+    /// reverts instead of over-charging (#1724). Fee increases are also
+    /// timelocked by `FEE_CHANGE_DELAY_SECS`; see `get_pending_fee_config`.
+    pub fn estimate_fund_escrow_fee(env: Env, amount: i128) -> i128 {
+        platform_fee_with_config(amount, &get_fee_config(&env))
     }
 
     // ── Issue #1564: Timelocked upgrade + two-step admin transfer ─────────────
@@ -1332,22 +1426,95 @@ impl EscrowContract {
 
     /// Update the platform fee configuration. Only the governance multisig
     /// (platform admin) may call this.
-    /// Emits a fee_updated event on successful change.
+    ///
+    /// #1724: a change that lowers (or keeps) both the rate and the cap applies
+    /// immediately and emits `(escrow, fee_upd)`. A change that raises either
+    /// is scheduled for `now + FEE_CHANGE_DELAY_SECS` and announced with
+    /// `(escrow, fee_prop)`; it becomes effective automatically once the delay
+    /// elapses (and can be persisted with `apply_fee_update`). A new call
+    /// replaces any pending change.
     pub fn update_fee(env: Env, admin: Address, new_bps: i128, new_cap: i128) -> Result<(), EscrowError> {
         admin.require_auth();
         require_admin(&env, &admin)?;
         // Fee BPS must be within 0..=1_000 (10%) and the cap non-negative.
         ensure((0..=1_000).contains(&new_bps), EscrowError::InvalidFeeConfig)?;
         ensure(new_cap >= 0, EscrowError::InvalidFeeConfig)?;
-        env.storage().persistent().set(&DataKey::FeeConfig, &FeeConfig {
-            fee_bps: new_bps,
-            fee_cap: new_cap,
-        });
+        let current = get_fee_config(&env);
+        let new_cfg = FeeConfig { fee_bps: new_bps, fee_cap: new_cap };
+        let store = env.storage().persistent();
+        if new_bps <= current.fee_bps && new_cap <= current.fee_cap {
+            store.set(&DataKey::FeeConfig, &new_cfg);
+            store.remove(&DataKey::PendingFeeConfig);
+            env.events().publish(
+                (symbol_short!("escrow"), symbol_short!("fee_upd")),
+                (new_bps, new_cap),
+            );
+        } else {
+            // Persist the currently effective config so a matured pending
+            // change is not lost when it is replaced.
+            store.set(&DataKey::FeeConfig, &current);
+            let effective_at = env.ledger().timestamp() + FEE_CHANGE_DELAY_SECS;
+            store.set(
+                &DataKey::PendingFeeConfig,
+                &PendingFeeConfig { config: new_cfg, effective_at },
+            );
+            env.events().publish(
+                (symbol_short!("escrow"), symbol_short!("fee_prop")),
+                (current.fee_bps, current.fee_cap, new_bps, new_cap, effective_at),
+            );
+        }
+        Ok(())
+    }
+
+    /// Persist a pending fee increase whose timelock has elapsed. Anyone may
+    /// call this; it only writes what `get_fee_config` already treats as
+    /// effective. Emits `(escrow, fee_upd)`.
+    pub fn apply_fee_update(env: Env) -> Result<(), EscrowError> {
+        let pending: PendingFeeConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingFeeConfig)
+            .ok_or(EscrowError::NoPendingFeeUpdate)?;
+        ensure(env.ledger().timestamp() >= pending.effective_at, EscrowError::FeeTimelockActive)?;
+        env.storage().persistent().set(&DataKey::FeeConfig, &pending.config);
+        env.storage().persistent().remove(&DataKey::PendingFeeConfig);
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("fee_upd")),
-            (new_bps, new_cap),
+            (pending.config.fee_bps, pending.config.fee_cap),
         );
         Ok(())
+    }
+
+    /// Withdraw a scheduled fee increase before it takes effect. Admin-only.
+    /// Emits `(escrow, fee_cncl)`.
+    pub fn cancel_fee_update(env: Env, admin: Address) -> Result<(), EscrowError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        let pending: PendingFeeConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingFeeConfig)
+            .ok_or(EscrowError::NoPendingFeeUpdate)?;
+        ensure(env.ledger().timestamp() < pending.effective_at, EscrowError::NoPendingFeeUpdate)?;
+        env.storage().persistent().remove(&DataKey::PendingFeeConfig);
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("fee_cncl")),
+            (pending.config.fee_bps, pending.config.fee_cap),
+        );
+        Ok(())
+    }
+
+    /// The fee config currently in effect (including a matured increase).
+    pub fn get_effective_fee_config(env: Env) -> FeeConfig {
+        get_fee_config(&env)
+    }
+
+    /// The scheduled fee increase still waiting out its timelock, if any.
+    pub fn get_pending_fee_config(env: Env) -> Option<PendingFeeConfig> {
+        env.storage()
+            .persistent()
+            .get::<DataKey, PendingFeeConfig>(&DataKey::PendingFeeConfig)
+            .filter(|p| env.ledger().timestamp() < p.effective_at)
     }
 
     // ---- Issue #725: Oracle price freshness check ----
