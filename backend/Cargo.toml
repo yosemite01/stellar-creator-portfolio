@@ -12,6 +12,7 @@ members = [
     "contracts/stellar_insights",
     "contracts/insurance",
     "contracts/test-utils",
+    "contracts/ttl",
     "contracts/upgradeable",
     "services/api",
     "services/auth",

@@ -4773,7 +4773,10 @@ dependencies = [
 name = "stellar-escrow-contract"
 version = "0.1.0"
 dependencies = [
+ "oracle",
  "soroban-sdk",
+ "stellar-contract-test-utils",
+ "stellar-insurance-contract",
  "stellar-upgradeable",
 ]
 
@@ -4837,6 +4840,7 @@ name = "stellar-insurance-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-contract-test-utils",
  "stellar-upgradeable",
 ]
 

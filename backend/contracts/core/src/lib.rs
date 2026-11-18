@@ -18,6 +18,20 @@ const GUARDIAN_KEY: Symbol = symbol_short!("guardian");
 #[contracttype]
 pub enum DataKey {
     Paused,
+    /// Fee increase waiting out `FEE_CHANGE_DELAY_SECS` (#1724).
+    PendingFee,
+}
+
+/// Delay before a fee increase takes effect (#1724): 48 hours. Decreases are
+/// applied immediately because they can only benefit users.
+pub const FEE_CHANGE_DELAY_SECS: u64 = 48 * 3600;
+
+/// A scheduled fee increase (#1724).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingFee {
+    pub fee_bps: u32,
+    pub effective_at: u64,
 }
 
 // ── Error codes (#820) ───────────────────────────────────────────────────────
@@ -31,6 +45,12 @@ pub enum CoreError {
     NotGovernance = 3,
     AlreadyPaused = 4,
     NotPaused = 5,
+    /// The effective fee exceeds the caller's `max_fee_bps` / `max_fee` (#1724).
+    FeeExceedsMax = 6,
+    /// No fee change is scheduled.
+    NoPendingFee = 7,
+    /// `apply_pending_fee` called before the timelock elapsed.
+    FeeTimelockActive = 8,
 }
 
 // ── Internal helpers (#820) ──────────────────────────────────────────────────
@@ -152,17 +172,99 @@ impl CoreContract {
     /// Update the platform fee. Only the admin may call this.
     /// Panics if `new_fee_bps > 1_000` — hard ceiling of 10% (#1104 / #517).
     /// Panics if the contract is paused (#820).
+    ///
+    /// #1724: a decrease (or no-op) applies immediately and emits
+    /// `(core, fee_set)`. An increase is scheduled for
+    /// `now + FEE_CHANGE_DELAY_SECS`, announced with `(core, fee_prop)`, and
+    /// becomes effective automatically once the delay elapses. A new call
+    /// replaces any pending change.
     pub fn set_fee(env: Env, caller: Address, new_fee_bps: u32) {
         require_not_paused(&env);
         caller.require_auth();
         let admin: Address = env.storage().persistent().get(&ADMIN_KEY).expect("Not initialized");
         assert!(caller == admin, "Unauthorized");
         assert_valid_fee_bps(new_fee_bps);
-        env.storage().persistent().set(&FEE_KEY, &new_fee_bps);
+        let current = Self::get_fee(env.clone());
+        let store = env.storage().persistent();
+        // Fold any matured pending change into storage before replacing it.
+        store.set(&FEE_KEY, &current);
+        if new_fee_bps <= current {
+            store.set(&FEE_KEY, &new_fee_bps);
+            store.remove(&DataKey::PendingFee);
+            env.events().publish(
+                (symbol_short!("core"), symbol_short!("fee_set")),
+                (new_fee_bps,),
+            );
+        } else {
+            let effective_at = env.ledger().timestamp() + FEE_CHANGE_DELAY_SECS;
+            store.set(&DataKey::PendingFee, &PendingFee { fee_bps: new_fee_bps, effective_at });
+            env.events().publish(
+                (symbol_short!("core"), symbol_short!("fee_prop")),
+                (current, new_fee_bps, effective_at),
+            );
+        }
+    }
+
+    /// Persist a matured fee increase. Anyone may call this; it only writes
+    /// what `get_fee` already reports. Emits `(core, fee_set)`.
+    pub fn apply_pending_fee(env: Env) {
+        let pending: PendingFee = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingFee)
+            .unwrap_or_else(|| panic_with_error!(&env, CoreError::NoPendingFee));
+        if env.ledger().timestamp() < pending.effective_at {
+            panic_with_error!(&env, CoreError::FeeTimelockActive);
+        }
+        env.storage().persistent().set(&FEE_KEY, &pending.fee_bps);
+        env.storage().persistent().remove(&DataKey::PendingFee);
         env.events().publish(
             (symbol_short!("core"), symbol_short!("fee_set")),
-            (new_fee_bps,),
+            (pending.fee_bps,),
         );
+    }
+
+    /// Withdraw a scheduled fee increase before it matures. Admin-only.
+    /// Emits `(core, fee_cncl)`.
+    pub fn cancel_pending_fee(env: Env, caller: Address) {
+        caller.require_auth();
+        assert!(is_admin(&env, &caller), "Unauthorized");
+        match Self::get_pending_fee(env.clone()) {
+            Some(p) => {
+                env.storage().persistent().remove(&DataKey::PendingFee);
+                env.events().publish(
+                    (symbol_short!("core"), symbol_short!("fee_cncl")),
+                    (p.fee_bps,),
+                );
+            }
+            None => panic_with_error!(&env, CoreError::NoPendingFee),
+        }
+    }
+
+    /// The fee increase still waiting out its timelock, if any.
+    pub fn get_pending_fee(env: Env) -> Option<PendingFee> {
+        env.storage()
+            .persistent()
+            .get::<DataKey, PendingFee>(&DataKey::PendingFee)
+            .filter(|p| env.ledger().timestamp() < p.effective_at)
+    }
+
+    /// Fee for `amount`, reverting with `FeeExceedsMax` if the effective rate
+    /// is above `max_fee_bps` or the fee is above `max_fee` (#1724).
+    ///
+    /// Integrators call this (or embed the same caps) in the user's
+    /// transaction so a fee raised after the quote reverts rather than
+    /// over-charging.
+    pub fn calculate_fee_checked(env: Env, amount: i128, max_fee_bps: u32, max_fee: i128) -> i128 {
+        let bps = Self::get_fee(env.clone());
+        if bps > max_fee_bps {
+            panic_with_error!(&env, CoreError::FeeExceedsMax);
+        }
+        let fee = compute_fee(amount, bps);
+        if fee > max_fee {
+            panic_with_error!(&env, CoreError::FeeExceedsMax);
+        }
+        fee
     }
 
     // ── Issue #1564: Timelocked upgrade + two-step admin transfer ─────────────
@@ -247,7 +349,14 @@ impl CoreContract {
 
     // ── Read-only (pause-exempt) ──────────────────────────────────────────────
 
+    /// The fee effective now: the stored fee, or a pending increase whose
+    /// timelock has elapsed (#1724).
     pub fn get_fee(env: Env) -> u32 {
+        if let Some(p) = env.storage().persistent().get::<DataKey, PendingFee>(&DataKey::PendingFee) {
+            if env.ledger().timestamp() >= p.effective_at {
+                return p.fee_bps;
+            }
+        }
         env.storage().persistent().get(&FEE_KEY).unwrap_or(0)
     }
 
@@ -267,7 +376,11 @@ impl CoreContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{testutils::{Address as _, Ledger}, Env};
+
+    fn mature(env: &Env) {
+        env.ledger().with_mut(|l| l.timestamp += FEE_CHANGE_DELAY_SECS);
+    }
 
     fn deploy(env: &Env, fee_bps: u32) -> (CoreContractClient<'_>, Address) {
         let id = env.register(CoreContract, ());
@@ -310,6 +423,9 @@ mod tests {
         env.mock_all_auths();
         let (client, admin) = deploy(&env, 250);
         client.set_fee(&admin, &500);
+        // #1724: increases are timelocked.
+        assert_eq!(client.get_fee(), 250);
+        mature(&env);
         assert_eq!(client.get_fee(), 500);
     }
 
@@ -320,6 +436,7 @@ mod tests {
         let (client, admin) = deploy(&env, 250);
         // 1_000 bps == 10% — the new hard ceiling
         client.set_fee(&admin, &1_000);
+        mature(&env);
         assert_eq!(client.get_fee(), 1_000);
     }
 
@@ -366,6 +483,7 @@ mod tests {
         let (client, admin) = deploy(&env, 250);
         // 1_000 bps == 10% — the enforced ceiling
         client.set_fee(&admin, &1_000);
+        mature(&env);
         assert_eq!(client.calculate_fee(&10_000), 1_000);
         assert_eq!(client.calculate_net(&10_000), 9_000);
     }
@@ -467,6 +585,94 @@ mod tests {
         env.mock_all_auths();
         let (client, admin, _) = deploy_with_guardian(&env, 250);
         client.unpause(&admin);
+    }
+
+    // ── #1724: fee caps + timelocked increases ────────────────────────────────
+
+    #[test]
+    fn test_fee_decrease_applies_immediately() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin) = deploy(&env, 250);
+        client.set_fee(&admin, &100);
+        assert_eq!(client.get_fee(), 100);
+        assert!(client.get_pending_fee().is_none());
+    }
+
+    #[test]
+    fn test_fee_increase_is_pending_until_delay() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin) = deploy(&env, 250);
+        client.set_fee(&admin, &500);
+        let p = client.get_pending_fee().unwrap();
+        assert_eq!(p.fee_bps, 500);
+        assert_eq!(p.effective_at, env.ledger().timestamp() + FEE_CHANGE_DELAY_SECS);
+        mature(&env);
+        client.apply_pending_fee();
+        assert_eq!(client.get_fee(), 500);
+        assert!(client.get_pending_fee().is_none());
+    }
+
+    #[test]
+    fn test_checked_fee_at_quoted_rate_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _) = deploy(&env, 250);
+        assert_eq!(client.calculate_fee_checked(&1_000, &250, &25), 25);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn test_fee_raised_after_quote_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin) = deploy(&env, 250);
+        let quoted_bps = client.get_fee();
+        let quoted_fee = client.calculate_fee(&1_000);
+        client.set_fee(&admin, &500);
+        mature(&env);
+        client.calculate_fee_checked(&1_000, &quoted_bps, &quoted_fee);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn test_checked_fee_absolute_cap_enforced() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _) = deploy(&env, 250);
+        client.calculate_fee_checked(&1_000, &1_000, &24);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
+    fn test_apply_pending_fee_before_delay_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin) = deploy(&env, 250);
+        client.set_fee(&admin, &500);
+        client.apply_pending_fee();
+    }
+
+    #[test]
+    fn test_cancel_pending_fee() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin) = deploy(&env, 250);
+        client.set_fee(&admin, &500);
+        client.cancel_pending_fee(&admin);
+        mature(&env);
+        assert_eq!(client.get_fee(), 250);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized")]
+    fn test_non_admin_cannot_cancel_pending_fee() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin) = deploy(&env, 250);
+        client.set_fee(&admin, &500);
+        client.cancel_pending_fee(&Address::generate(&env));
     }
 }
 

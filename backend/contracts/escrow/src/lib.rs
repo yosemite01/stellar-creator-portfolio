@@ -6,12 +6,24 @@
 
 // Reentrancy protection module (#635)
 mod reentrancy;
+
+#[cfg(test)]
+mod milestone_tests;
+#[cfg(test)]
+mod invariant_fuzz;
 use reentrancy::{require_active_escrow, require_authorized_party, ReentrancyGuard};
 
+// Per-dispute arbitration (#1713)
+pub mod arbitration;
+pub use arbitration::{
+    vote_commitment, ArbitrationConfig, Arbiter, CasePhase, DisputeCase, Evidence,
+};
+
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec,
     token::Client as TokenClient,
 };
+use stellar_contract_ttl::{self as ttl, TtlPolicy};
 
 /// Escrow Status
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -41,7 +53,9 @@ pub const DEFAULT_PLATFORM_FEE_BPS: i128 = 250;
 pub const DEFAULT_PLATFORM_FEE_CAP: i128 = 500;
 
 /// Dispute timeout: 30 days in ledger seconds (#731).
-/// After this window anyone can call `resolve_expired_dispute` for a 50/50 split.
+/// If no arbiter panel could be drawn for a dispute within this window, anyone
+/// can call `resolve_expired_dispute` for a fixed 50/50 split (#1713). The
+/// split is a constant: there is no admin-settable dispute outcome any more.
 pub const DISPUTE_TIMEOUT_SECS: u64 = 30 * 24 * 3600;
 
 /// Bounds for the governance-configurable oracle freshness threshold (#1110).
@@ -58,8 +72,23 @@ pub struct FeeConfig {
     pub fee_cap: i128,
 }
 
-/// Read the current fee config from storage, falling back to defaults.
-pub fn get_fee_config(env: &Env) -> FeeConfig {
+/// Delay before a fee *increase* takes effect (#1724): 48 hours.
+///
+/// Decreases apply immediately because they can only help users; increases are
+/// announced with a `(escrow, fee_prop)` event and only become effective once
+/// this window has elapsed, so a transaction quoted under the old fee can be
+/// submitted (or abandoned) before the new fee bites.
+pub const FEE_CHANGE_DELAY_SECS: u64 = 48 * 3600;
+
+/// A scheduled fee increase waiting out `FEE_CHANGE_DELAY_SECS` (#1724).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PendingFeeConfig {
+    pub config: FeeConfig,
+    pub effective_at: u64,
+}
+
+fn stored_fee_config(env: &Env) -> FeeConfig {
     env.storage()
         .persistent()
         .get::<DataKey, FeeConfig>(&DataKey::FeeConfig)
@@ -67,6 +96,21 @@ pub fn get_fee_config(env: &Env) -> FeeConfig {
             fee_bps: DEFAULT_PLATFORM_FEE_BPS,
             fee_cap: DEFAULT_PLATFORM_FEE_CAP,
         })
+}
+
+/// Read the *effective* fee config: the stored config, or a pending increase
+/// whose timelock has elapsed (activated lazily, so no keeper is required).
+pub fn get_fee_config(env: &Env) -> FeeConfig {
+    if let Some(p) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, PendingFeeConfig>(&DataKey::PendingFeeConfig)
+    {
+        if env.ledger().timestamp() >= p.effective_at {
+            return p.config;
+        }
+    }
+    stored_fee_config(env)
 }
 
 /// Compute the platform fee for a given gross amount using the current config.
@@ -99,7 +143,16 @@ pub struct EscrowAccount {
     pub fee_collected: i128,
 }
 
-/// Milestone â€” a named portion of the total escrow amount
+/// Maximum milestones per escrow. Bounds the fee-allocation loop (#1712).
+pub const MAX_MILESTONES: u32 = 50;
+
+/// Milestone — a named portion of the total escrow amount.
+///
+/// `amount` is the **net** payout to the payee (escrow amounts are already net
+/// of the platform fee). `fee_share` is this milestone's share of the fee that
+/// was charged once, on the total, at deposit. It is allocated with
+/// largest-remainder rounding as soon as the milestone plan sums to the escrow
+/// amount, so `sum(amount) + sum(fee_share) == deposited` exactly (#1712).
 #[contracttype]
 pub struct Milestone {
     pub escrow_id: u64,
@@ -107,6 +160,48 @@ pub struct Milestone {
     pub description: Symbol,
     pub amount: i128,
     pub released: bool,
+    pub fee_share: i128,
+}
+
+/// Split `total_fee` across `weights` proportionally, using largest-remainder
+/// rounding so the shares sum to exactly `total_fee` (#1712).
+///
+/// Ties on the remainder go to the earlier position, so the result is
+/// deterministic. `weights` must be non-empty with a positive sum.
+pub fn allocate_largest_remainder(env: &Env, total_fee: i128, weights: &soroban_sdk::Vec<i128>) -> soroban_sdk::Vec<i128> {
+    let n = weights.len();
+    let mut shares = soroban_sdk::Vec::new(env);
+    let mut remainders = soroban_sdk::Vec::new(env);
+    let mut sum_w: i128 = 0;
+    for w in weights.iter() {
+        sum_w += w;
+    }
+    if n == 0 || sum_w <= 0 {
+        return shares;
+    }
+    let mut allocated: i128 = 0;
+    for w in weights.iter() {
+        let base = total_fee * w / sum_w;
+        shares.push_back(base);
+        remainders.push_back(total_fee * w % sum_w);
+        allocated += base;
+    }
+    let mut leftover = total_fee - allocated; // 0 <= leftover < n
+    while leftover > 0 {
+        let mut best: u32 = 0;
+        let mut best_rem: i128 = -1;
+        for i in 0..n {
+            let r = remainders.get_unchecked(i);
+            if r > best_rem {
+                best_rem = r;
+                best = i;
+            }
+        }
+        shares.set(best, shares.get_unchecked(best) + 1);
+        remainders.set(best, -1); // each position receives at most one unit
+        leftover -= 1;
+    }
+    shares
 }
 
 /// DataKey for typed persistent storage lookups.
@@ -121,19 +216,20 @@ pub enum DataKey {
     MilestoneTotal(u64),
     MilestoneReleasedCount(u64),
     MilestoneReleasedAmount(u64),
+    /// Ordered milestone indices for an escrow (bounded by `MAX_MILESTONES`).
+    MilestoneIndices(u64),
     DisputeExpiry(u64),
-    DisputeSplit,
     FeeConfig,
     OracleStalenessSecs,
     OracleAddress,
-    /// Sum of principal still owed to payers/payees, per token (#1706).
-    Liabilities(Address),
-    /// Set once an escrow's principal is counted in `Liabilities` (#1706).
-    LiabilityCounted(u64),
-    /// Sub-unit accrual remainder carried between `accrue_yield` calls (#1707).
-    YieldRemainder(u64),
-    /// Feature flag for `withdraw_yield`; absent = disabled (#1706).
-    YieldWithdrawEnabled,
+    /// #1715: token contract accepted by `deposit` (admin-managed allowlist).
+    AllowedToken(Address),
+    /// #1714: the bounty contract trusted to drive bound escrows.
+    BountyContract,
+    /// #1714: bounty_id -> escrow_id bound by the bounty contract.
+    BoundEscrow(u64),
+    /// #1714: escrow_id -> bounty_id for escrows bound to a bounty.
+    EscrowBound(u64),
 }
 
 // ── Issue #631: Yield Farming for Unwithdrawn Escrow Funds ───────────────────
@@ -217,24 +313,38 @@ pub enum EscrowError {
     InsufficientLiquidity = 23,
     InvalidFeeConfig = 24,
     InvalidStaleness = 25,
-    /// An outflow would leave the contract holding less than its tracked
-    /// principal liabilities for that token (#1706).
-    Insolvent = 26,
-    /// `withdraw_yield` is behind a feature flag that is disabled (#1706).
-    YieldWithdrawDisabled = 27,
-    /// Arithmetic overflow while accruing yield (#1707).
-    Overflow = 28,
+    /// #1715: `deposit` with a token that is not on the admin allowlist.
+    TokenNotAllowed = 26,
+    /// #1715: the token moved a different amount than requested
+    /// (fee-on-transfer, rebasing or no-op `transfer`).
+    TokenTransferMismatch = 27,
+    /// #1714: a bounty-driven call before `set_bounty_contract`.
+    BountyContractNotSet = 28,
+    /// #1714: caller is not the registered bounty contract.
+    NotBountyContract = 29,
+    /// #1714: escrow is bound to a bounty; drive it through the bounty contract.
+    ManagedByBounty = 30,
+    /// #1714: escrow or bounty is already bound.
+    EscrowAlreadyBound = 31,
+    /// #1714: escrow belongs to another bounty or payer.
+    BountyMismatch = 32,
 }
 
 fn escrow_key(env: &Env, escrow_id: u64) -> (Symbol, u64) {
     (Symbol::new(env, "escrow"), escrow_id)
 }
 
+/// Loads an escrow and extends its TTL (#1720): every read and every write
+/// path goes through here, so an escrow that is touched stays live.
 fn load_escrow(env: &Env, escrow_id: u64) -> Result<EscrowAccount, EscrowError> {
-    env.storage()
+    let key = escrow_key(env, escrow_id);
+    let escrow = env
+        .storage()
         .persistent()
-        .get::<(Symbol, u64), EscrowAccount>(&escrow_key(env, escrow_id))
-        .ok_or(EscrowError::EscrowNotFound)
+        .get::<(Symbol, u64), EscrowAccount>(&key)
+        .ok_or(EscrowError::EscrowNotFound)?;
+    ttl::extend(env, &key, TtlPolicy::UserEntry);
+    Ok(escrow)
 }
 
 fn stored_admin(env: &Env) -> Result<Address, EscrowError> {
@@ -256,119 +366,41 @@ fn ensure(cond: bool, err: EscrowError) -> Result<(), EscrowError> {
     if cond { Ok(()) } else { Err(err) }
 }
 
-// ── Issue #1706: solvency accounting ─────────────────────────────────────────
-//
-// All escrows of a token share one contract balance, so the contract tracks
-// the total principal it still owes (`Liabilities(token)`). Every outflow goes
-// through `pay_liability` (principal leaving to its owner) or `pay_surplus`
-// (anything else, e.g. yield) and both enforce
-// `balance(contract) - amount >= liabilities_after`.
-
-fn liabilities_of(env: &Env, token: &Address) -> i128 {
-    env.storage()
-        .persistent()
-        .get::<DataKey, i128>(&DataKey::Liabilities(token.clone()))
-        .unwrap_or(0)
-}
-
-fn set_liabilities(env: &Env, token: &Address, value: i128) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::Liabilities(token.clone()), &value);
-}
-
-fn is_liability_counted(env: &Env, escrow_id: u64) -> bool {
-    env.storage()
-        .persistent()
-        .get::<DataKey, bool>(&DataKey::LiabilityCounted(escrow_id))
-        .unwrap_or(false)
-}
-
-/// Record `amount` of principal owed for `escrow_id`.
-fn add_liability(env: &Env, escrow_id: u64, token: &Address, amount: i128) {
-    set_liabilities(env, token, liabilities_of(env, token).saturating_add(amount));
-    env.storage()
-        .persistent()
-        .set(&DataKey::LiabilityCounted(escrow_id), &true);
-}
-
-/// Contract balance of `token` above what it owes. Never negative.
-fn surplus_of(env: &Env, token: &Address) -> i128 {
-    let balance = TokenClient::new(env, token).balance(&env.current_contract_address());
-    let s = balance - liabilities_of(env, token);
-    if s > 0 { s } else { 0 }
-}
-
-fn transfer_checked(
-    env: &Env,
-    token: &Address,
-    to: &Address,
-    amount: i128,
-    liabilities_after: i128,
-) -> Result<(), EscrowError> {
-    if amount <= 0 {
-        return Ok(());
-    }
-    let client = TokenClient::new(env, token);
-    let balance = client.balance(&env.current_contract_address());
-    ensure(balance - amount >= liabilities_after, EscrowError::Insolvent)?;
-    client.transfer(&env.current_contract_address(), to, &amount);
-    Ok(())
-}
-
-/// Pay `amount` of `escrow_id`'s principal to `to`, reducing liabilities.
-fn pay_liability(
-    env: &Env,
-    escrow_id: u64,
-    token: &Address,
-    to: &Address,
-    amount: i128,
-) -> Result<(), EscrowError> {
-    let current = liabilities_of(env, token);
-    let after = if is_liability_counted(env, escrow_id) {
-        let a = current - amount;
-        if a > 0 { a } else { 0 }
-    } else {
-        current
-    };
-    transfer_checked(env, token, to, amount, after)?;
-    set_liabilities(env, token, after);
-    Ok(())
-}
-
-/// Pay `amount` out of surplus only; liabilities are unchanged.
-fn pay_surplus(env: &Env, token: &Address, to: &Address, amount: i128) -> Result<(), EscrowError> {
-    transfer_checked(env, token, to, amount, liabilities_of(env, token))
-}
-
-/// Seconds per year used for yield accrual.
-pub const SECONDS_PER_YEAR: u64 = 365 * 24 * 3600;
-
-/// One step of path-independent accrual (#1707).
-///
-/// Returns `(new_yield, new_carry)` where
-/// `new_yield = (principal * rate_bps * elapsed + carry) / D` and `new_carry`
-/// is the remainder, with `D = 10_000 * SECONDS_PER_YEAR`. Carrying the
-/// remainder makes the sum over any split of `elapsed` equal to a single
-/// call over the total. `None` on overflow.
-pub fn accrue_with_carry(principal: i128, rate_bps: u32, elapsed: u64, carry: i128) -> Option<(i128, i128)> {
-    let denom: i128 = 10_000_i128 * SECONDS_PER_YEAR as i128;
-    let numerator = principal
-        .checked_mul(rate_bps as i128)?
-        .checked_mul(elapsed as i128)?
-        .checked_add(carry)?;
-    Some((numerator / denom, numerator % denom))
-}
-
-/// Principal still held for an escrow (amount minus released milestones).
-fn remaining_principal(env: &Env, escrow: &EscrowAccount) -> i128 {
-    let released: i128 = env
+/// #1714: authenticates `caller` and checks it is the registered bounty contract.
+fn require_bounty_contract(env: &Env, caller: &Address) -> Result<(), EscrowError> {
+    caller.require_auth();
+    let registered: Address = env
         .storage()
         .persistent()
-        .get(&DataKey::MilestoneReleasedAmount(escrow.id))
-        .unwrap_or(0);
-    let r = escrow.amount - released;
-    if r > 0 { r } else { 0 }
+        .get::<DataKey, Address>(&DataKey::BountyContract)
+        .ok_or(EscrowError::BountyContractNotSet)?;
+    ensure(*caller == registered, EscrowError::NotBountyContract)
+}
+
+/// #1714: true when the escrow is bound to a bounty and may only be moved by
+/// the bounty contract.
+fn is_bound(env: &Env, escrow_id: u64) -> bool {
+    env.storage().persistent().has(&DataKey::EscrowBound(escrow_id))
+}
+
+fn bound_escrow_id(env: &Env, bounty_id: u64) -> Result<u64, EscrowError> {
+    env.storage()
+        .persistent()
+        .get::<DataKey, u64>(&DataKey::BoundEscrow(bounty_id))
+        .ok_or(EscrowError::NoEscrowForBounty)
+}
+
+/// #1715: the allowlist is enforced once a platform admin exists (every
+/// deployed instance sets one). Without an admin nobody could manage the
+/// list, so only the balance-delta check applies.
+fn require_token_allowed(env: &Env, token: &Address) -> Result<(), EscrowError> {
+    if stored_admin(env).is_ok() {
+        ensure(
+            env.storage().persistent().has(&DataKey::AllowedToken(token.clone())),
+            EscrowError::TokenNotAllowed,
+        )?;
+    }
+    Ok(())
 }
 
 #[contract]
@@ -377,6 +409,10 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Deposit funds into escrow
+    ///
+    /// Charges whatever fee is effective at execution time. Wallet-facing
+    /// flows should prefer [`Self::deposit_with_max_fee`], which reverts if the
+    /// fee rose after the user was quoted (#1724).
     pub fn deposit(
         env: Env,
         bounty_id: u64,
@@ -386,23 +422,71 @@ impl EscrowContract {
         token: Address,
         release_condition: ReleaseCondition,
     ) -> Result<u64, EscrowError> {
+        Self::deposit_inner(env, bounty_id, payer, payee, amount, token, release_condition, None)
+    }
+
+    /// Deposit funds into escrow, reverting with `FeeExceedsMax` if the
+    /// platform fee charged would exceed `max_fee` token units (#1724).
+    ///
+    /// Clients obtain `max_fee` from `estimate_fund_escrow_fee` at quote time
+    /// (optionally plus a tolerance the user accepted) and pass it here, so a
+    /// fee change between quote and execution can never over-charge the user.
+    #[allow(clippy::too_many_arguments)]
+    pub fn deposit_with_max_fee(
+        env: Env,
+        bounty_id: u64,
+        payer: Address,
+        payee: Address,
+        amount: i128,
+        token: Address,
+        release_condition: ReleaseCondition,
+        max_fee: i128,
+    ) -> Result<u64, EscrowError> {
+        ensure(max_fee >= 0, EscrowError::InvalidAmount)?;
+        Self::deposit_inner(env, bounty_id, payer, payee, amount, token, release_condition, Some(max_fee))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn deposit_inner(
+        env: Env,
+        bounty_id: u64,
+        payer: Address,
+        payee: Address,
+        amount: i128,
+        token: Address,
+        release_condition: ReleaseCondition,
+        max_fee: Option<i128>,
+    ) -> Result<u64, EscrowError> {
         payer.require_auth();
         ensure(amount > 0, EscrowError::InvalidAmount)?;
         let _guard = ReentrancyGuard::acquire(&env);
 
+        // #1724: enforce the user's fee cap before any funds move.
+        let fee_cfg = get_fee_config(&env);
+        let fee = platform_fee_with_config(amount, &fee_cfg);
+        if let Some(max) = max_fee {
+            ensure(fee <= max, EscrowError::FeeExceedsMax)?;
+        }
+
         // #179: Validate token implements the SEP-41 interface before accepting funds.
         // Calling balance() will trap if `token` is not a valid token contract,
         // preventing funds from being locked with an unrecoverable address.
+        // #1715: only admin-allowlisted tokens are accepted.
+        require_token_allowed(&env, &token)?;
         let token_client = TokenClient::new(&env, &token);
         let _ = token_client.balance(&payer);
+        // #1715: verify the contract actually received `amount`. Fee-on-
+        // transfer, rebasing or no-op tokens fail here instead of leaving the
+        // escrow accounting ahead of the real balance.
+        let before = token_client.balance(&env.current_contract_address());
         token_client.transfer(&payer, env.current_contract_address(), &amount);
+        let after = token_client.balance(&env.current_contract_address());
+        ensure(after - before == amount, EscrowError::TokenTransferMismatch)?;
 
         let counter_key = Symbol::new(&env, "escrow_counter");
         let mut counter: u64 = env.storage().persistent().get::<Symbol, u64>(&counter_key).unwrap_or(0);
         counter += 1;
 
-        let fee_cfg = get_fee_config(&env);
-        let fee = platform_fee_with_config(amount, &fee_cfg);
         let net_amount = amount - fee;
 
         // Collect platform fee to admin if set, otherwise hold in contract
@@ -435,7 +519,9 @@ impl EscrowContract {
             .persistent()
             .set(&(Symbol::new(&env, "b_esc"), bounty_id), &counter);
         env.storage().persistent().set(&counter_key, &counter);
-        add_liability(&env, counter, &escrow.token, net_amount);
+        ttl::extend(&env, &escrow_key(&env, counter), TtlPolicy::UserEntry);
+        ttl::extend(&env, &(Symbol::new(&env, "b_esc"), bounty_id), TtlPolicy::UserEntry);
+        ttl::extend(&env, &counter_key, TtlPolicy::Config);
 
         // Emit escrow_deposited event for indexers
         env.events().publish(
@@ -463,8 +549,11 @@ impl EscrowContract {
             authorizer == escrow.payer || authorizer == escrow.payee,
             EscrowError::Unauthorized,
         )?;
+        ensure(!is_bound(&env, escrow_id), EscrowError::ManagedByBounty)?;
         ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
         ensure(Self::can_release(env.clone(), escrow_id)?, EscrowError::ReleaseConditionNotMet)?;
+        // #1712: never pay out amounts already released through milestones.
+        let remaining = remaining_amount(&env, &escrow);
 
         // EFFECTS – mutate state before any cross-contract call
 
@@ -486,12 +575,13 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &escrow);
 
         // INTERACTIONS – external call after state is finalised
-        pay_liability(&env, escrow_id, &escrow.token, &escrow.payee, payout)?;
+        TokenClient::new(&env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payee, &remaining);
 
         // Emit escrow_released event for indexers
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("released")),
-            (escrow_id, escrow.bounty_id, escrow.payee.clone(), payout),
+            (escrow_id, escrow.bounty_id, escrow.payee.clone(), remaining),
         );
 
         Ok(true)
@@ -507,7 +597,10 @@ impl EscrowContract {
         let mut escrow = load_escrow(&env, escrow_id)?;
 
         ensure(authorizer == escrow.payer, EscrowError::Unauthorized)?;
+        ensure(!is_bound(&env, escrow_id), EscrowError::ManagedByBounty)?;
         ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
+        // #1712: never pay out amounts already released through milestones.
+        let remaining = remaining_amount(&env, &escrow);
 
         // EFFECTS – mutate state before any cross-contract call
         let payout = remaining_principal(&env, &escrow);
@@ -516,45 +609,194 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &escrow);
 
         // INTERACTIONS – external call after state is finalised
-        pay_liability(&env, escrow_id, &escrow.token, &escrow.payer, payout)?;
+        TokenClient::new(&env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payer, &remaining);
 
         // Emit escrow_refunded event for indexers
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("refunded")),
-            (escrow_id, escrow.bounty_id, escrow.payer.clone(), payout),
+            (escrow_id, escrow.bounty_id, escrow.payer.clone(), remaining),
         );
 
         Ok(true)
     }
 
-    /// Refund an expired bounty's escrow to the payer. Called by the bounty contract when expiring.
+    /// Refund an expired bounty's escrow to the payer. Called by the bounty
+    /// contract when expiring. #1714: `bounty_contract` must be the contract
+    /// registered via `set_bounty_contract` (any contract used to be able to
+    /// refund any bounty's escrow). Kept for older bounty deployments; new
+    /// ones call `refund_for_bounty`.
     pub fn refund_expired_bounty(env: Env, bounty_id: u64, bounty_contract: Address) -> Result<bool, EscrowError> {
-        bounty_contract.require_auth();
+        require_bounty_contract(&env, &bounty_contract)?;
+        Self::refund_bound(&env, bounty_id)
+    }
+
+    // ── Issue #1714: bounty × escrow joint state machine ─────────────────────
+    //
+    // An escrow bound to a bounty can only leave `Active` through the bounty
+    // contract, in the same transaction as the bounty transition:
+    //
+    //   bounty complete_bounty         -> escrow release_for_bounty (Released)
+    //   bounty cancel / expire         -> escrow refund_for_bounty  (Refunded)
+    //
+    // Direct `release_funds`, `refund_escrow`, `dispute_escrow` and
+    // `submit_transaction` calls on a bound escrow fail with `ManagedByBounty`.
+
+    /// Register the bounty contract trusted to drive bound escrows. Admin-only.
+    pub fn set_bounty_contract(env: Env, admin: Address, bounty_contract: Address) -> Result<(), EscrowError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        env.storage().persistent().set(&DataKey::BountyContract, &bounty_contract);
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("bnty_set")),
+            bounty_contract,
+        );
+        Ok(())
+    }
+
+    pub fn get_bounty_contract(env: Env) -> Option<Address> {
+        env.storage().persistent().get::<DataKey, Address>(&DataKey::BountyContract)
+    }
+
+    /// Bind an Active escrow to a bounty. Only the bounty contract may call;
+    /// the escrow must have been deposited for `bounty_id` by `creator`, and
+    /// neither side may already be bound.
+    pub fn bind_bounty(
+        env: Env,
+        bounty_contract: Address,
+        bounty_id: u64,
+        escrow_id: u64,
+        creator: Address,
+    ) -> Result<bool, EscrowError> {
+        require_bounty_contract(&env, &bounty_contract)?;
+        let escrow = load_escrow(&env, escrow_id)?;
+        ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
+        ensure(
+            escrow.bounty_id == bounty_id && escrow.payer == creator,
+            EscrowError::BountyMismatch,
+        )?;
+        ensure(
+            !is_bound(&env, escrow_id)
+                && !env.storage().persistent().has(&DataKey::BoundEscrow(bounty_id)),
+            EscrowError::EscrowAlreadyBound,
+        )?;
+
+        env.storage().persistent().set(&DataKey::BoundEscrow(bounty_id), &escrow_id);
+        env.storage().persistent().set(&DataKey::EscrowBound(escrow_id), &bounty_id);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("bound")),
+            (escrow_id, bounty_id),
+        );
+        Ok(true)
+    }
+
+    /// Escrow id bound to `bounty_id`, or 0.
+    pub fn get_bound_escrow(env: Env, bounty_id: u64) -> u64 {
+        env.storage()
+            .persistent()
+            .get::<DataKey, u64>(&DataKey::BoundEscrow(bounty_id))
+            .unwrap_or(0)
+    }
+
+    /// Status of an escrow (cheap view used by the bounty contract's
+    /// joint-state invariant check).
+    pub fn get_escrow_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, EscrowError> {
+        Ok(load_escrow(&env, escrow_id)?.status)
+    }
+
+    /// Pay a bound escrow out to `payee` (the selected freelancer). Called by
+    /// the bounty contract from `complete_bounty`.
+    pub fn release_for_bounty(
+        env: Env,
+        bounty_contract: Address,
+        bounty_id: u64,
+        payee: Address,
+    ) -> Result<bool, EscrowError> {
+        require_bounty_contract(&env, &bounty_contract)?;
         let _guard = ReentrancyGuard::acquire(&env);
 
-        let escrow_id = Self::get_escrow_id_for_bounty(env.clone(), bounty_id);
-        ensure(escrow_id > 0, EscrowError::NoEscrowForBounty)?;
-
+        let escrow_id = bound_escrow_id(&env, bounty_id)?;
         let key = escrow_key(&env, escrow_id);
         let mut escrow = load_escrow(&env, escrow_id)?;
+        ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
+        ensure(Self::can_release(env.clone(), escrow_id)?, EscrowError::ReleaseConditionNotMet)?;
 
+        // EFFECTS
+        escrow.payee = payee;
+        escrow.status = EscrowStatus::Released;
+        escrow.released_at = Some(env.ledger().timestamp());
+        env.storage().persistent().set(&key, &escrow);
+
+        // INTERACTIONS
+        TokenClient::new(&env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payee, &escrow.amount);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("released")),
+            (escrow_id, bounty_id, escrow.payee.clone(), escrow.amount),
+        );
+        Ok(true)
+    }
+
+    /// Refund a bound escrow to the payer. Called by the bounty contract from
+    /// `cancel_bounty` / `check_and_expire_bounty`.
+    pub fn refund_for_bounty(env: Env, bounty_contract: Address, bounty_id: u64) -> Result<bool, EscrowError> {
+        require_bounty_contract(&env, &bounty_contract)?;
+        Self::refund_bound(&env, bounty_id)
+    }
+
+    fn refund_bound(env: &Env, bounty_id: u64) -> Result<bool, EscrowError> {
+        let _guard = ReentrancyGuard::acquire(env);
+
+        let escrow_id = match env.storage().persistent().get::<DataKey, u64>(&DataKey::BoundEscrow(bounty_id)) {
+            Some(id) => id,
+            None => Self::get_escrow_id_for_bounty(env.clone(), bounty_id),
+        };
+        ensure(escrow_id > 0, EscrowError::NoEscrowForBounty)?;
+
+        let key = escrow_key(env, escrow_id);
+        let mut escrow = load_escrow(env, escrow_id)?;
         ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
 
-        let payout = remaining_principal(&env, &escrow);
+        // EFFECTS – state first, then the transfer.
         escrow.status = EscrowStatus::Refunded;
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
 
-        // Transfer funds back to the creator (payer)
-        pay_liability(&env, escrow_id, &escrow.token, &escrow.payer, payout)?;
+        TokenClient::new(env, &escrow.token)
+            .transfer(&env.current_contract_address(), &escrow.payer, &escrow.amount);
 
-        // Emit escrow_refunded event
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("refunded")),
-            (escrow_id, bounty_id, escrow.payer.clone(), payout),
+            (escrow_id, bounty_id, escrow.payer.clone(), remaining),
         );
-
         Ok(true)
+    }
+
+    // ── Issue #1715: token allowlist ──────────────────────────────────────────
+
+    /// Add `token` to the deposit allowlist. Admin-only.
+    pub fn allow_token(env: Env, admin: Address, token: Address) -> Result<(), EscrowError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        env.storage().persistent().set(&DataKey::AllowedToken(token.clone()), &true);
+        env.events().publish((symbol_short!("token"), symbol_short!("allowed")), token);
+        Ok(())
+    }
+
+    /// Remove `token` from the deposit allowlist. Existing escrows in that
+    /// token can still be released or refunded. Admin-only.
+    pub fn disallow_token(env: Env, admin: Address, token: Address) -> Result<(), EscrowError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        env.storage().persistent().remove(&DataKey::AllowedToken(token.clone()));
+        env.events().publish((symbol_short!("token"), symbol_short!("removed")), token);
+        Ok(())
+    }
+
+    pub fn is_token_allowed(env: Env, token: Address) -> bool {
+        env.storage().persistent().has(&DataKey::AllowedToken(token))
     }
 
     /// Mark escrow as disputed. Either party may raise a dispute.
@@ -568,6 +810,8 @@ impl EscrowContract {
             authorizer == escrow.payer || authorizer == escrow.payee,
             EscrowError::Unauthorized,
         )?;
+        // #1714: a bound escrow's lifecycle follows its bounty.
+        ensure(!is_bound(&env, escrow_id), EscrowError::ManagedByBounty)?;
         ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
 
         escrow.status = EscrowStatus::Disputed;
@@ -578,6 +822,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::DisputeExpiry(escrow_id), &expires_at);
+        ttl::extend(&env, &DataKey::DisputeExpiry(escrow_id), TtlPolicy::UserEntry);
 
         // Emit escrow_disputed event for indexers
         env.events().publish(
@@ -585,45 +830,86 @@ impl EscrowContract {
             (escrow_id, escrow.bounty_id, authorizer, expires_at),
         );
 
+        // #1713: draw an arbiter panel right away when the pool allows it.
+        // If it doesn't, `open_dispute_case` can be called later, and
+        // `resolve_expired_dispute` is the fallback after the expiry window.
+        if arbitration::load_config(&env).is_ok() {
+            let _ = arbitration::open_case(&env, &escrow);
+        }
+
         Ok(true)
     }
 
-    /// Resolve a disputed escrow. Only the platform admin may call this.
-    ///
-    /// `resolution`: `true` → release funds to payee; `false` → refund to payer.
-    pub fn resolve_dispute(
-        env: Env,
-        admin: Address,
-        escrow_id: u64,
-        release_to_payee: bool,
-    ) -> Result<bool, EscrowError> {
+    // ── Issue #1713: per-dispute arbitration ─────────────────────────────────
+    //
+    // The admin-only `resolve_dispute` and the global `set_dispute_split` are
+    // gone. Outcomes are decided per dispute by a randomly drawn, staked
+    // arbiter panel using commit-reveal voting, with one appeal to a larger
+    // panel. See docs/escrow-arbitration.md.
+
+    /// One-time setup of the arbiter stake token and minimum stake. The admin
+    /// cannot change it later and has no say in any outcome.
+    pub fn configure_arbitration(env: Env, admin: Address, stake_token: Address, min_stake: i128) -> Result<(), EscrowError> {
         admin.require_auth();
-        let _guard = ReentrancyGuard::acquire(&env);
-
-        // Verify caller is the stored platform admin
         require_admin(&env, &admin)?;
+        arbitration::configure(&env, stake_token, min_stake)
+    }
 
-        let key = escrow_key(&env, escrow_id);
-        let mut escrow = load_escrow(&env, escrow_id)?;
+    pub fn get_arbitration_config(env: Env) -> Result<ArbitrationConfig, EscrowError> {
+        arbitration::load_config(&env)
+    }
 
+    /// Stake `amount` of the stake token to join (or top up in) the arbiter pool.
+    pub fn register_arbiter(env: Env, arbiter: Address, amount: i128) -> Result<Arbiter, EscrowError> {
+        arbiter.require_auth();
+        let _guard = ReentrancyGuard::acquire(&env);
+        arbitration::register(&env, arbiter, amount)
+    }
+
+    /// Withdraw stake. Not allowed while the arbiter sits on an open panel.
+    pub fn withdraw_arbiter_stake(env: Env, arbiter: Address, amount: i128) -> Result<i128, EscrowError> {
+        arbiter.require_auth();
+        let _guard = ReentrancyGuard::acquire(&env);
+        arbitration::withdraw(&env, arbiter, amount)
+    }
+
+    pub fn get_arbiter(env: Env, arbiter: Address) -> Result<Arbiter, EscrowError> {
+        arbitration::load_arbiter(&env, &arbiter)
+    }
+
+    /// Draw a panel for a disputed escrow that has none yet (e.g. the pool was
+    /// too small when the dispute was raised). Anyone may call.
+    pub fn open_dispute_case(env: Env, escrow_id: u64) -> Result<DisputeCase, EscrowError> {
+        let escrow = load_escrow(&env, escrow_id)?;
         ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        arbitration::open_case(&env, &escrow)
+    }
 
-        let recipient = if release_to_payee {
-            escrow.payee.clone()
+    pub fn get_dispute_case(env: Env, escrow_id: u64) -> Result<DisputeCase, EscrowError> {
+        arbitration::load_case(&env, escrow_id)
+    }
+
+    /// Anchor an evidence hash on-chain. `hash` is the sha256 returned by
+    /// `POST /api/disputes/:id/evidence` (`evidenceHash`). Payer or payee only.
+    pub fn submit_evidence(env: Env, party: Address, escrow_id: u64, hash: BytesN<32>) -> Result<u32, EscrowError> {
+        party.require_auth();
+        let escrow = load_escrow(&env, escrow_id)?;
+        ensure(party == escrow.payer || party == escrow.payee, EscrowError::Unauthorized)?;
+        ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        arbitration::submit_evidence(&env, escrow_id, party, hash)
+    }
+
+    pub fn get_evidence(env: Env, escrow_id: u64) -> Vec<Evidence> {
+        arbitration::load_evidence(&env, escrow_id)
+    }
+
+        // #1711: record the verified outcome for insurance claims.
+        let (payer_amount, payee_amount) = if release_to_payee {
+            (0, escrow.amount)
         } else {
-            escrow.payer.clone()
+            (escrow.amount, 0)
         };
-
-        let payout = remaining_principal(&env, &escrow);
-        pay_liability(&env, escrow_id, &escrow.token, &recipient, payout)?;
-
-        escrow.status = if release_to_payee {
-            EscrowStatus::Released
-        } else {
-            EscrowStatus::Refunded
-        };
-        escrow.released_at = Some(env.ledger().timestamp());
-        env.storage().persistent().set(&key, &escrow);
+        record_dispute_outcome(&env, &escrow, payer_amount, payee_amount);
 
         // Emit dispute_resolved event for indexers
         env.events().publish(
@@ -631,37 +917,63 @@ impl EscrowContract {
             (escrow_id, escrow.bounty_id, recipient, release_to_payee),
         );
 
+    /// Reveal a committed vote between the commit and reveal deadlines.
+    pub fn reveal_vote(env: Env, arbiter: Address, escrow_id: u64, payee_bps: u32, salt: BytesN<32>) -> Result<(), EscrowError> {
+        arbiter.require_auth();
+        arbitration::reveal(&env, escrow_id, arbiter, payee_bps, salt)
+    }
+
+    /// Close the current round after its reveal deadline. Anyone may call.
+    /// Round 0 produces an appealable ruling; an appeal round's ruling is
+    /// final and paid out immediately.
+    pub fn tally_dispute(env: Env, escrow_id: u64) -> Result<DisputeCase, EscrowError> {
+        let _guard = ReentrancyGuard::acquire(&env);
+        let mut escrow = load_escrow(&env, escrow_id)?;
+        ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        let case = arbitration::tally(&env, &escrow)?;
+        if case.phase == CasePhase::Final {
+            if let Some(bps) = case.ruling_bps {
+                settle_dispute(&env, &mut escrow, bps);
+            }
+        }
+        Ok(case)
+    }
+
+    /// Appeal a round-0 ruling within the appeal window. Payer or payee only.
+    /// Draws a fresh, larger panel that excludes the first panel.
+    pub fn appeal_ruling(env: Env, party: Address, escrow_id: u64) -> Result<DisputeCase, EscrowError> {
+        party.require_auth();
+        let escrow = load_escrow(&env, escrow_id)?;
+        ensure(party == escrow.payer || party == escrow.payee, EscrowError::Unauthorized)?;
+        ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        arbitration::appeal(&env, &escrow, party)
+    }
+
+    /// Pay out an unappealed round-0 ruling once the appeal window closes.
+    /// Anyone may call.
+    pub fn execute_ruling(env: Env, escrow_id: u64) -> Result<bool, EscrowError> {
+        let _guard = ReentrancyGuard::acquire(&env);
+        let mut escrow = load_escrow(&env, escrow_id)?;
+        ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        let bps = arbitration::finalize_unappealed(&env, escrow_id)?;
+        settle_dispute(&env, &mut escrow, bps);
         Ok(true)
     }
 
-    // ── Issue #731: Dispute resolution timeout ────────────────────────────────
-
-    /// Configure the default auto-resolution split in basis points paid to the
-    /// payee. 5000 = 50/50. Only the platform admin may call this.
-    pub fn set_dispute_split(env: Env, admin: Address, payee_bps: u32) -> Result<(), EscrowError> {
-        admin.require_auth();
-        require_admin(&env, &admin)?;
-        ensure(payee_bps <= 10_000, EscrowError::InvalidBps)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::DisputeSplit, &payee_bps);
-        Ok(())
-    }
-
-    /// Auto-resolve a stale dispute after its expiry window has elapsed.
-    /// Anyone may call this — no auth required.
-    /// Default resolution: 50/50 split (configurable via `set_dispute_split`).
+    /// Fallback for a dispute that never got a panel (no or too few arbiters)
+    /// once its expiry window has elapsed: fixed 50/50 split. Anyone may call.
     ///
     /// Fails with:
     ///   - `EscrowNotDisputed` if escrow is not in Disputed state
+    ///   - `CaseAlreadyOpen` if an arbiter panel is handling the dispute
     ///   - `DisputeNotExpired` if the expiry window has not yet elapsed
     pub fn resolve_expired_dispute(env: Env, escrow_id: u64) -> Result<bool, EscrowError> {
         let _guard = ReentrancyGuard::acquire(&env);
 
-        let key = escrow_key(&env, escrow_id);
         let mut escrow = load_escrow(&env, escrow_id)?;
 
         ensure(escrow.status == EscrowStatus::Disputed, EscrowError::EscrowNotDisputed)?;
+        ensure(!arbitration::has_case(&env, escrow_id), EscrowError::CaseAlreadyOpen)?;
 
         let expires_at: u64 = env
             .storage()
@@ -671,23 +983,12 @@ impl EscrowContract {
 
         ensure(env.ledger().timestamp() >= expires_at, EscrowError::DisputeNotExpired)?;
 
-        // Determine split: default 50/50 unless governance has set otherwise
-        let payee_bps: u32 = env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&DataKey::DisputeSplit)
-            .unwrap_or(5_000); // 50% to payee
-
-        let remaining = remaining_principal(&env, &escrow);
-        let payee_amount = remaining * (payee_bps as i128) / 10_000;
-        let payer_amount = remaining - payee_amount;
-
-        pay_liability(&env, escrow_id, &escrow.token, &escrow.payee, payee_amount)?;
-        pay_liability(&env, escrow_id, &escrow.token, &escrow.payer, payer_amount)?;
+        let (payee_amount, payer_amount) = settle_dispute(&env, &mut escrow, arbitration::DEFAULT_PAYEE_BPS);
 
         escrow.status = EscrowStatus::Refunded; // closest semantic: funds dispersed
         escrow.released_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &escrow);
+        record_dispute_outcome(&env, &escrow, payer_amount, payee_amount);
 
         // Emit dispute_auto_resolved event
         env.events().publish(
@@ -698,16 +999,25 @@ impl EscrowContract {
         Ok(true)
     }
 
+    /// Verified outcome of a resolved dispute, if the escrow was disputed and
+    /// settled (#1711). `None` for escrows that were never disputed or are
+    /// still in dispute.
+    pub fn get_dispute_outcome(env: Env, escrow_id: u64) -> Option<DisputeOutcome> {
+        env.storage()
+            .persistent()
+            .get::<DataKey, DisputeOutcome>(&DataKey::DisputeOutcome(escrow_id))
+    }
+
     /// Set the platform admin address. Can only be called once (bootstrap).
     pub fn set_admin(env: Env, admin: Address) -> Result<(), EscrowError> {
         admin.require_auth();
         let admin_key = Symbol::new(&env, "platform_admin");
-        ensure(
-            env.storage().persistent().get::<Symbol, Address>(&admin_key).is_none(),
-            EscrowError::AdminAlreadySet,
-        )?;
+        // Defensive: a constructor only ever runs once, but never overwrite.
+        if env.storage().persistent().has(&admin_key) {
+            panic_with_error!(&env, EscrowError::AdminAlreadySet);
+        }
         env.storage().persistent().set(&admin_key, &admin);
-        Ok(())
+        env.events().publish((symbol_short!("escrow"), symbol_short!("admin_set")), admin);
     }
 
     /// Get the current platform admin address.
@@ -715,7 +1025,12 @@ impl EscrowContract {
         stored_admin(&env)
     }
 
-    /// Add a milestone to an active escrow. Sum of milestone amounts must not exceed escrow amount.
+    /// Add a milestone to an active escrow.
+    ///
+    /// The running total may not exceed the escrow amount. Milestones cannot
+    /// be released until the plan sums to the escrow amount exactly; when the
+    /// last milestone brings the total to the escrow amount the deposit fee is
+    /// allocated across milestones and `(escrow, ms_plan)` is emitted (#1712).
     pub fn add_milestone(
         env: Env,
         authorizer: Address,
@@ -734,29 +1049,103 @@ impl EscrowContract {
 
         let total_key = DataKey::MilestoneTotal(escrow_id);
         let current_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
-        ensure(
-            current_total + amount <= escrow.amount,
-            EscrowError::MilestoneExceedsEscrow,
-        )?;
+        let new_total = current_total
+            .checked_add(amount)
+            .ok_or(EscrowError::InvalidAmount)?;
+        ensure(new_total <= escrow.amount, EscrowError::MilestoneExceedsEscrow)?;
 
-        let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
+        let m_key = milestone_key(&env, escrow_id, index);
         ensure(
             env.storage().persistent().get::<(Symbol, u64, u32), Milestone>(&m_key).is_none(),
             EscrowError::MilestoneAlreadyExists,
         )?;
 
-        env.storage().persistent().set(&total_key, &(current_total + amount));
+        let mut indices = milestone_indices(&env, escrow_id);
+        ensure(indices.len() < MAX_MILESTONES, EscrowError::TooManyMilestones)?;
+        indices.push_back(index);
+        env.storage().persistent().set(&DataKey::MilestoneIndices(escrow_id), &indices);
+
+        env.storage().persistent().set(&total_key, &new_total);
 
         let count_key = DataKey::MilestoneCount(escrow_id);
         let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
         env.storage().persistent().set(&count_key, &(count + 1));
 
-        let milestone = Milestone { escrow_id, index, description, amount, released: false };
+        let milestone = Milestone { escrow_id, index, description, amount, released: false, fee_share: 0 };
         env.storage().persistent().set(&m_key, &milestone);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("ms_add")),
+            (escrow_id, index, amount, new_total),
+        );
+
+        if new_total == escrow.amount {
+            allocate_milestone_fees(&env, &escrow);
+        }
+        Ok(())
+    }
+
+    /// Re-split the milestone plan before any milestone is released.
+    ///
+    /// `indices[i]` gets `amounts[i]`. Every listed index must exist; the plan
+    /// total after the amendment must equal the escrow amount exactly, and the
+    /// fee is re-allocated. Payer-only. Emits `(escrow, ms_amend)` (#1712).
+    pub fn amend_milestones(
+        env: Env,
+        authorizer: Address,
+        escrow_id: u64,
+        indices: soroban_sdk::Vec<u32>,
+        amounts: soroban_sdk::Vec<i128>,
+    ) -> Result<(), EscrowError> {
+        authorizer.require_auth();
+
+        let escrow = load_escrow(&env, escrow_id)?;
+        ensure(authorizer == escrow.payer, EscrowError::Unauthorized)?;
+        ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
+        ensure(indices.len() == amounts.len(), EscrowError::InvalidAmount)?;
+        let released: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneReleasedCount(escrow_id))
+            .unwrap_or(0);
+        ensure(released == 0, EscrowError::MilestoneAmendLocked)?;
+
+        for (pos, index) in indices.iter().enumerate() {
+            let amount = amounts.get_unchecked(pos as u32);
+            ensure(amount > 0, EscrowError::InvalidAmount)?;
+            let key = milestone_key(&env, escrow_id, index);
+            let mut m: Milestone = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(EscrowError::MilestoneNotFound)?;
+            m.amount = amount;
+            env.storage().persistent().set(&key, &m);
+        }
+
+        let mut total: i128 = 0;
+        for index in milestone_indices(&env, escrow_id).iter() {
+            let m: Milestone = env.storage().persistent().get(&milestone_key(&env, escrow_id, index)).unwrap();
+            total = total.checked_add(m.amount).ok_or(EscrowError::InvalidAmount)?;
+        }
+        // Any failure here reverts every write above.
+        ensure(total == escrow.amount, EscrowError::MilestoneSumMismatch)?;
+        env.storage().persistent().set(&DataKey::MilestoneTotal(escrow_id), &total);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("ms_amend")),
+            (escrow_id, indices.len(), total),
+        );
+        allocate_milestone_fees(&env, &escrow);
         Ok(())
     }
 
     /// Release a single milestone payment to payee. Authorizer must be payer.
+    ///
+    /// Requires the milestone plan to sum to the escrow amount
+    /// (`MilestoneSumMismatch` otherwise). Emits `(escrow, ms_rel)` with
+    /// `(escrow_id, index, payee, gross, fee, net)` where `net` is the amount
+    /// transferred and `fee` the milestone's share of the deposit fee.
     pub fn release_milestone(env: Env, authorizer: Address, escrow_id: u64, index: u32) -> Result<bool, EscrowError> {
         // CHECKS
         authorizer.require_auth();
@@ -764,14 +1153,22 @@ impl EscrowContract {
 
         let escrow = load_escrow(&env, escrow_id)?;
         require_authorized_party(authorizer == escrow.payer, EscrowError::Unauthorized)?;
+        ensure(!is_bound(&env, escrow_id), EscrowError::ManagedByBounty)?;
 
-        let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
+        let m_key = milestone_key(&env, escrow_id, index);
         let mut milestone = env.storage().persistent()
             .get::<(Symbol, u64, u32), Milestone>(&m_key)
             .ok_or(EscrowError::MilestoneNotFound)?;
 
         ensure(!milestone.released, EscrowError::MilestoneAlreadyReleased)?;
         require_active_escrow(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
+
+        let plan_total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneTotal(escrow_id))
+            .unwrap_or(0);
+        ensure(plan_total == escrow.amount, EscrowError::MilestoneSumMismatch)?;
 
         // EFFECTS – mark released before the token transfer
         milestone.released = true;
@@ -780,10 +1177,17 @@ impl EscrowContract {
         // INTERACTIONS – external call after state is finalised
         pay_liability(&env, escrow_id, &escrow.token, &escrow.payee, milestone.amount)?;
 
-        // Emit milestone_released event for indexers
+        // Emit milestone_released event for indexers: gross / fee / net.
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("ms_rel")),
-            (escrow_id, index, escrow.payee.clone(), milestone.amount),
+            (
+                escrow_id,
+                index,
+                escrow.payee.clone(),
+                milestone.amount + milestone.fee_share,
+                milestone.fee_share,
+                milestone.amount,
+            ),
         );
 
         let released_key = DataKey::MilestoneReleasedCount(escrow_id);
@@ -849,8 +1253,13 @@ impl EscrowContract {
     pub fn get_milestone(env: Env, escrow_id: u64, index: u32) -> Result<Milestone, EscrowError> {
         env.storage()
             .persistent()
-            .get::<(Symbol, u64, u32), Milestone>(&(Symbol::new(&env, "ms"), escrow_id, index))
+            .get::<(Symbol, u64, u32), Milestone>(&milestone_key(&env, escrow_id, index))
             .ok_or(EscrowError::MilestoneNotFound)
+    }
+
+    /// Milestone indices of an escrow, in creation order.
+    pub fn get_milestone_indices(env: Env, escrow_id: u64) -> soroban_sdk::Vec<u32> {
+        milestone_indices(&env, escrow_id)
     }
 
     pub fn can_release(env: Env, escrow_id: u64) -> Result<bool, EscrowError> {
@@ -1219,13 +1628,15 @@ impl EscrowContract {
         Ok(to_withdraw)
     }
 
-    /// Estimate the total fee for funding an escrow with the given amount.
-    /// Returns the platform_fee for the specified amount.
+    /// Quote the platform fee for funding an escrow with `amount`.
     ///
-    /// Note: actual fee may vary by up to 10% from this estimate due to network conditions.
-    /// The estimate is guaranteed not to exceed actual fee by more than 10%.
-    pub fn estimate_fund_escrow_fee(_env: Env, amount: i128) -> i128 {
-        platform_fee(amount)
+    /// Uses the fee config effective *now*. Pass the result (plus any
+    /// tolerance the user accepts) as `max_fee` to `deposit_with_max_fee`: if
+    /// governance raises the fee before the transaction lands, the deposit
+    /// reverts instead of over-charging (#1724). Fee increases are also
+    /// timelocked by `FEE_CHANGE_DELAY_SECS`; see `get_pending_fee_config`.
+    pub fn estimate_fund_escrow_fee(env: Env, amount: i128) -> i128 {
+        platform_fee_with_config(amount, &get_fee_config(&env))
     }
 
     // ── Issue #1564: Timelocked upgrade + two-step admin transfer ─────────────
@@ -1312,22 +1723,95 @@ impl EscrowContract {
 
     /// Update the platform fee configuration. Only the governance multisig
     /// (platform admin) may call this.
-    /// Emits a fee_updated event on successful change.
+    ///
+    /// #1724: a change that lowers (or keeps) both the rate and the cap applies
+    /// immediately and emits `(escrow, fee_upd)`. A change that raises either
+    /// is scheduled for `now + FEE_CHANGE_DELAY_SECS` and announced with
+    /// `(escrow, fee_prop)`; it becomes effective automatically once the delay
+    /// elapses (and can be persisted with `apply_fee_update`). A new call
+    /// replaces any pending change.
     pub fn update_fee(env: Env, admin: Address, new_bps: i128, new_cap: i128) -> Result<(), EscrowError> {
         admin.require_auth();
         require_admin(&env, &admin)?;
         // Fee BPS must be within 0..=1_000 (10%) and the cap non-negative.
         ensure((0..=1_000).contains(&new_bps), EscrowError::InvalidFeeConfig)?;
         ensure(new_cap >= 0, EscrowError::InvalidFeeConfig)?;
-        env.storage().persistent().set(&DataKey::FeeConfig, &FeeConfig {
-            fee_bps: new_bps,
-            fee_cap: new_cap,
-        });
+        let current = get_fee_config(&env);
+        let new_cfg = FeeConfig { fee_bps: new_bps, fee_cap: new_cap };
+        let store = env.storage().persistent();
+        if new_bps <= current.fee_bps && new_cap <= current.fee_cap {
+            store.set(&DataKey::FeeConfig, &new_cfg);
+            store.remove(&DataKey::PendingFeeConfig);
+            env.events().publish(
+                (symbol_short!("escrow"), symbol_short!("fee_upd")),
+                (new_bps, new_cap),
+            );
+        } else {
+            // Persist the currently effective config so a matured pending
+            // change is not lost when it is replaced.
+            store.set(&DataKey::FeeConfig, &current);
+            let effective_at = env.ledger().timestamp() + FEE_CHANGE_DELAY_SECS;
+            store.set(
+                &DataKey::PendingFeeConfig,
+                &PendingFeeConfig { config: new_cfg, effective_at },
+            );
+            env.events().publish(
+                (symbol_short!("escrow"), symbol_short!("fee_prop")),
+                (current.fee_bps, current.fee_cap, new_bps, new_cap, effective_at),
+            );
+        }
+        Ok(())
+    }
+
+    /// Persist a pending fee increase whose timelock has elapsed. Anyone may
+    /// call this; it only writes what `get_fee_config` already treats as
+    /// effective. Emits `(escrow, fee_upd)`.
+    pub fn apply_fee_update(env: Env) -> Result<(), EscrowError> {
+        let pending: PendingFeeConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingFeeConfig)
+            .ok_or(EscrowError::NoPendingFeeUpdate)?;
+        ensure(env.ledger().timestamp() >= pending.effective_at, EscrowError::FeeTimelockActive)?;
+        env.storage().persistent().set(&DataKey::FeeConfig, &pending.config);
+        env.storage().persistent().remove(&DataKey::PendingFeeConfig);
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("fee_upd")),
-            (new_bps, new_cap),
+            (pending.config.fee_bps, pending.config.fee_cap),
         );
         Ok(())
+    }
+
+    /// Withdraw a scheduled fee increase before it takes effect. Admin-only.
+    /// Emits `(escrow, fee_cncl)`.
+    pub fn cancel_fee_update(env: Env, admin: Address) -> Result<(), EscrowError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        let pending: PendingFeeConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingFeeConfig)
+            .ok_or(EscrowError::NoPendingFeeUpdate)?;
+        ensure(env.ledger().timestamp() < pending.effective_at, EscrowError::NoPendingFeeUpdate)?;
+        env.storage().persistent().remove(&DataKey::PendingFeeConfig);
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("fee_cncl")),
+            (pending.config.fee_bps, pending.config.fee_cap),
+        );
+        Ok(())
+    }
+
+    /// The fee config currently in effect (including a matured increase).
+    pub fn get_effective_fee_config(env: Env) -> FeeConfig {
+        get_fee_config(&env)
+    }
+
+    /// The scheduled fee increase still waiting out its timelock, if any.
+    pub fn get_pending_fee_config(env: Env) -> Option<PendingFeeConfig> {
+        env.storage()
+            .persistent()
+            .get::<DataKey, PendingFeeConfig>(&DataKey::PendingFeeConfig)
+            .filter(|p| env.ledger().timestamp() < p.effective_at)
     }
 
     // ---- Issue #725: Oracle price freshness check ----
@@ -1412,7 +1896,7 @@ mod tests {
     fn deposit_net_amount_reflects_fee_deduction() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let escrow = contract.get_escrow(&id);
@@ -1423,7 +1907,7 @@ mod tests {
     #[test]
     fn calculate_fee_public_fn_matches_platform_fee() {
         let env = Env::default();
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         assert_eq!(contract.calculate_fee(&1000), 25);
         assert_eq!(contract.calculate_fee(&30_000), 500);
@@ -1434,7 +1918,7 @@ mod tests {
     fn test_deposit_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         assert_eq!(id, 1);
@@ -1451,7 +1935,7 @@ mod tests {
     fn deposit_zero_amount_panics() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 0);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         contract.deposit(&1u64, &payer, &payee, &0, &token, &ReleaseCondition::OnCompletion);
     }
 
@@ -1461,7 +1945,7 @@ mod tests {
     fn release_moves_balance_once_to_payee() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -1481,7 +1965,7 @@ mod tests {
     fn double_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.release_funds(&payer, &id);
         contract.release_funds(&payer, &id);
@@ -1492,7 +1976,7 @@ mod tests {
     fn release_rejects_non_party_authorizer() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.release_funds(&Address::generate(&env), &id);
     }
@@ -1503,7 +1987,7 @@ mod tests {
     fn refund_returns_funds_to_payer_and_sets_released_at() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 800);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         let id = contract.deposit(&1u64, &payer, &payee, &800, &token, &ReleaseCondition::OnCompletion);
@@ -1520,7 +2004,7 @@ mod tests {
     fn refund_rejects_payee_authorizer() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.refund_escrow(&payee, &id);
     }
@@ -1530,7 +2014,7 @@ mod tests {
     fn double_refund_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.refund_escrow(&payer, &id);
         contract.refund_escrow(&payer, &id);
@@ -1541,7 +2025,7 @@ mod tests {
     fn refund_after_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.release_funds(&payee, &id);
         contract.refund_escrow(&payer, &id);
@@ -1552,7 +2036,7 @@ mod tests {
     fn release_after_refund_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.refund_escrow(&payer, &id);
         contract.release_funds(&payee, &id);
@@ -1564,7 +2048,7 @@ mod tests {
     fn payer_can_dispute_active_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
         assert!(contract.get_escrow(&id).status == EscrowStatus::Disputed);
@@ -1574,7 +2058,7 @@ mod tests {
     fn payee_can_dispute_active_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payee, &id);
         assert!(contract.get_escrow(&id).status == EscrowStatus::Disputed);
@@ -1585,7 +2069,7 @@ mod tests {
     fn stranger_cannot_dispute() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&Address::generate(&env), &id);
     }
@@ -1595,7 +2079,7 @@ mod tests {
     fn cannot_dispute_released_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.release_funds(&payer, &id);
         contract.dispute_escrow(&payer, &id);
@@ -1606,7 +2090,7 @@ mod tests {
     fn cannot_release_disputed_escrow() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
         contract.release_funds(&payee, &id);
@@ -1617,13 +2101,15 @@ mod tests {
     #[test]
     fn admin_can_resolve_dispute_to_payee() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (admin.clone(),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
+        contract.allow_token(&admin, &token);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
@@ -1637,13 +2123,15 @@ mod tests {
     #[test]
     fn admin_can_resolve_dispute_to_payer() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (admin.clone(),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
+        contract.allow_token(&admin, &token);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payee, &id);
@@ -1658,11 +2146,13 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #4)")]
     fn non_admin_cannot_resolve_dispute() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
+        contract.allow_token(&admin, &token);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
@@ -1673,11 +2163,13 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #10)")]
     fn cannot_resolve_active_escrow() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
+        contract.allow_token(&admin, &token);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.resolve_dispute(&admin, &id, &true); // not disputed yet
@@ -1690,7 +2182,7 @@ mod tests {
     fn resolve_expired_dispute_panics_before_expiry() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.dispute_escrow(&payer, &id);
@@ -1703,7 +2195,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = soroban_sdk::token::Client::new(&env, &token);
 
@@ -1728,16 +2220,39 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #3)")]
-    fn set_admin_can_only_be_called_once() {
+    fn constructor_sets_admin_atomically_at_deploy() {
         let env = Env::default();
-        let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
-        let _ = (token, payer, payee); // suppress unused warnings
-
+        env.mock_all_auths();
         let admin = Address::generate(&env);
-        contract.set_admin(&admin);
-        contract.set_admin(&admin); // second call must panic
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
+        assert_eq!(contract.get_admin(), admin);
+    }
+
+    #[test]
+    fn admin_changes_only_via_two_step_transfer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let next = Address::generate(&env);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
+
+        contract.propose_admin(&admin, &next);
+        // Nomination alone does not move authority.
+        assert_eq!(contract.get_admin(), admin);
+        contract.accept_admin(&next);
+        assert_eq!(contract.get_admin(), next);
+    }
+
+    #[test]
+    #[should_panic]
+    fn stranger_cannot_propose_admin_after_deploy() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin,)));
+        // Regression for #1708: there is no first-caller-wins path left.
+        contract.propose_admin(&attacker, &attacker);
     }
 
     // ── timelock ──────────────────────────────────────────────────────────────────
@@ -1747,7 +2262,7 @@ mod tests {
     fn release_before_timelock_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         env.ledger().set_timestamp(100);
         let id = contract.deposit(&1u64, &payer, &payee, &500, &token, &ReleaseCondition::Timelock(200));
         contract.release_funds(&payer, &id);
@@ -1757,7 +2272,7 @@ mod tests {
     fn release_after_timelock_succeeds() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         env.ledger().set_timestamp(100);
         let id = contract.deposit(&1u64, &payer, &payee, &500, &token, &ReleaseCondition::Timelock(200));
@@ -1772,12 +2287,13 @@ mod tests {
     fn milestone_release_transfers_partial_amount() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let desc = Symbol::new(&env, "phase1");
         contract.add_milestone(&payer, &id, &0, &desc, &400);
+        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "phase2"), &575);
         contract.release_milestone(&payer, &id, &0);
 
         assert_eq!(TokenClient::new(&env, &token).balance(&payee), 400);
@@ -1789,10 +2305,11 @@ mod tests {
     fn double_milestone_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let desc = Symbol::new(&env, "phase1");
         contract.add_milestone(&payer, &id, &0, &desc, &400);
+        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "phase2"), &575);
         contract.release_milestone(&payer, &id, &0);
         contract.release_milestone(&payer, &id, &0);
     }
@@ -1802,7 +2319,7 @@ mod tests {
     fn payee_cannot_add_milestone() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payee, &id, &0, &Symbol::new(&env, "x"), &400);
     }
@@ -1812,7 +2329,7 @@ mod tests {
     fn payee_cannot_release_milestone() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "x"), &400);
         contract.release_milestone(&payee, &id, &0);
@@ -1823,7 +2340,7 @@ mod tests {
     fn milestone_exceeding_escrow_amount_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "x"), &1001);
     }
@@ -1835,7 +2352,7 @@ mod tests {
     fn balance_conservation_release() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 2500);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
@@ -1854,7 +2371,7 @@ mod tests {
     fn balance_conservation_refund() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1800);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
@@ -1873,7 +2390,7 @@ mod tests {
     fn releasing_one_escrow_does_not_drain_another() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 3000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
         let tc = TokenClient::new(&env, &token);
 
@@ -1896,7 +2413,7 @@ mod tests {
     fn test_get_escrow_id_for_bounty() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let b_id = 99u64;
         let e_id = contract.deposit(&b_id, &payer, &payee, &500, &token, &ReleaseCondition::OnCompletion);
@@ -1910,7 +2427,7 @@ mod tests {
     fn escrow_ids_are_monotonically_increasing() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 3000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let id1 = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let id2 = contract.deposit(&2u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -1929,7 +2446,7 @@ mod tests {
     fn disputed_escrow_funds_stay_locked() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract_id = env.register(EscrowContract, ());
+        let contract_id = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &contract_id);
 
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -1946,7 +2463,7 @@ mod tests {
     fn cumulative_milestone_sum_exceeding_escrow_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &975, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
         contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &600);
@@ -1956,7 +2473,7 @@ mod tests {
     fn releasing_all_milestones_marks_escrow_complete() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         contract.add_milestone(&payer, &id, &0, &Symbol::new(&env, "p1"), &600);
         contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "p2"), &375);
@@ -1974,7 +2491,7 @@ mod tests {
     fn two_milestones_total_payout_equals_deposit() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract_id = env.register(EscrowContract, ());
+        let contract_id = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &contract_id);
         let token_client = TokenClient::new(&env, &token);
 
@@ -1994,7 +2511,7 @@ mod tests {
     fn milestone_cross_escrow_release_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 2000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let id_a = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let id_b = contract.deposit(&2u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
@@ -2011,7 +2528,7 @@ mod tests {
     fn deposit_negative_amount_panics() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
         contract.deposit(&1u64, &payer, &payee, &-1, &token, &ReleaseCondition::OnCompletion);
     }
 
@@ -2022,7 +2539,7 @@ mod tests {
     fn release_at_exact_timelock_boundary_succeeds() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         env.ledger().set_timestamp(100);
@@ -2042,7 +2559,7 @@ mod tests {
     fn release_one_second_before_timelock_is_rejected() {
         let env = Env::default();
         let (_, token, payer, payee) = setup(&env, 500);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         env.ledger().set_timestamp(100);
         let id = contract.deposit(&1u64, &payer, &payee, &500, &token, &ReleaseCondition::Timelock(200));
@@ -2056,12 +2573,11 @@ mod tests {
     #[test]
     fn admin_can_pause_and_unpause_yield() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
         let _ = (token, payer, payee);
 
-        let admin = Address::generate(&env);
-        contract.set_admin(&admin);
 
         assert!(!contract.is_yield_paused());
 
@@ -2076,12 +2592,11 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #4)")]
     fn non_admin_cannot_pause_yield() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
         let _ = (token, payer, payee);
 
-        let admin = Address::generate(&env);
-        contract.set_admin(&admin);
 
         let stranger = Address::generate(&env);
         contract.pause_yield(&stranger);
@@ -2091,11 +2606,13 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #19)")]
     fn accrue_yield_blocked_when_paused() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 1000);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
+        contract.allow_token(&admin, &token);
         contract.configure_yield(&admin, &300, &500, &9000);
 
         env.ledger().set_timestamp(100);
@@ -2109,12 +2626,14 @@ mod tests {
     #[test]
     fn withdraw_yield_allowed_when_paused() {
         let env = Env::default();
+        let admin = Address::generate(&env);
         let (_, token, payer, payee) = setup(&env, 10_000);
-        let cid = env.register(EscrowContract, ());
+        let cid = env.register(EscrowContract, (admin.clone(),));
         let contract = EscrowContractClient::new(&env, &cid);
 
         let admin = Address::generate(&env);
         contract.set_admin(&admin);
+        contract.allow_token(&admin, &token);
         contract.configure_yield(&admin, &300, &500, &9000);
 
         env.ledger().set_timestamp(1000);
@@ -2134,6 +2653,222 @@ mod tests {
         assert_eq!(withdrawn, accrued);
     }
 
+
+    // ── #1715: token allowlist + balance-delta check ────────────────────────
+
+    mod mock_tokens {
+        use soroban_sdk::{contract, contractimpl, Address, Env};
+
+        /// Fee-on-transfer token: credits the recipient 1 % less than sent.
+        #[contract]
+        pub struct FeeOnTransferToken;
+
+        #[contractimpl]
+        impl FeeOnTransferToken {
+            pub fn mint(env: Env, to: Address, amount: i128) {
+                let bal: i128 = env.storage().persistent().get(&to).unwrap_or(0);
+                env.storage().persistent().set(&to, &(bal + amount));
+            }
+            pub fn balance(env: Env, id: Address) -> i128 {
+                env.storage().persistent().get(&id).unwrap_or(0)
+            }
+            pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+                let from_bal: i128 = env.storage().persistent().get(&from).unwrap_or(0);
+                let to_bal: i128 = env.storage().persistent().get(&to).unwrap_or(0);
+                env.storage().persistent().set(&from, &(from_bal - amount));
+                env.storage().persistent().set(&to, &(to_bal + amount * 99 / 100));
+            }
+        }
+
+        /// Lying token: `transfer` succeeds but moves nothing.
+        #[contract]
+        pub struct NoopToken;
+
+        #[contractimpl]
+        impl NoopToken {
+            pub fn balance(_env: Env, _id: Address) -> i128 {
+                1_000_000
+            }
+            pub fn transfer(_env: Env, _from: Address, _to: Address, _amount: i128) {}
+        }
+    }
+
+    #[test]
+    fn deposit_rejects_fee_on_transfer_token() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let token = env.register(mock_tokens::FeeOnTransferToken, ());
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        mock_tokens::FeeOnTransferTokenClient::new(&env, &token).mint(&payer, &10_000);
+
+        let res = contract.try_deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        assert_eq!(res, Err(Ok(EscrowError::TokenTransferMismatch)));
+        assert_eq!(contract.get_active_escrows_count(), 0);
+    }
+
+    #[test]
+    fn deposit_rejects_noop_transfer_token() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let token = env.register(mock_tokens::NoopToken, ());
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+
+        let res = contract.try_deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        assert_eq!(res, Err(Ok(EscrowError::TokenTransferMismatch)));
+    }
+
+    #[test]
+    fn deposit_rejects_fee_on_transfer_token_even_if_allowlisted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+        let token = env.register(mock_tokens::FeeOnTransferToken, ());
+        contract.allow_token(&admin, &token);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        mock_tokens::FeeOnTransferTokenClient::new(&env, &token).mint(&payer, &10_000);
+
+        let res = contract.try_deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        assert_eq!(res, Err(Ok(EscrowError::TokenTransferMismatch)));
+    }
+
+    #[test]
+    fn deposit_rejects_token_not_on_allowlist() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 1000);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+
+        let res = contract.try_deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        assert_eq!(res, Err(Ok(EscrowError::TokenNotAllowed)));
+
+        contract.allow_token(&admin, &token);
+        assert!(contract.is_token_allowed(&token));
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        assert_eq!(contract.get_escrow(&id).amount, 975);
+    }
+
+    #[test]
+    fn disallowed_token_is_rejected_again() {
+        let env = Env::default();
+        let (_, token, payer, payee) = setup(&env, 2000);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+        contract.allow_token(&admin, &token);
+        let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+
+        contract.disallow_token(&admin, &token);
+        assert!(!contract.is_token_allowed(&token));
+        let res = contract.try_deposit(&2u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
+        assert_eq!(res, Err(Ok(EscrowError::TokenNotAllowed)));
+        // Existing escrows in a delisted token can still settle.
+        assert!(contract.release_funds(&payer, &id));
+    }
+
+    #[test]
+    fn allow_token_rejects_non_admin() {
+        let env = Env::default();
+        let (_, token, _, _) = setup(&env, 1);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        contract.set_admin(&admin);
+
+        assert_eq!(contract.try_allow_token(&attacker, &token), Err(Ok(EscrowError::Unauthorized)));
+        assert_eq!(contract.try_disallow_token(&attacker, &token), Err(Ok(EscrowError::Unauthorized)));
+        assert!(!contract.is_token_allowed(&token));
+    }
+
+    // ── #1714: bound escrows are driven only by the bounty contract ─────────
+
+    fn bound_setup(env: &Env) -> (EscrowContractClient<'_>, Address, Address, Address, Address, u64) {
+        let (_, token, payer, payee) = setup(env, 1000);
+        let contract = EscrowContractClient::new(env, &env.register(EscrowContract, ()));
+        let admin = Address::generate(env);
+        let bounty_contract = Address::generate(env);
+        contract.set_admin(&admin);
+        contract.allow_token(&admin, &token);
+        contract.set_bounty_contract(&admin, &bounty_contract);
+        let id = contract.deposit(&7u64, &payer, &payer, &1000, &token, &ReleaseCondition::OnCompletion);
+        contract.bind_bounty(&bounty_contract, &7u64, &id, &payer);
+        (contract, token, payer, payee, bounty_contract, id)
+    }
+
+    #[test]
+    fn bound_escrow_rejects_direct_release_refund_and_dispute() {
+        let env = Env::default();
+        let (contract, _, payer, _, _, id) = bound_setup(&env);
+        assert_eq!(contract.try_release_funds(&payer, &id), Err(Ok(EscrowError::ManagedByBounty)));
+        assert_eq!(contract.try_refund_escrow(&payer, &id), Err(Ok(EscrowError::ManagedByBounty)));
+        assert_eq!(contract.try_dispute_escrow(&payer, &id), Err(Ok(EscrowError::ManagedByBounty)));
+        assert_eq!(contract.get_escrow(&id).status, EscrowStatus::Active);
+    }
+
+    #[test]
+    fn release_for_bounty_pays_selected_payee() {
+        let env = Env::default();
+        let (contract, token, _, payee, bounty_contract, id) = bound_setup(&env);
+        contract.release_for_bounty(&bounty_contract, &7u64, &payee);
+        let e = contract.get_escrow(&id);
+        assert_eq!(e.status, EscrowStatus::Released);
+        assert_eq!(e.payee, payee);
+        assert_eq!(TokenClient::new(&env, &token).balance(&payee), 975);
+    }
+
+    #[test]
+    fn bounty_driven_calls_reject_other_callers() {
+        let env = Env::default();
+        let (contract, _, payer, payee, _, _) = bound_setup(&env);
+        let impostor = Address::generate(&env);
+        assert_eq!(
+            contract.try_release_for_bounty(&impostor, &7u64, &payee),
+            Err(Ok(EscrowError::NotBountyContract))
+        );
+        assert_eq!(contract.try_refund_for_bounty(&impostor, &7u64), Err(Ok(EscrowError::NotBountyContract)));
+        assert_eq!(
+            contract.try_refund_expired_bounty(&7u64, &impostor),
+            Err(Ok(EscrowError::NotBountyContract))
+        );
+        assert_eq!(
+            contract.try_bind_bounty(&impostor, &7u64, &1u64, &payer),
+            Err(Ok(EscrowError::NotBountyContract))
+        );
+    }
+
+    #[test]
+    fn bind_bounty_rejects_mismatch_and_double_bind() {
+        let env = Env::default();
+        let (contract, _, payer, _, bounty_contract, id) = bound_setup(&env);
+        assert_eq!(
+            contract.try_bind_bounty(&bounty_contract, &7u64, &id, &payer),
+            Err(Ok(EscrowError::EscrowAlreadyBound))
+        );
+        assert_eq!(
+            contract.try_bind_bounty(&bounty_contract, &8u64, &id, &payer),
+            Err(Ok(EscrowError::BountyMismatch))
+        );
+    }
+
+    #[test]
+    fn refund_for_bounty_is_single_shot() {
+        let env = Env::default();
+        let (contract, token, payer, _, bounty_contract, id) = bound_setup(&env);
+        contract.refund_for_bounty(&bounty_contract, &7u64);
+        assert_eq!(contract.get_escrow(&id).status, EscrowStatus::Refunded);
+        assert_eq!(TokenClient::new(&env, &token).balance(&payer), 975);
+        assert_eq!(
+            contract.try_refund_for_bounty(&bounty_contract, &7u64),
+            Err(Ok(EscrowError::EscrowNotActive))
+        );
+    }
 }
 
 // Issue #1719: shared upgrade-timelock conformance tests.

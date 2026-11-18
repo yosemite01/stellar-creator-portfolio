@@ -148,6 +148,8 @@ jobs:
           STELLAR_RPC_URL: ${{ env.MAINNET_RPC_URL }}
           STELLAR_NETWORK_PASSPHRASE: ${{ env.MAINNET_PASSPHRASE }}
           STELLAR_ADMIN_SECRET: ${{ secrets.MAINNET_DEPLOYER_SECRET }}
+          # Governance multisig that becomes bounty/escrow admin at deploy (#1708).
+          STELLAR_CONTRACT_ADMIN: ${{ vars.MAINNET_CONTRACT_ADMIN }}
           WASM_DIR: artifacts
         run: node scripts/deploy.cjs --manifest deployments/mainnet.json
 

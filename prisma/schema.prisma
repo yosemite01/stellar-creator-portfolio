@@ -274,6 +274,10 @@ model Bounty {
   budget      Int
   deadline    DateTime
   status      BountyStatus @default(OPEN)
+  /// Optimistic-concurrency version (#1810). Every status transition goes
+  /// through server/services/bounty.service.ts `transitionBounty`, which
+  /// only writes when this still matches and increments it.
+  version     Int      @default(0)
   category    String?
   tags        String[]
   /// Skill level required: beginner | intermediate | advanced | expert
