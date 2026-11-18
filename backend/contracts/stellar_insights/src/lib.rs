@@ -9,8 +9,38 @@ use soroban_sdk::{
     Address, Env, String, Symbol,
 };
 
-/// Challenge deposit in stroops (10 XLM).
+// ── Economic model (#1725) ─────────────────────────────────────────────────
+//
+// * Reviews are free but rate-limited: one review per (reviewer, creator) pair
+//   per `REVIEW_COOLDOWN_SECS`, and self-reviews are rejected.
+// * Challenging a review costs a bond of `CHALLENGE_DEPOSIT`, held by this
+//   contract (`BondsHeld`) until the challenge is decided.
+//     - Upheld  → the review is removed and the full bond returns to the
+//                 challenger (honest challenges are free).
+//     - Rejected→ the bond is slashed: `REVIEWER_REWARD_BPS` goes to the
+//                 reviewer as compensation for the frivolous challenge, the
+//                 remainder to the treasury (admin).
+//   Every bond flow conserves value: bond = refund, or bond = reward + treasury.
+// * Reputation decays by compounding `decay_rate / DECAY_SCALE` per full month
+//   of inactivity after a `GRACE_PERIOD_MONTHS` grace period, computed in
+//   fixed point (`DECAY_PRECISION`) with exponentiation by squaring, so it
+//   never overflows, never increases a score, and is monotone in time.
+
+/// Challenge deposit (bond) in stroops (10 XLM).
 pub const CHALLENGE_DEPOSIT: i128 = 100_000_000;
+
+/// Share of a slashed bond paid to the falsely-challenged reviewer (50 %).
+pub const REVIEWER_REWARD_BPS: i128 = 5_000;
+
+/// Minimum spacing between two reviews by the same reviewer of the same
+/// creator (30 days).
+pub const REVIEW_COOLDOWN_SECS: u64 = 30 * 86_400;
+
+/// Fixed-point precision for the decay factor.
+const DECAY_PRECISION: u128 = 1_000_000_000_000;
+
+/// After this many decay months the factor is treated as zero (100 years).
+const MAX_DECAY_MONTHS: u64 = 1_200;
 
 /// Maximum reputation bonus that can be awarded per bounty completion.
 pub const MAX_BONUS_PER_COMPLETION: i64 = 100;
@@ -82,6 +112,10 @@ pub enum DataKey {
     PlatformToken,
     Reputation(Address),
     DecayRate,
+    /// Last review timestamp per (reviewer, creator) pair (#1725).
+    LastReview(Address, Address),
+    /// Total challenge bonds currently held by the contract (#1725).
+    BondsHeld,
 }
 
 /// Typed errors returned by insights entrypoints (#1562).
@@ -107,6 +141,12 @@ pub enum InsightsError {
     InvalidScore = 12,
     /// Decay rate outside 1..=10_000.
     InvalidDecayRate = 13,
+    /// Reviewer already reviewed this creator within the cooldown (#1725).
+    ReviewRateLimited = 14,
+    /// Reviewer and creator are the same address (#1725).
+    SelfReview = 15,
+    /// Arithmetic overflow in a reputation update (#1725).
+    Overflow = 16,
 }
 
 fn ensure(cond: bool, err: InsightsError) -> Result<(), InsightsError> {
@@ -143,6 +183,15 @@ impl StellarInsights {
         reviewer.require_auth();
         Self::require_initialized(&env)?;
         ensure((1..=5).contains(&rating), InsightsError::InvalidRating)?;
+        ensure(reviewer != creator, InsightsError::SelfReview)?;
+
+        // #1725: rate limit per (reviewer, creator) pair.
+        let now = env.ledger().timestamp();
+        let pair_key = DataKey::LastReview(reviewer.clone(), creator.clone());
+        if let Some(last) = env.storage().persistent().get::<DataKey, u64>(&pair_key) {
+            ensure(now >= last.saturating_add(REVIEW_COOLDOWN_SECS), InsightsError::ReviewRateLimited)?;
+        }
+        env.storage().persistent().set(&pair_key, &now);
 
         let id: u64 = env
             .storage()
@@ -183,6 +232,7 @@ impl StellarInsights {
             &env.current_contract_address(),
             &deposit,
         );
+        Self::adjust_bonds(&env, deposit)?;
 
         review.status = ReviewStatus::Challenged;
         env.storage()
@@ -212,7 +262,7 @@ impl StellarInsights {
 
         env.events().publish(
             (symbol_short!("review"), symbol_short!("challeng")),
-            (review_id, challenger),
+            (review_id, challenger, challenge_id, deposit),
         );
         Ok(())
     }
@@ -235,6 +285,7 @@ impl StellarInsights {
             .persistent()
             .set(&DataKey::Challenge(challenge_id), &challenge);
 
+        Self::adjust_bonds(&env, -challenge.deposit)?;
         let token_addr = Self::get_platform_token(&env)?;
         token::Client::new(&env, &token_addr).transfer(
             &env.current_contract_address(),
@@ -244,7 +295,7 @@ impl StellarInsights {
 
         env.events().publish(
             (symbol_short!("review"), symbol_short!("upheld")),
-            (challenge.review_id, challenge.challenger.clone()),
+            (challenge.review_id, challenge.challenger.clone(), challenge.deposit),
         );
         Ok(())
     }
@@ -267,17 +318,22 @@ impl StellarInsights {
             .persistent()
             .set(&DataKey::Challenge(challenge_id), &challenge);
 
+        // #1725: slash the bond — reward the reviewer, remainder to treasury.
+        let (reward, treasury) = split_slashed_bond(challenge.deposit);
+        Self::adjust_bonds(&env, -challenge.deposit)?;
         let token_addr = Self::get_platform_token(&env)?;
         let admin_addr = Self::get_admin(&env)?;
-        token::Client::new(&env, &token_addr).transfer(
-            &env.current_contract_address(),
-            &admin_addr,
-            &challenge.deposit,
-        );
+        let tok = token::Client::new(&env, &token_addr);
+        if reward > 0 {
+            tok.transfer(&env.current_contract_address(), &review.reviewer, &reward);
+        }
+        if treasury > 0 {
+            tok.transfer(&env.current_contract_address(), &admin_addr, &treasury);
+        }
 
         env.events().publish(
             (symbol_short!("review"), symbol_short!("reject")),
-            (challenge.review_id, challenge.challenger.clone()),
+            (challenge.review_id, challenge.challenger.clone(), reward, treasury),
         );
         Ok(())
     }
@@ -364,15 +420,17 @@ impl StellarInsights {
 
     // ── Reputation decay (#765) ──────────────────────────────────────────────
 
-    fn exp_decay(decay_rate: i64, months: u64) -> i64 {
-        let x = decay_rate * (months as i64);
-        let t1 = DECAY_SCALE * DECAY_SCALE;
-        let t2 = x * DECAY_SCALE;
-        let t3 = (x * x) / 2;
-        let t4 = (x * x * x) / (6 * DECAY_SCALE);
-        let t5 = (x * x * x * x) / (24 * DECAY_SCALE * DECAY_SCALE);
-        let result = (t1 - t2 + t3 - t4 + t5) / DECAY_SCALE;
-        if result < 0 { 0 } else { result }
+    fn adjust_bonds(env: &Env, delta: i128) -> Result<(), InsightsError> {
+        let held: i128 = env.storage().persistent().get(&DataKey::BondsHeld).unwrap_or(0);
+        let next = held.checked_add(delta).ok_or(InsightsError::Overflow)?;
+        ensure(next >= 0, InsightsError::Overflow)?;
+        env.storage().persistent().set(&DataKey::BondsHeld, &next);
+        Ok(())
+    }
+
+    /// Total challenge bonds currently held in escrow by this contract.
+    pub fn get_bonds_held(env: Env) -> i128 {
+        env.storage().persistent().get(&DataKey::BondsHeld).unwrap_or(0)
     }
 
     pub fn set_reputation(env: Env, admin: Address, creator: Address, score: i64) -> Result<bool, InsightsError> {
@@ -405,7 +463,7 @@ impl StellarInsights {
 
         let mut rep = Self::load_reputation(&env, creator.clone())?;
 
-        rep.score += bonus;
+        rep.score = rep.score.checked_add(bonus).ok_or(InsightsError::Overflow)?;
         rep.last_activity = env.ledger().timestamp();
         rep.bounties_completed += 1;
 
@@ -440,8 +498,7 @@ impl StellarInsights {
             .get(&DataKey::DecayRate)
             .unwrap_or(DEFAULT_DECAY_RATE);
 
-        let factor = Self::exp_decay(decay_rate, decay_months);
-        Ok((rep.score * factor) / DECAY_SCALE)
+        Ok(apply_decay(rep.score, decay_rate, decay_months))
     }
 
     pub fn is_decaying(env: Env, creator: Address) -> bool {
@@ -494,24 +551,76 @@ impl StellarInsights {
     // Replaces the old instant `upgrade` entrypoint. Shared logic lives in
     // `stellar-upgradeable`; see docs/contracts.md (Upgrading a live contract).
 
-    /// Upgrade the contract WASM. Only the governance multisig (admin) may call this.
-    /// Emits an `upgraded` event with the new wasm hash.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), InsightsError> {
-        admin.require_auth();
-        Self::require_admin(&env, &admin)?;
+    fn stored_admin(env: &Env) -> Address {
+        Self::get_admin(env).unwrap_or_else(|e| soroban_sdk::panic_with_error!(env, e))
+    }
+
+    /// Propose a WASM upgrade. Admin-only. Returns the ledger timestamp after
+    /// which `execute_upgrade` may be called (now + 48h). Emits
+    /// `(upgrade, proposed)`.
+    pub fn propose_upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) -> u64 {
+        let stored_admin = Self::stored_admin(&env);
+        stellar_upgradeable::propose_upgrade(&env, &admin, &stored_admin, new_wasm_hash)
+    }
+
+    /// Apply the pending upgrade once its timelock has elapsed. Admin-only.
+    /// Emits `(contract, upgraded)`.
+    pub fn execute_upgrade(env: Env, admin: Address) {
+        let stored_admin = Self::stored_admin(&env);
+        stellar_upgradeable::execute_upgrade(&env, &admin, &stored_admin);
+    }
 
     /// Withdraw the pending upgrade. Admin-only. Emits `(upgrade, cancelled)`.
     pub fn cancel_upgrade(env: Env, admin: Address) {
-        let stored_admin: Address = Self::get_admin(&env);
+        let stored_admin = Self::stored_admin(&env);
         stellar_upgradeable::cancel_upgrade(&env, &admin, &stored_admin);
     }
 
-        env.events().publish(
-            (symbol_short!("contract"), symbol_short!("upgraded")),
-            new_wasm_hash,
-        );
-        Ok(())
+    /// The upgrade currently waiting out its timelock, if any.
+    pub fn get_pending_upgrade(env: Env) -> Option<stellar_upgradeable::PendingUpgrade> {
+        stellar_upgradeable::pending_upgrade(&env)
     }
+}
+
+/// Split a slashed bond into (reviewer reward, treasury). Always sums to `bond`.
+pub fn split_slashed_bond(bond: i128) -> (i128, i128) {
+    let reward = bond * REVIEWER_REWARD_BPS / 10_000;
+    (reward, bond - reward)
+}
+
+/// `(1 - rate/DECAY_SCALE)^months` in `DECAY_PRECISION` fixed point (#1725).
+///
+/// Exponentiation by squaring keeps it O(log months) and every intermediate
+/// below `DECAY_PRECISION^2` (fits in u128). Result is in `[0, DECAY_PRECISION]`.
+pub fn decay_factor(decay_rate: i64, months: u64) -> u128 {
+    if months == 0 || decay_rate <= 0 {
+        return DECAY_PRECISION;
+    }
+    if decay_rate >= DECAY_SCALE || months > MAX_DECAY_MONTHS {
+        return 0;
+    }
+    let mut base = ((DECAY_SCALE - decay_rate) as u128) * (DECAY_PRECISION / DECAY_SCALE as u128);
+    let mut result = DECAY_PRECISION;
+    let mut e = months;
+    while e > 0 {
+        if e & 1 == 1 {
+            result = result * base / DECAY_PRECISION;
+        }
+        e >>= 1;
+        if e > 0 {
+            base = base * base / DECAY_PRECISION;
+        }
+    }
+    result
+}
+
+/// Apply `decay_factor` to a non-negative score, rounding down.
+pub fn apply_decay(score: i64, decay_rate: i64, months: u64) -> i64 {
+    if score <= 0 {
+        return score.max(0);
+    }
+    let f = decay_factor(decay_rate, months);
+    ((score as u128) * f / DECAY_PRECISION) as i64
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -695,5 +804,147 @@ mod tests {
 
         contract.set_decay_rate(&admin, &1000);
         assert_eq!(contract.get_decay_rate(), 1000);
+    }
+
+    // ── #1725: challenge economics, rate limits, decay math ──────────────────
+
+    fn deployed(env: &Env) -> (StellarInsightsClient<'_>, Address, Address, Address) {
+        let (admin, token, challenger, _) = setup(env);
+        let id = env.register(StellarInsights, ());
+        let c = StellarInsightsClient::new(env, &id);
+        c.initialize(&admin, &token);
+        (c, admin, token, challenger)
+    }
+
+    #[test]
+    fn test_rejected_challenge_slashes_bond_and_conserves_value() {
+        let env = Env::default();
+        let (c, admin, token, challenger) = deployed(&env);
+        let reviewer = Address::generate(&env);
+        let rid = c.record_review(&Address::generate(&env), &reviewer, &5);
+        c.challenge_review(&rid, &challenger, &String::from_str(&env, "x"));
+        assert_eq!(c.get_bonds_held(), CHALLENGE_DEPOSIT);
+        let tc = soroban_sdk::token::Client::new(&env, &token);
+        c.reject_challenge(&admin, &0);
+        let (reward, treasury) = split_slashed_bond(CHALLENGE_DEPOSIT);
+        assert_eq!(tc.balance(&reviewer), reward);
+        assert_eq!(tc.balance(&admin), treasury);
+        assert_eq!(reward + treasury, CHALLENGE_DEPOSIT);
+        assert_eq!(c.get_bonds_held(), 0);
+        assert_eq!(tc.balance(&c.address), 0);
+    }
+
+    #[test]
+    fn test_upheld_challenge_refunds_full_bond() {
+        let env = Env::default();
+        let (c, admin, token, challenger) = deployed(&env);
+        let rid = c.record_review(&Address::generate(&env), &Address::generate(&env), &1);
+        c.challenge_review(&rid, &challenger, &String::from_str(&env, "x"));
+        c.uphold_challenge(&admin, &0);
+        let tc = soroban_sdk::token::Client::new(&env, &token);
+        assert_eq!(tc.balance(&challenger), CHALLENGE_DEPOSIT);
+        assert_eq!(c.get_bonds_held(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn test_non_admin_cannot_reject_challenge() {
+        let env = Env::default();
+        let (c, _, _, challenger) = deployed(&env);
+        let rid = c.record_review(&Address::generate(&env), &Address::generate(&env), &1);
+        c.challenge_review(&rid, &challenger, &String::from_str(&env, "x"));
+        c.reject_challenge(&Address::generate(&env), &0);
+    }
+
+    #[test]
+    fn test_split_slashed_bond_conserves_odd_amounts() {
+        for bond in [0i128, 1, 3, 99, CHALLENGE_DEPOSIT, i64::MAX as i128] {
+            let (r, t) = split_slashed_bond(bond);
+            assert_eq!(r + t, bond);
+            assert!(r >= 0 && t >= 0);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn test_review_rate_limited_per_pair() {
+        let env = Env::default();
+        let (c, _, _, _) = deployed(&env);
+        let creator = Address::generate(&env);
+        let reviewer = Address::generate(&env);
+        c.record_review(&creator, &reviewer, &4);
+        c.record_review(&creator, &reviewer, &5);
+    }
+
+    #[test]
+    fn test_review_allowed_after_cooldown_and_for_other_pairs() {
+        let env = Env::default();
+        let (c, _, _, _) = deployed(&env);
+        let creator = Address::generate(&env);
+        let reviewer = Address::generate(&env);
+        c.record_review(&creator, &reviewer, &4);
+        c.record_review(&Address::generate(&env), &reviewer, &4);
+        env.ledger().with_mut(|l| l.timestamp += REVIEW_COOLDOWN_SECS);
+        c.record_review(&creator, &reviewer, &5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn test_self_review_rejected() {
+        let env = Env::default();
+        let (c, _, _, _) = deployed(&env);
+        let a = Address::generate(&env);
+        c.record_review(&a, &a, &5);
+    }
+
+    #[test]
+    fn test_decay_factor_boundaries() {
+        assert_eq!(decay_factor(DEFAULT_DECAY_RATE, 0), DECAY_PRECISION);
+        assert_eq!(decay_factor(DECAY_SCALE, 1), 0);
+        assert_eq!(decay_factor(1, MAX_DECAY_MONTHS + 1), 0);
+        // 5 % for one month = 0.95 exactly.
+        assert_eq!(decay_factor(500, 1), DECAY_PRECISION * 95 / 100);
+        // 0.95^2 = 0.9025 exactly.
+        assert_eq!(decay_factor(500, 2), DECAY_PRECISION * 9025 / 10_000);
+        // Extreme inputs never panic.
+        let _ = decay_factor(DECAY_SCALE - 1, MAX_DECAY_MONTHS);
+        let _ = apply_decay(i64::MAX, 1, MAX_DECAY_MONTHS);
+    }
+
+    #[test]
+    fn test_decay_is_monotone_and_never_increases_score() {
+        for rate in [1i64, 50, 500, 2_500, 9_999] {
+            let mut prev = i64::MAX;
+            for m in 0..=60u64 {
+                let v = apply_decay(1_000_000, rate, m);
+                assert!(v <= 1_000_000);
+                assert!(v >= 0);
+                assert!(v <= prev, "rate {} month {} increased", rate, m);
+                prev = v;
+            }
+        }
+        assert_eq!(apply_decay(0, 500, 10), 0);
+        assert_eq!(apply_decay(i64::MAX, 500, 0), i64::MAX);
+    }
+
+    #[test]
+    fn test_effective_reputation_long_inactivity_does_not_overflow() {
+        let env = Env::default();
+        let (c, admin, _, _) = deployed(&env);
+        let creator = Address::generate(&env);
+        c.set_reputation(&admin, &creator, &i64::MAX);
+        c.set_decay_rate(&admin, &DECAY_SCALE);
+        env.ledger().set_timestamp(10_000 * SECONDS_PER_MONTH);
+        assert_eq!(c.get_effective_reputation(&creator), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #16)")]
+    fn test_bounty_bonus_overflow_rejected() {
+        let env = Env::default();
+        let (c, admin, _, _) = deployed(&env);
+        let creator = Address::generate(&env);
+        c.set_reputation(&admin, &creator, &i64::MAX);
+        c.record_bounty_completion(&admin, &creator, &1);
     }
 }

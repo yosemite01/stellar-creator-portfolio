@@ -74,6 +74,11 @@ pub enum BountyError {
     ApproverNotSigner = 16,
     /// The same approver appears more than once.
     DuplicateApprover = 17,
+    /// #1714: the bounty already has an escrow linked.
+    EscrowAlreadyLinked = 18,
+    /// #1714: `check_and_expire_bounty` was given an escrow contract other
+    /// than the one registered via `set_escrow_contract`.
+    EscrowContractMismatch = 19,
 }
 
 /// DataKey for typed storage lookups
@@ -102,6 +107,45 @@ pub trait EscrowContractTrait {
         release_condition: ReleaseCondition,
     ) -> u64;
     fn refund_expired_bounty(env: Env, bounty_id: u64, bounty_contract: Address) -> bool;
+    // #1714: joint bounty × escrow state machine.
+    fn bind_bounty(env: Env, bounty_contract: Address, bounty_id: u64, escrow_id: u64, creator: Address) -> bool;
+    fn release_for_bounty(env: Env, bounty_contract: Address, bounty_id: u64, payee: Address) -> bool;
+    fn refund_for_bounty(env: Env, bounty_contract: Address, bounty_id: u64) -> bool;
+    fn get_escrow_status(env: Env, escrow_id: u64) -> EscrowStatus;
+}
+
+/// Mirror of the escrow contract's `EscrowStatus` (same discriminants, so it
+/// decodes the cross-contract return value without a crate dependency).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[contracttype]
+pub enum EscrowStatus {
+    Active = 0,
+    Released = 1,
+    Refunded = 2,
+    Disputed = 3,
+    Complete = 4,
+}
+
+/// #1714: the joint bounty × escrow state table. `escrow` is `None` when no
+/// escrow is linked. Every entrypoint that changes either side keeps the
+/// pair inside this table, in a single transaction:
+///
+/// | Bounty                                 | Escrow                       |
+/// |----------------------------------------|------------------------------|
+/// | Open / InProgress / PendingCompletion  | none, Active                 |
+/// | Completed                              | none, Released, Complete     |
+/// | Cancelled                              | none, Refunded               |
+/// | Disputed                               | Disputed                     |
+pub fn joint_state_valid(bounty: BountyStatus, escrow: Option<EscrowStatus>) -> bool {
+    match (bounty, escrow) {
+        (_, None) => bounty != BountyStatus::Disputed,
+        (BountyStatus::Open | BountyStatus::InProgress | BountyStatus::PendingCompletion, Some(e)) => {
+            e == EscrowStatus::Active
+        }
+        (BountyStatus::Completed, Some(e)) => e == EscrowStatus::Released || e == EscrowStatus::Complete,
+        (BountyStatus::Cancelled, Some(e)) => e == EscrowStatus::Refunded,
+        (BountyStatus::Disputed, Some(e)) => e == EscrowStatus::Disputed,
+    }
 }
 
 /// Bounty Status Enum
@@ -379,6 +423,9 @@ impl BountyContract {
             &ReleaseCondition::OnCompletion,
         );
 
+        // #1714: bind the escrow so it can only leave Active through this contract.
+        escrow_client.bind_bounty(&env.current_contract_address(), &bounty_id, &escrow_id, &creator);
+
         let mut bounty = load_bounty(&env, bounty_id)?;
         bounty.escrow_id = escrow_id;
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
@@ -474,6 +521,9 @@ impl BountyContract {
         let mut bounty = load_bounty(&env, bounty_id)?;
 
         bounty.creator.require_auth();
+        // #1714/#1810: only an Open bounty can be assigned. Without this a
+        // second select re-opened Completed/Cancelled bounties as InProgress.
+        ensure(bounty.status == BountyStatus::Open, BountyError::InvalidStatus)?;
 
         let application = Self::get_application(env.clone(), application_id)?;
         ensure(application.bounty_id == bounty_id, BountyError::ApplicationMismatch)?;
@@ -602,6 +652,18 @@ impl BountyContract {
 
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
 
+        // #1714: pay the linked escrow to the freelancer in the same
+        // transaction. If the escrow cannot release (not Active, timelock not
+        // met) the whole call reverts and the bounty stays PendingCompletion.
+        if bounty.escrow_id != 0 {
+            let freelancer = bounty
+                .selected_freelancer
+                .clone()
+                .ok_or(BountyError::NotSelectedFreelancer)?;
+            let escrow_client = EscrowContractClient::new(&env, &Self::get_escrow_contract(&env)?);
+            escrow_client.release_for_bounty(&env.current_contract_address(), &bounty_id, &freelancer);
+        }
+
         env.events().publish(
             (symbol_short!("bounty"), symbol_short!("completed")),
             (bounty_id, completed_at),
@@ -619,6 +681,13 @@ impl BountyContract {
         bounty.status = BountyStatus::Cancelled;
 
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
+
+        // #1714: refund the linked escrow atomically, so a cancelled bounty
+        // never leaves funds locked in an Active escrow.
+        if bounty.escrow_id != 0 {
+            let escrow_client = EscrowContractClient::new(&env, &Self::get_escrow_contract(&env)?);
+            escrow_client.refund_for_bounty(&env.current_contract_address(), &bounty_id);
+        }
 
         env.events().publish(
             (symbol_short!("bounty"), symbol_short!("cancelled")),
@@ -691,9 +760,20 @@ impl BountyContract {
         applications
     }
 
+    /// Link an escrow the creator deposited directly (with `bounty_id`) to the
+    /// bounty. #1714: only while the bounty is Open and unlinked; the escrow
+    /// contract verifies the escrow is Active, belongs to this bounty and was
+    /// paid by the creator, and binds it so it can only be released/refunded
+    /// through this contract.
     pub fn link_escrow(env: Env, bounty_id: u64, escrow_id: u64) -> Result<bool, BountyError> {
         let mut bounty = load_bounty(&env, bounty_id)?;
         bounty.creator.require_auth();
+        ensure(bounty.status == BountyStatus::Open, BountyError::InvalidStatus)?;
+        ensure(bounty.escrow_id == 0, BountyError::EscrowAlreadyLinked)?;
+
+        let escrow_client = EscrowContractClient::new(&env, &Self::get_escrow_contract(&env)?);
+        escrow_client.bind_bounty(&env.current_contract_address(), &bounty_id, &escrow_id, &bounty.creator);
+
         bounty.escrow_id = escrow_id;
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
 
@@ -711,13 +791,22 @@ impl BountyContract {
         ensure(env.ledger().timestamp() > bounty.deadline, BountyError::DeadlineNotPassed)?;
         ensure(bounty.status == BountyStatus::Open, BountyError::AlreadyProcessed)?;
 
+        // #1714: only the registered escrow contract may be driven, otherwise
+        // a caller could pass a dummy contract, cancel the bounty and leave
+        // the real escrow Active.
+        if let Ok(registered) = Self::get_escrow_contract(&env) {
+            ensure(registered == escrow_contract, BountyError::EscrowContractMismatch)?;
+        }
+
         // Cancel bounty
         bounty.status = BountyStatus::Cancelled;
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
 
-        // Trigger escrow refund
-        let escrow_client = EscrowContractClient::new(&env, &escrow_contract);
-        escrow_client.refund_expired_bounty(&bounty_id, &env.current_contract_address());
+        // Trigger escrow refund in the same transaction (only when linked).
+        if bounty.escrow_id != 0 {
+            let escrow_client = EscrowContractClient::new(&env, &escrow_contract);
+            escrow_client.refund_for_bounty(&env.current_contract_address(), &bounty_id);
+        }
 
         // Emit events
         env.events().publish(
@@ -726,6 +815,19 @@ impl BountyContract {
         );
 
         Ok(true)
+    }
+
+    /// #1714: invariant check — true when the bounty and its linked escrow
+    /// are in a valid joint state (see `joint_state_valid`).
+    pub fn check_joint_state(env: Env, bounty_id: u64) -> Result<bool, BountyError> {
+        let bounty = load_bounty(&env, bounty_id)?;
+        let escrow = if bounty.escrow_id == 0 {
+            None
+        } else {
+            let escrow_client = EscrowContractClient::new(&env, &Self::get_escrow_contract(&env)?);
+            Some(escrow_client.get_escrow_status(&bounty.escrow_id))
+        };
+        Ok(joint_state_valid(bounty.status, escrow))
     }
 
     /// Estimate the total fee for creating a bounty with the given budget.
@@ -1274,5 +1376,69 @@ mod tests {
             env.storage().persistent().set(&Symbol::new(&env, LEGACY_ADMIN_KEY), &other);
         });
         contract.migrate_admin_key();
+    }
+
+    // ── #1714: joint state table ────────────────────────────────────────────
+
+    #[test]
+    fn joint_state_table() {
+        use BountyStatus as B;
+        let e = |s| Some(s);
+        for b in [B::Open, B::InProgress, B::PendingCompletion] {
+            assert!(joint_state_valid(b, None));
+            assert!(joint_state_valid(b, e(EscrowStatus::Active)));
+            assert!(!joint_state_valid(b, e(EscrowStatus::Released)));
+            assert!(!joint_state_valid(b, e(EscrowStatus::Refunded)));
+        }
+        assert!(joint_state_valid(B::Completed, e(EscrowStatus::Released)));
+        assert!(!joint_state_valid(B::Completed, e(EscrowStatus::Active)));
+        assert!(joint_state_valid(B::Cancelled, e(EscrowStatus::Refunded)));
+        assert!(!joint_state_valid(B::Cancelled, e(EscrowStatus::Active)));
+        assert!(!joint_state_valid(B::Disputed, None));
+        assert!(joint_state_valid(B::Disputed, e(EscrowStatus::Disputed)));
+    }
+
+    #[test]
+    fn link_escrow_requires_escrow_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let creator = Address::generate(&env);
+        let id = contract.create_bounty(
+            &creator,
+            &String::from_str(&env, "t"),
+            &String::from_str(&env, "d"),
+            &500i128,
+            &100u64,
+        );
+        assert_eq!(contract.try_link_escrow(&id, &1u64), Err(Ok(BountyError::EscrowContractNotSet)));
+        assert_eq!(contract.get_bounty(&id).escrow_id, 0);
+    }
+
+    #[test]
+    fn expire_rejects_unregistered_escrow_contract() {
+        use soroban_sdk::testutils::Ledger;
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+        let registered = Address::generate(&env);
+        contract.set_escrow_contract(&admin, &registered);
+        let creator = Address::generate(&env);
+        let id = contract.create_bounty(
+            &creator,
+            &String::from_str(&env, "t"),
+            &String::from_str(&env, "d"),
+            &500i128,
+            &100u64,
+        );
+        env.ledger().set_timestamp(200);
+        let dummy = Address::generate(&env);
+        assert_eq!(
+            contract.try_check_and_expire_bounty(&id, &dummy),
+            Err(Ok(BountyError::EscrowContractMismatch))
+        );
+        assert_eq!(contract.get_bounty(&id).status, BountyStatus::Open);
     }
 }
