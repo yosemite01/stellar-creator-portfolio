@@ -6,6 +6,11 @@
 
 // Reentrancy protection module (#635)
 mod reentrancy;
+
+#[cfg(test)]
+mod milestone_tests;
+#[cfg(test)]
+mod invariant_fuzz;
 use reentrancy::{require_active_escrow, require_authorized_party, ReentrancyGuard};
 
 // Per-dispute arbitration (#1713)
@@ -138,7 +143,16 @@ pub struct EscrowAccount {
     pub fee_collected: i128,
 }
 
-/// Milestone â€” a named portion of the total escrow amount
+/// Maximum milestones per escrow. Bounds the fee-allocation loop (#1712).
+pub const MAX_MILESTONES: u32 = 50;
+
+/// Milestone — a named portion of the total escrow amount.
+///
+/// `amount` is the **net** payout to the payee (escrow amounts are already net
+/// of the platform fee). `fee_share` is this milestone's share of the fee that
+/// was charged once, on the total, at deposit. It is allocated with
+/// largest-remainder rounding as soon as the milestone plan sums to the escrow
+/// amount, so `sum(amount) + sum(fee_share) == deposited` exactly (#1712).
 #[contracttype]
 pub struct Milestone {
     pub escrow_id: u64,
@@ -146,6 +160,48 @@ pub struct Milestone {
     pub description: Symbol,
     pub amount: i128,
     pub released: bool,
+    pub fee_share: i128,
+}
+
+/// Split `total_fee` across `weights` proportionally, using largest-remainder
+/// rounding so the shares sum to exactly `total_fee` (#1712).
+///
+/// Ties on the remainder go to the earlier position, so the result is
+/// deterministic. `weights` must be non-empty with a positive sum.
+pub fn allocate_largest_remainder(env: &Env, total_fee: i128, weights: &soroban_sdk::Vec<i128>) -> soroban_sdk::Vec<i128> {
+    let n = weights.len();
+    let mut shares = soroban_sdk::Vec::new(env);
+    let mut remainders = soroban_sdk::Vec::new(env);
+    let mut sum_w: i128 = 0;
+    for w in weights.iter() {
+        sum_w += w;
+    }
+    if n == 0 || sum_w <= 0 {
+        return shares;
+    }
+    let mut allocated: i128 = 0;
+    for w in weights.iter() {
+        let base = total_fee * w / sum_w;
+        shares.push_back(base);
+        remainders.push_back(total_fee * w % sum_w);
+        allocated += base;
+    }
+    let mut leftover = total_fee - allocated; // 0 <= leftover < n
+    while leftover > 0 {
+        let mut best: u32 = 0;
+        let mut best_rem: i128 = -1;
+        for i in 0..n {
+            let r = remainders.get_unchecked(i);
+            if r > best_rem {
+                best_rem = r;
+                best = i;
+            }
+        }
+        shares.set(best, shares.get_unchecked(best) + 1);
+        remainders.set(best, -1); // each position receives at most one unit
+        leftover -= 1;
+    }
+    shares
 }
 
 /// DataKey for typed persistent storage lookups.
@@ -160,6 +216,8 @@ pub enum DataKey {
     MilestoneTotal(u64),
     MilestoneReleasedCount(u64),
     MilestoneReleasedAmount(u64),
+    /// Ordered milestone indices for an escrow (bounded by `MAX_MILESTONES`).
+    MilestoneIndices(u64),
     DisputeExpiry(u64),
     FeeConfig,
     OracleStalenessSecs,
@@ -494,6 +552,8 @@ impl EscrowContract {
         ensure(!is_bound(&env, escrow_id), EscrowError::ManagedByBounty)?;
         ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
         ensure(Self::can_release(env.clone(), escrow_id)?, EscrowError::ReleaseConditionNotMet)?;
+        // #1712: never pay out amounts already released through milestones.
+        let remaining = remaining_amount(&env, &escrow);
 
         // EFFECTS – mutate state before any cross-contract call
 
@@ -515,12 +575,12 @@ impl EscrowContract {
 
         // INTERACTIONS – external call after state is finalised
         TokenClient::new(&env, &escrow.token)
-            .transfer(&env.current_contract_address(), &escrow.payee, &escrow.amount);
+            .transfer(&env.current_contract_address(), &escrow.payee, &remaining);
 
         // Emit escrow_released event for indexers
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("released")),
-            (escrow_id, escrow.bounty_id, escrow.payee.clone(), escrow.amount),
+            (escrow_id, escrow.bounty_id, escrow.payee.clone(), remaining),
         );
 
         Ok(true)
@@ -538,6 +598,8 @@ impl EscrowContract {
         ensure(authorizer == escrow.payer, EscrowError::Unauthorized)?;
         ensure(!is_bound(&env, escrow_id), EscrowError::ManagedByBounty)?;
         ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
+        // #1712: never pay out amounts already released through milestones.
+        let remaining = remaining_amount(&env, &escrow);
 
         // EFFECTS – mutate state before any cross-contract call
         escrow.status = EscrowStatus::Refunded;
@@ -546,12 +608,12 @@ impl EscrowContract {
 
         // INTERACTIONS – external call after state is finalised
         TokenClient::new(&env, &escrow.token)
-            .transfer(&env.current_contract_address(), &escrow.payer, &escrow.amount);
+            .transfer(&env.current_contract_address(), &escrow.payer, &remaining);
 
         // Emit escrow_refunded event for indexers
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("refunded")),
-            (escrow_id, escrow.bounty_id, escrow.payer.clone(), escrow.amount),
+            (escrow_id, escrow.bounty_id, escrow.payer.clone(), remaining),
         );
 
         Ok(true)
@@ -705,7 +767,7 @@ impl EscrowContract {
 
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("refunded")),
-            (escrow_id, bounty_id, escrow.payer.clone(), escrow.amount),
+            (escrow_id, bounty_id, escrow.payer.clone(), remaining),
         );
         Ok(true)
     }
@@ -961,7 +1023,12 @@ impl EscrowContract {
         stored_admin(&env)
     }
 
-    /// Add a milestone to an active escrow. Sum of milestone amounts must not exceed escrow amount.
+    /// Add a milestone to an active escrow.
+    ///
+    /// The running total may not exceed the escrow amount. Milestones cannot
+    /// be released until the plan sums to the escrow amount exactly; when the
+    /// last milestone brings the total to the escrow amount the deposit fee is
+    /// allocated across milestones and `(escrow, ms_plan)` is emitted (#1712).
     pub fn add_milestone(
         env: Env,
         authorizer: Address,
@@ -980,29 +1047,103 @@ impl EscrowContract {
 
         let total_key = DataKey::MilestoneTotal(escrow_id);
         let current_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
-        ensure(
-            current_total + amount <= escrow.amount,
-            EscrowError::MilestoneExceedsEscrow,
-        )?;
+        let new_total = current_total
+            .checked_add(amount)
+            .ok_or(EscrowError::InvalidAmount)?;
+        ensure(new_total <= escrow.amount, EscrowError::MilestoneExceedsEscrow)?;
 
-        let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
+        let m_key = milestone_key(&env, escrow_id, index);
         ensure(
             env.storage().persistent().get::<(Symbol, u64, u32), Milestone>(&m_key).is_none(),
             EscrowError::MilestoneAlreadyExists,
         )?;
 
-        env.storage().persistent().set(&total_key, &(current_total + amount));
+        let mut indices = milestone_indices(&env, escrow_id);
+        ensure(indices.len() < MAX_MILESTONES, EscrowError::TooManyMilestones)?;
+        indices.push_back(index);
+        env.storage().persistent().set(&DataKey::MilestoneIndices(escrow_id), &indices);
+
+        env.storage().persistent().set(&total_key, &new_total);
 
         let count_key = DataKey::MilestoneCount(escrow_id);
         let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
         env.storage().persistent().set(&count_key, &(count + 1));
 
-        let milestone = Milestone { escrow_id, index, description, amount, released: false };
+        let milestone = Milestone { escrow_id, index, description, amount, released: false, fee_share: 0 };
         env.storage().persistent().set(&m_key, &milestone);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("ms_add")),
+            (escrow_id, index, amount, new_total),
+        );
+
+        if new_total == escrow.amount {
+            allocate_milestone_fees(&env, &escrow);
+        }
+        Ok(())
+    }
+
+    /// Re-split the milestone plan before any milestone is released.
+    ///
+    /// `indices[i]` gets `amounts[i]`. Every listed index must exist; the plan
+    /// total after the amendment must equal the escrow amount exactly, and the
+    /// fee is re-allocated. Payer-only. Emits `(escrow, ms_amend)` (#1712).
+    pub fn amend_milestones(
+        env: Env,
+        authorizer: Address,
+        escrow_id: u64,
+        indices: soroban_sdk::Vec<u32>,
+        amounts: soroban_sdk::Vec<i128>,
+    ) -> Result<(), EscrowError> {
+        authorizer.require_auth();
+
+        let escrow = load_escrow(&env, escrow_id)?;
+        ensure(authorizer == escrow.payer, EscrowError::Unauthorized)?;
+        ensure(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
+        ensure(indices.len() == amounts.len(), EscrowError::InvalidAmount)?;
+        let released: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneReleasedCount(escrow_id))
+            .unwrap_or(0);
+        ensure(released == 0, EscrowError::MilestoneAmendLocked)?;
+
+        for (pos, index) in indices.iter().enumerate() {
+            let amount = amounts.get_unchecked(pos as u32);
+            ensure(amount > 0, EscrowError::InvalidAmount)?;
+            let key = milestone_key(&env, escrow_id, index);
+            let mut m: Milestone = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(EscrowError::MilestoneNotFound)?;
+            m.amount = amount;
+            env.storage().persistent().set(&key, &m);
+        }
+
+        let mut total: i128 = 0;
+        for index in milestone_indices(&env, escrow_id).iter() {
+            let m: Milestone = env.storage().persistent().get(&milestone_key(&env, escrow_id, index)).unwrap();
+            total = total.checked_add(m.amount).ok_or(EscrowError::InvalidAmount)?;
+        }
+        // Any failure here reverts every write above.
+        ensure(total == escrow.amount, EscrowError::MilestoneSumMismatch)?;
+        env.storage().persistent().set(&DataKey::MilestoneTotal(escrow_id), &total);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("ms_amend")),
+            (escrow_id, indices.len(), total),
+        );
+        allocate_milestone_fees(&env, &escrow);
         Ok(())
     }
 
     /// Release a single milestone payment to payee. Authorizer must be payer.
+    ///
+    /// Requires the milestone plan to sum to the escrow amount
+    /// (`MilestoneSumMismatch` otherwise). Emits `(escrow, ms_rel)` with
+    /// `(escrow_id, index, payee, gross, fee, net)` where `net` is the amount
+    /// transferred and `fee` the milestone's share of the deposit fee.
     pub fn release_milestone(env: Env, authorizer: Address, escrow_id: u64, index: u32) -> Result<bool, EscrowError> {
         // CHECKS
         authorizer.require_auth();
@@ -1012,13 +1153,20 @@ impl EscrowContract {
         require_authorized_party(authorizer == escrow.payer, EscrowError::Unauthorized)?;
         ensure(!is_bound(&env, escrow_id), EscrowError::ManagedByBounty)?;
 
-        let m_key = (Symbol::new(&env, "ms"), escrow_id, index);
+        let m_key = milestone_key(&env, escrow_id, index);
         let mut milestone = env.storage().persistent()
             .get::<(Symbol, u64, u32), Milestone>(&m_key)
             .ok_or(EscrowError::MilestoneNotFound)?;
 
         ensure(!milestone.released, EscrowError::MilestoneAlreadyReleased)?;
         require_active_escrow(escrow.status == EscrowStatus::Active, EscrowError::EscrowNotActive)?;
+
+        let plan_total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneTotal(escrow_id))
+            .unwrap_or(0);
+        ensure(plan_total == escrow.amount, EscrowError::MilestoneSumMismatch)?;
 
         // EFFECTS – mark released before the token transfer
         milestone.released = true;
@@ -1028,10 +1176,17 @@ impl EscrowContract {
         TokenClient::new(&env, &escrow.token)
             .transfer(&env.current_contract_address(), &escrow.payee, &milestone.amount);
 
-        // Emit milestone_released event for indexers
+        // Emit milestone_released event for indexers: gross / fee / net.
         env.events().publish(
             (symbol_short!("escrow"), symbol_short!("ms_rel")),
-            (escrow_id, index, escrow.payee.clone(), milestone.amount),
+            (
+                escrow_id,
+                index,
+                escrow.payee.clone(),
+                milestone.amount + milestone.fee_share,
+                milestone.fee_share,
+                milestone.amount,
+            ),
         );
 
         let released_key = DataKey::MilestoneReleasedCount(escrow_id);
@@ -1097,8 +1252,13 @@ impl EscrowContract {
     pub fn get_milestone(env: Env, escrow_id: u64, index: u32) -> Result<Milestone, EscrowError> {
         env.storage()
             .persistent()
-            .get::<(Symbol, u64, u32), Milestone>(&(Symbol::new(&env, "ms"), escrow_id, index))
+            .get::<(Symbol, u64, u32), Milestone>(&milestone_key(&env, escrow_id, index))
             .ok_or(EscrowError::MilestoneNotFound)
+    }
+
+    /// Milestone indices of an escrow, in creation order.
+    pub fn get_milestone_indices(env: Env, escrow_id: u64) -> soroban_sdk::Vec<u32> {
+        milestone_indices(&env, escrow_id)
     }
 
     pub fn can_release(env: Env, escrow_id: u64) -> Result<bool, EscrowError> {
@@ -2026,6 +2186,7 @@ mod tests {
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let desc = Symbol::new(&env, "phase1");
         contract.add_milestone(&payer, &id, &0, &desc, &400);
+        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "phase2"), &575);
         contract.release_milestone(&payer, &id, &0);
 
         assert_eq!(TokenClient::new(&env, &token).balance(&payee), 400);
@@ -2041,6 +2202,7 @@ mod tests {
         let id = contract.deposit(&1u64, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
         let desc = Symbol::new(&env, "phase1");
         contract.add_milestone(&payer, &id, &0, &desc, &400);
+        contract.add_milestone(&payer, &id, &1, &Symbol::new(&env, "phase2"), &575);
         contract.release_milestone(&payer, &id, &0);
         contract.release_milestone(&payer, &id, &0);
     }
