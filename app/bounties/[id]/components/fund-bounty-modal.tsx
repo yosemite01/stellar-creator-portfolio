@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { submitEscrowTransaction } from '@/lib/api-client';
 import { validateEscrowTransaction } from '@/lib/api-models';
 import { ApiClientError } from '@/lib/api-client';
+import { getAllowedEscrowTokens, isAllowedEscrowToken } from '@/lib/escrow/allowed-tokens';
 import { CheckCircle, Loader2, X, ExternalLink } from 'lucide-react';
 
 interface FundBountyModalProps {
@@ -27,7 +28,9 @@ export function FundBountyModal({
   const [amount, setAmount] = useState(String(budget));
   const [walletAddress, setWalletAddress] = useState('');
   const [payeeAddress, setPayeeAddress] = useState('');
-  const [tokenAddress, setTokenAddress] = useState('USDC_TOKEN_ADDRESS');
+  // #1715: only offer tokens the escrow contract has allowlisted.
+  const allowedTokens = getAllowedEscrowTokens();
+  const [tokenAddress, setTokenAddress] = useState(allowedTokens[0]?.contractId ?? '');
   const [state, setState] = useState<FundState>('idle');
   const [error, setError] = useState('');
   const [txHash, setTxHash] = useState('');
@@ -46,6 +49,10 @@ export function FundBountyModal({
     }
     if (!payeeAddress.trim()) {
       setError('Payee (freelancer) address is required');
+      return;
+    }
+    if (!isAllowedEscrowToken(tokenAddress, allowedTokens)) {
+      setError('Select a supported token');
       return;
     }
 
@@ -187,16 +194,23 @@ export function FundBountyModal({
               {/* Token address */}
               <div className="space-y-1">
                 <label htmlFor="fund-token" className="text-sm font-medium">
-                  Token Contract Address
+                  Token
                 </label>
-                <input
+                <select
                   id="fund-token"
-                  type="text"
                   value={tokenAddress}
                   onChange={(e) => setTokenAddress(e.target.value)}
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  disabled={allowedTokens.length === 0}
                   required
-                />
+                >
+                  {allowedTokens.length === 0 && <option value="">No supported tokens configured</option>}
+                  {allowedTokens.map((t) => (
+                    <option key={t.contractId} value={t.contractId}>
+                      {t.code}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Error */}
