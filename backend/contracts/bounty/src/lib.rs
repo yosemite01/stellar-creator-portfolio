@@ -1185,3 +1185,13 @@ mod tests {
         });
     }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    BountyContract,
+    BountyContractClient,
+    |env, id, admin| {
+        BountyContractClient::new(&env, &id).initialize(&admin);
+    }
+);

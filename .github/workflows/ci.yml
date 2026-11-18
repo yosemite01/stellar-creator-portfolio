@@ -292,6 +292,11 @@ jobs:
       - name: No unwrap/panic in contract code
         run: ./scripts/check-contract-panics.sh
 
+      # #1719 — every contract upgrades only through the shared timelocked
+      # stellar-upgradeable library and runs its conformance tests.
+      - name: Upgrades only via stellar-upgradeable
+        run: ./scripts/check-contract-upgrades.sh
+
       # #2585 — clippy covers every workspace member including insurance, referral,
       # stellar_insights, upgradeable, etc. — no crate can rot silently.
       - name: Clippy (all workspace members, -D warnings)

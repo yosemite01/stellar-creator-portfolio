@@ -469,3 +469,13 @@ mod tests {
         client.unpause(&admin);
     }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    CoreContract,
+    CoreContractClient,
+    |env, id, admin| {
+        CoreContractClient::new(&env, &id).initialize(&admin, &100u32);
+    }
+);

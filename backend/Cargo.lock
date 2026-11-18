@@ -4799,6 +4799,7 @@ name = "stellar-identity-contract"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek 3.0.0",
+ "sha2 0.11.1",
  "soroban-sdk",
  "stellar-contract-test-utils",
  "stellar-upgradeable",
@@ -4917,6 +4918,7 @@ name = "stellar_insights"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-upgradeable",
 ]
 
 [[package]]

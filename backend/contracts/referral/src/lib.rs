@@ -407,3 +407,13 @@ mod test {
         );
     }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    ReferralContract,
+    ReferralContractClient,
+    |env, id, admin| {
+        ReferralContractClient::new(&env, &id).initialize(&admin, &soroban_sdk::Address::generate(&env));
+    }
+);
