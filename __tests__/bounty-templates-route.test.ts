@@ -116,7 +116,7 @@ describe('POST /api/bounty-templates', () => {
 
     expect(res.status).toBe(201);
     expect(create).toHaveBeenCalledWith({
-      data: { ...validBody, createdByUserId: 'client-3' },
+      data: { ...validBody, createdByUserId: 'client-3', version: 1, status: 'PENDING_REVIEW' },
     });
   });
 });
@@ -149,7 +149,10 @@ describe('PATCH /api/bounty-templates/[id]', () => {
     const res = await PATCH(patch({ title: 'New title' }), params('tpl-2'));
 
     expect(res.status).toBe(200);
-    expect(update).toHaveBeenCalledWith({ where: { id: 'tpl-2' }, data: { title: 'New title' } });
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'tpl-2' },
+      data: { title: 'New title', version: 2, status: 'PENDING_REVIEW' },
+    });
   });
 });
 

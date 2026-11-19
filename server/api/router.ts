@@ -155,13 +155,26 @@ export const appRouter = router({
           category: z.string(),
           tags: z.array(z.string()),
           difficulty: z.enum(['beginner', 'intermediate', 'advanced', 'expert']),
+          templateId: z.string().optional(),
+          templateVersion: z.number().int().positive().optional(),
         })
       )
       .use(rateLimit({ windowMs: 60_000, max: 300 }))
       .mutation(async ({ ctx, input }) => {
+        let resolvedTemplateVersion = input.templateVersion;
+        if (input.templateId && !resolvedTemplateVersion) {
+          const tpl = await prisma.bountyTemplate.findUnique({
+            where: { id: input.templateId },
+            select: { version: true },
+          });
+          resolvedTemplateVersion = tpl?.version ?? 1;
+        }
+
         const bounty = await prisma.bounty.create({
           data: {
             ...input,
+            templateId: input.templateId,
+            templateVersion: resolvedTemplateVersion,
             creatorId: ctx.user!.id,
             status: 'OPEN',
           },

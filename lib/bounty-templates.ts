@@ -1,5 +1,22 @@
-// Bounty template seed data — Issue #810
+// Bounty template seed data — Issue #810, Issue #1821
 // 20 templates across categories for the "Start from template" picker
+
+import { sanitizeRichText, richTextToPlainText } from './rich-text/sanitize';
+
+export type TemplateStatus = 'APPROVED' | 'PENDING_REVIEW' | 'REJECTED';
+
+export interface BountyTemplateVersion {
+  id: string;
+  templateId: string;
+  version: number;
+  category: string;
+  title: string;
+  description: string;
+  suggestedBudget: number;
+  suggestedTimeline: number;
+  requiredSkills: string[];
+  createdAt: Date | string;
+}
 
 export interface BountyTemplate {
   id: string;
@@ -9,6 +26,31 @@ export interface BountyTemplate {
   suggestedBudget: number;   // USD
   suggestedTimeline: number; // days
   requiredSkills: string[];
+  version?: number;
+  status?: TemplateStatus;
+  reviewNotes?: string | null;
+  reviewedByUserId?: string | null;
+  reviewedAt?: Date | string | null;
+  createdByUserId?: string | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
+}
+
+/**
+ * Return a sanitized, display-safe copy of a template.
+ * Strips script injection/XSS from title, category, skills, and applies server-side
+ * rich text sanitization to description.
+ */
+export function renderSafeTemplate<T extends Partial<BountyTemplate>>(template: T): T {
+  return {
+    ...template,
+    title: template.title ? richTextToPlainText(template.title) : template.title,
+    category: template.category ? richTextToPlainText(template.category) : template.category,
+    description: template.description ? sanitizeRichText(template.description) : template.description,
+    requiredSkills: template.requiredSkills
+      ? template.requiredSkills.map((s) => richTextToPlainText(s)).filter(Boolean)
+      : template.requiredSkills,
+  };
 }
 
 export const BOUNTY_TEMPLATES: BountyTemplate[] = [
