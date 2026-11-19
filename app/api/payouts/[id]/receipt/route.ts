@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
-import { getPayoutById, generateReceiptFromPayout, generateReceiptPdf } from '@/lib/payouts/payout-service';
+import { getPayoutById, generateReceiptFromPayout, generateReceiptPdf, signReceipt } from '@/lib/payouts/payout-service';
 
 export const runtime = 'nodejs';
 
@@ -44,12 +44,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
   }
 
   const receipt = generateReceiptFromPayout(payout);
+  // (#1738) Compute tamper-evident signature for this receipt.
+  const receiptSignature = signReceipt(receipt);
 
   const { searchParams } = new URL(request.url);
   const format = searchParams.get('format') || 'pdf';
 
   if (format === 'json') {
-    return NextResponse.json({ receipt });
+    return NextResponse.json({ receipt, signature: receiptSignature });
   }
 
   // Generate binary PDF
@@ -62,6 +64,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="${fileName}"`,
       'Cache-Control': 'no-cache, no-store, must-revalidate',
+      // (#1738) Return the HMAC-SHA256 signature as a header so API consumers
+      // can verify the receipt without parsing the PDF binary.
+      'X-Receipt-Signature': receiptSignature,
     },
   });
 }
