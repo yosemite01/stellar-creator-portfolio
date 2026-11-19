@@ -292,3 +292,131 @@ export async function fetchBounties(params?: {
   const query = qs.toString() ? `?${qs}` : '';
   return dedupedFetch(`${API_BASE}/bounties${query}`);
 }
+
+/** GET /api/v1/freelancers — optionally filter by discipline, search, limit, offset. */
+export async function fetchFreelancers(params?: {
+  discipline?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ freelancers: any[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params?.discipline) qs.set('discipline', params.discipline);
+  if (params?.search) qs.set('search', params.search);
+  if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.offset) qs.set('offset', String(params.offset));
+  const query = qs.toString() ? `?${qs}` : '';
+  return dedupedFetch(`${API_BASE}/freelancers${query}`);
+}
+
+/** GET /api/v1/freelancers/:id */
+export async function fetchFreelancer(id: string): Promise<any> {
+  return dedupedFetch(`${API_BASE}/freelancers/${id}`);
+}
+
+/**
+ * POST /api/v1/reviews — Submit a review and invalidate cached reviews/reputation.
+ */
+export async function submitReview(
+  data: ReviewSubmission,
+): Promise<{ reviewId: string }> {
+  const result = await apiFetch<{ reviewId: string }>(`${API_BASE}/reviews`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+  try {
+    const { queryClient } = await import('./trpc-client');
+    const { invalidateMutationDependencies } = await import('./query-invalidation-map');
+    await invalidateMutationDependencies(queryClient, 'review.submit', {
+      creatorId: data.creatorId,
+      bountyId: data.bountyId,
+    });
+  } catch {
+    // Non-fatal if queryClient is unmounted or in test environment
+  }
+
+  return result;
+}
+
+/**
+ * POST /api/v1/escrow/:id/release — Release escrow funds and invalidate dependent caches.
+ */
+export async function releaseEscrow(
+  escrowId: string,
+  authorizerAddress: string,
+): Promise<EscrowTransactionResponse> {
+  const result = await apiFetch<EscrowTransactionResponse>(
+    `${API_BASE}/escrow/${escrowId}/release`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ authorizerAddress }),
+    },
+  );
+
+  try {
+    const { queryClient } = await import('./trpc-client');
+    const { invalidateMutationDependencies } = await import('./query-invalidation-map');
+    await invalidateMutationDependencies(queryClient, 'escrow.release', { escrowId });
+  } catch {
+    // Ignore in tests
+  }
+
+  return result;
+}
+
+/**
+ * POST /api/v1/escrow/transaction — Submit escrow deposit/funding and invalidate caches.
+ */
+export async function submitEscrowTransaction(
+  txRequest: EscrowTransactionRequest,
+): Promise<EscrowTransactionResponse> {
+  const result = await apiFetch<EscrowTransactionResponse>(
+    `${API_BASE}/escrow/transaction`,
+    {
+      method: 'POST',
+      body: JSON.stringify(txRequest),
+    },
+  );
+
+  try {
+    const { queryClient } = await import('./trpc-client');
+    const { invalidateMutationDependencies } = await import('./query-invalidation-map');
+    await invalidateMutationDependencies(queryClient, 'escrow.fund', {
+      bountyId: txRequest.bountyId,
+    });
+  } catch {
+    // Ignore in tests
+  }
+
+  return result;
+}
+
+/**
+ * Enhanced fetch with exponential backoff retry for transient network and 5xx errors.
+ */
+export async function apiFetchWithRetry<T>(
+  path: string,
+  init: RequestInit = {},
+  maxRetries = 2,
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await apiFetch<T>(path, init);
+    } catch (err: unknown) {
+      attempt++;
+      if (attempt > maxRetries) throw err;
+
+      if (err instanceof ApiClientError) {
+        // Do not retry 4xx errors unless 408 Timeout or 429 Rate Limit
+        if (err.status && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
+          throw err;
+        }
+      }
+
+      const delay = Math.min(500 * 2 ** (attempt - 1), 5000);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
