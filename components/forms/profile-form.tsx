@@ -109,11 +109,28 @@ export function ProfileForm() {
         setIsSaving(true);
         try {
             const payload = {
-                ...data,
-                portfolio: portfolioItems,
+                displayName: data.displayName,
+                bio: data.bio || null,
+                avatar: data.avatar || null,
+                skills: data.skills,
+                portfolio: portfolioItems.length > 0 ? { items: portfolioItems } : (data.portfolioUrl ? { items: [{ url: data.portfolioUrl }] } : null),
+                githubUrl: data.githubUrl || null,
+                figmaUrl: data.figmaUrl || null,
+                linkedinUrl: data.linkedinUrl || null,
+                websiteUrl: data.websiteUrl || null,
             };
-            console.log(payload);
+            const res = await fetch('/api/creators/profile', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                console.error('Failed to update profile:', err);
+            }
             trackEvent('profile_updated', { completion: completion.percentage });
+        } catch (err) {
+            console.error('Error saving profile:', err);
         } finally {
             setIsSaving(false);
         }

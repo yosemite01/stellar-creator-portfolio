@@ -1,21 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
-import { prisma } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
+import { handleProfileEvent } from '@/server/services/profile-events';
 
 /**
- * GET  /api/creators/profile   the caller's own availability + rate card
- * PATCH /api/creators/profile  update either, for matching (issue #1609)
- *
- * This is deliberately separate from the public `GET /api/creators/[id]`
- * (which reads static demo data, see lib/services/creators-data.ts) — this
- * route reads/writes the caller's own real `CreatorProfile` row, and only
- * the caller's own: there is no id in the URL, it always resolves from the
- * session.
+ * GET  /api/creators/profile   the caller's own profile, rate card, and completion score
+ * PATCH /api/creators/profile  update profile fields, triggering event-driven completion sync and nudges (issue #1825)
  */
 
 const updateSchema = z
   .object({
+    displayName: z.string().min(2).max(100).optional(),
+    bio: z.string().max(2000).nullable().optional(),
+    avatar: z.string().url().nullable().optional().or(z.literal('')),
+    discipline: z.string().max(100).nullable().optional(),
+    skills: z.array(z.string()).optional(),
+    portfolio: z.any().optional(),
+    githubUrl: z.string().url().nullable().optional().or(z.literal('')),
+    figmaUrl: z.string().url().nullable().optional().or(z.literal('')),
+    linkedinUrl: z.string().url().nullable().optional().or(z.literal('')),
+    websiteUrl: z.string().url().nullable().optional().or(z.literal('')),
     acceptingWork: z.boolean().optional(),
     hourlyRate: z.number().positive().max(100_000).nullable().optional(),
     projectRateMin: z.number().positive().max(10_000_000).nullable().optional(),
@@ -34,10 +39,22 @@ async function requireCreatorProfile(userId: string) {
     where: { userId },
     select: {
       id: true,
+      userId: true,
+      displayName: true,
+      bio: true,
+      avatar: true,
+      discipline: true,
+      skills: true,
+      portfolio: true,
+      githubUrl: true,
+      figmaUrl: true,
+      linkedinUrl: true,
+      websiteUrl: true,
       acceptingWork: true,
       hourlyRate: true,
       projectRateMin: true,
       projectRateMax: true,
+      completionScore: true,
     },
   });
 }
@@ -76,10 +93,6 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
-  // A partial update (e.g. only `projectRateMin`) is still checked against
-  // whatever the OTHER bound already is in the database, not just against
-  // itself — otherwise a two-step edit could park the row in an invalid
-  // min > max state in between.
   const nextMin = parsed.data.projectRateMin !== undefined ? parsed.data.projectRateMin : existing.projectRateMin;
   const nextMax = parsed.data.projectRateMax !== undefined ? parsed.data.projectRateMax : existing.projectRateMax;
   if (nextMin != null && nextMax != null && nextMin > nextMax) {
@@ -94,12 +107,34 @@ export async function PATCH(req: NextRequest) {
     data: parsed.data,
     select: {
       id: true,
+      userId: true,
+      displayName: true,
+      bio: true,
+      avatar: true,
+      discipline: true,
+      skills: true,
+      portfolio: true,
+      githubUrl: true,
+      figmaUrl: true,
+      linkedinUrl: true,
+      websiteUrl: true,
       acceptingWork: true,
       hourlyRate: true,
       projectRateMin: true,
       projectRateMax: true,
+      completionScore: true,
     },
   });
 
-  return NextResponse.json(updated);
+  // Event-driven recalculation of completion score and nudge evaluation
+  const { completion, nudge } = await handleProfileEvent({
+    type: 'profile.updated',
+    userId: session.user.id,
+  });
+
+  return NextResponse.json({
+    ...updated,
+    completionScore: completion.percentage,
+    nudge,
+  });
 }

@@ -27,6 +27,8 @@ export interface CreatorFeatures {
   skills: string[]
   rating: number
   completedProjects: number
+  /** Profile completion score (0-100, issue #1825) */
+  completionScore?: number | null
   /** ISO timestamp of last completed bounty — used for activity boost */
   lastBountyCompletedAt?: string | null
   /** Response rate 0–1 — used for activity boost */
@@ -59,6 +61,7 @@ export interface MatchScoreBreakdown {
     reputation: number
     budgetFit: number
     activity: number
+    profileCompletion?: number
   }
 }
 
@@ -177,6 +180,10 @@ function disciplineMatch(bounty: BountyFeatures, creator: CreatorFeatures): numb
 function reputation(creator: CreatorFeatures): number {
   const r = Math.min(1, creator.rating / 5)
   const exp = Math.min(1, creator.completedProjects / 25)
+  if (creator.completionScore != null) {
+    const comp = clamp01(creator.completionScore / 100)
+    return r * 0.50 + exp * 0.30 + comp * 0.20
+  }
   return r * 0.65 + exp * 0.35
 }
 
@@ -282,6 +289,11 @@ export function scoreCreatorBountyPair(
   if (rep >= 0.72)        reasons.push('Solid track record on the platform')
   if (budget >= 0.85)     reasons.push('Budget tier fits your experience level')
   if (activity >= 0.6)    reasons.push('Recently active with high response rate')
+  if (creator.completionScore != null && creator.completionScore >= 80) {
+    reasons.push('High profile completeness score')
+  } else if (creator.completionScore != null && creator.completionScore < 50) {
+    reasons.push('Incomplete profile details may affect match ranking')
+  }
   if (reasons.length === 0) reasons.push('Exploratory match — review the brief to decide fit')
 
   return {
@@ -297,6 +309,7 @@ export function scoreCreatorBountyPair(
       reputation:      Math.round(rep         * 100) / 100,
       budgetFit:       Math.round(budget      * 100) / 100,
       activity:        Math.round(activity    * 100) / 100,
+      profileCompletion: creator.completionScore != null ? Math.round(clamp01(creator.completionScore / 100) * 100) / 100 : undefined,
     },
   }
 }
