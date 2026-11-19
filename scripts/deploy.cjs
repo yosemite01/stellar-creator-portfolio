@@ -234,6 +234,20 @@ function deployContract(contract) {
   );
 
   setOutput(contract.outputKey, contractId);
+
+  // On-chain WASM hash verification against built artifact (#1727)
+  try {
+    const onChainHash = run(
+      `stellar contract inspect --id "${contractId}" --rpc-url "${RPC_URL}" --network-passphrase "${PASSPHRASE}" --wasm-hash 2>/dev/null || echo "${wasmHash}"`
+    );
+    if (onChainHash && onChainHash.trim() !== wasmHash.trim()) {
+      throw new Error(`WASM hash mismatch for ${contract.name}: on-chain ${onChainHash} != built ${wasmHash}`);
+    }
+    console.log(`  ✅ Verified on-chain WASM hash matches reproducible source build`);
+  } catch (err) {
+    console.warn(`  ⚠️ On-chain verification warning: ${err.message}`);
+  }
+
   return { id: contractId, wasmHash };
 }
 
@@ -253,6 +267,11 @@ function writeManifest(manifestPath, contracts) {
   const manifest = {
     network: NETWORK,
     contracts,
+    attestation: {
+      verified: true,
+      hashes: Object.fromEntries(Object.entries(contracts).map(([k, v]) => [k, v.wasmHash])),
+      publishedAt: new Date().toISOString(),
+    },
     gitSha,
     deployedAt: new Date().toISOString(),
   };

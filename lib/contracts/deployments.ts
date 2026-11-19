@@ -64,3 +64,9 @@ export function getContractId(name: ContractName, network: string = currentNetwo
   if (override) return override;
   return getDeploymentManifest(network)?.contracts[name]?.id ?? null;
 }
+
+/** Verify that an on-chain WASM hash matches the source build attestation (#1727). */
+export function verifyDeployedWasmHash(name: ContractName, onChainWasmHash: string, network: string = currentNetwork()): boolean {
+  const expected = getDeploymentManifest(network)?.contracts[name]?.wasmHash;
+  return !!expected && expected.toLowerCase() === onChainWasmHash.toLowerCase();
+}
