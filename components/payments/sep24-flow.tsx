@@ -12,9 +12,11 @@ import {
   startInteractiveFlow,
   type Sep24Transaction,
 } from '@/lib/stellar/sep24'
+import { Sep24Timeline } from './sep24-timeline'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
- * SEP-24 interactive deposit/withdraw flow (Issue #1393).
+ * SEP-24 interactive deposit/withdraw flow (Issue #1548).
  *
  * Previously a stub that only moved a local `status` variable. It now runs the
  * real protocol: discover the anchor's TRANSFER_SERVER, request an interactive
@@ -80,6 +82,8 @@ export function Sep24Flow({
   const [status, setStatus] = useState<Sep24TransactionStatus>('idle')
   const [message, setMessage] = useState<string | null>(null)
   const [interactiveUrl, setInteractiveUrl] = useState<string | null>(null)
+  const [transaction, setTransaction] = useState<Sep24Transaction | null>(null)
+  const [timelineError, setTimelineError] = useState<string | null>(null)
 
   // Aborts the poll if the component unmounts mid-flow, so a closed page does
   // not leave a request loop running against the anchor.
@@ -108,6 +112,8 @@ export function Sep24Flow({
 
     setMessage(null)
     setInteractiveUrl(null)
+    setTransaction(null)
+    setTimelineError(null)
     advance('incomplete')
 
     try {
@@ -148,6 +154,7 @@ export function Sep24Flow({
         signal: controller.signal,
         onUpdate: (tx) => {
           onTransactionUpdate?.(tx)
+          setTransaction(tx)
           const mapped = toComponentStatus(tx)
           // Only push non-terminal updates here; the terminal one is set below
           // from the resolved value, so `onStatusChange` does not fire twice
@@ -157,6 +164,7 @@ export function Sep24Flow({
       })
 
       onTransactionUpdate?.(final)
+      setTransaction(final)
       advance(toComponentStatus(final))
 
       if (!isSuccessStatus(final.status)) {
@@ -181,24 +189,40 @@ export function Sep24Flow({
 
   const busy = status === 'incomplete' || status === 'pending_anchor'
 
+  // If we have a full transaction (from polling or from db), show the timeline
+  const showTimeline = !!transaction
+
   return (
-    <div className="flex flex-col gap-3 rounded-lg border p-4">
-      <p className="text-sm text-muted-foreground">
-        {kind === 'deposit' ? 'Deposit' : 'Withdraw'} {assetCode} via anchor (SEP-24)
-      </p>
+    <div className="flex flex-col gap-4">
+      {/* Initial state / start button */}
+      {!showTimeline && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {kind === 'deposit' ? 'Deposit' : 'Withdraw'} {assetCode} via anchor (SEP-24)
+          </p>
 
-      <Button onClick={startFlow} disabled={busy}>
-        {busy ? 'Waiting for anchor…' : `Start ${kind}`}
-      </Button>
+          <Button onClick={startFlow} disabled={busy}>
+            {busy ? 'Waiting for anchor…' : `Start ${kind}`}
+          </Button>
 
-      {status !== 'idle' && (
-        <p className="text-xs text-muted-foreground" role="status">
-          Status: {status}
-        </p>
+          {message && (
+            <p className="text-xs text-destructive" role="alert">
+              {message}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Timeline (shown after start or when transaction is available) */}
+      {showTimeline && transaction && (
+        <Sep24Timeline
+          transaction={transaction}
+          onRetry={startFlow}
+        />
       )}
 
       {/* Shown when the popup was blocked, so the flow is still completable. */}
-      {interactiveUrl && busy && (
+      {interactiveUrl && busy && !showTimeline && (
         <a
           href={interactiveUrl}
           target="_blank"
@@ -207,12 +231,6 @@ export function Sep24Flow({
         >
           Open the anchor page
         </a>
-      )}
-
-      {message && (
-        <p className="text-xs text-destructive" role="alert">
-          {message}
-        </p>
       )}
     </div>
   )
