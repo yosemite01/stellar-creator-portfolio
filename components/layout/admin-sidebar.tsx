@@ -8,20 +8,40 @@ import {
   ScrollText,
   ToggleRight,
   Users,
+  DollarSign,
 } from 'lucide-react';
 import { ResponsiveSidebar, type SidebarItem } from '@/components/layout/sidebar';
+import { canAccess } from '@/lib/auth/admin-auth';
+
+// Admin navigation items with role requirements
+interface NavItem extends SidebarItem {
+  minRole?: 'SUPPORT' | 'MODERATOR' | 'FINANCE' | 'SUPERADMIN';
+}
 
 // Only routes that exist under app/admin.
-const navItems: SidebarItem[] = [
-  { href: '/admin/users', label: 'Users', icon: Users },
-  { href: '/admin/bounties', label: 'Bounties', icon: Briefcase },
-  { href: '/admin/disputes', label: 'Disputes', icon: Gavel },
-  { href: '/admin/reports', label: 'Reports', icon: Flag },
-  { href: '/admin/analytics', label: 'Analytics', icon: BarChart2 },
-  { href: '/admin/audit', label: 'Audit Log', icon: ScrollText },
-  { href: '/admin/feature-flags', label: 'Feature Flags', icon: ToggleRight },
+const navItems: NavItem[] = [
+  { href: '/admin/users', label: 'Users', icon: Users, minRole: 'MODERATOR' },
+  { href: '/admin/bounties', label: 'Bounties', icon: Briefcase, minRole: 'MODERATOR' },
+  { href: '/admin/disputes', label: 'Disputes', icon: Gavel, minRole: 'MODERATOR' },
+  { href: '/admin/reports', label: 'Reports', icon: Flag, minRole: 'SUPPORT' },
+  { href: '/admin/analytics', label: 'Analytics', icon: BarChart2, minRole: 'MODERATOR' },
+  { href: '/admin/payouts', label: 'Payouts', icon: DollarSign, minRole: 'FINANCE' },
+  { href: '/admin/audit', label: 'Audit Log', icon: ScrollText, minRole: 'MODERATOR' },
+  { href: '/admin/feature-flags', label: 'Feature Flags', icon: ToggleRight, minRole: 'SUPERADMIN' },
 ];
 
-export function AdminSidebar() {
-  return <ResponsiveSidebar title="Admin Panel" items={navItems} />;
+// Filter nav items based on user's role (client-side)
+export function filterNavItems(navItems: NavItem[], userRole: string): SidebarItem[] {
+  const role = userRole as 'SUPPORT' | 'MODERATOR' | 'FINANCE' | 'SUPERADMIN';
+  return navItems
+    .filter((item) => !item.minRole || canAccess(role, item.minRole))
+    .map(({ minRole, ...item }) => item);
+}
+
+export function AdminSidebar({ userRole }: { userRole?: string }) {
+  const items = userRole 
+    ? filterNavItems(navItems, userRole)
+    : navItems;
+
+  return <ResponsiveSidebar title="Admin Panel" items={items} />;
 }

@@ -1,0 +1,6 @@
+{
+  "version": "38",
+  "messages": [
+    "CreateIndexStatement(\"uniq_audiolog_entryHash\", \"AuditLog\", [\"entryHash\"], [])"
+  ]
+}

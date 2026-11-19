@@ -1,9 +1,7 @@
 /**
  * Secret used to sign and verify API bearer tokens.
- *
- * There is deliberately no fallback value: a default secret that ships in
- * the source lets anyone mint valid tokens for a deployment that forgot to
- * set JWT_SECRET.
+ * 
+ * @deprecated Use getSecretValue('JWT_SECRET') from @/server/services/secrets instead
  */
 export function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET;

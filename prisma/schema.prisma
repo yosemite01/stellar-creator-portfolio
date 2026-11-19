@@ -672,8 +672,15 @@ model DisputeEvidence {
 
 // ── Audit Logging & Telemetry ────────────────────────────────────────────
 
-/// Immutable audit trail for all mutating operations.
+/// Tamper-evident audit trail with hash-chain integrity protection.
+/// Each entry hashes all previous entries using SHA-256 — any modification breaks the chain.
 /// Records who did what, when, and from where — used for security tracing and compliance.
+/// 
+/// Hash chain mechanics:
+/// - `prevHash`: SHA-256 of previous entry's data (null for first entry)
+/// - `entryHash`: SHA-256 of current entry's data + prevHash (computed by DB trigger)
+/// - Database trigger prevents UPDATE/DELETE operations to preserve integrity
+/// - Periodic anchoring on Stellar provides cryptographic proof of existence
 model AuditLog {
   id            String    @id @default(cuid())
 
@@ -717,6 +724,18 @@ model AuditLog {
   /// ISO-3166-1 country code inferred from IP geo-lookup (optional).
   geoCountry    String?
 
+  /// Hash of the previous audit entry (null for first entry).
+  prevHash      String?
+
+  /// Computed hash of this entry (SHA-256 of entry data + prevHash).
+  entryHash     String    @unique
+
+  /// Whether this entry (or any prior entry) has been tampered with.
+  isTampered    Boolean   @default(false)
+
+  /// Timestamp when this entry was anchored on Stellar (optional).
+  anchoredAt    DateTime?
+
   createdAt     DateTime  @default(now())
 
   @@index([userId, createdAt])
@@ -725,6 +744,8 @@ model AuditLog {
   @@index([traceId])
   @@index([createdAt])
   @@index([status, createdAt])
+  @@index([entryHash])
+  @@index([prevHash])
 }
 
 enum AuditStatus {
