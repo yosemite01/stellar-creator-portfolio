@@ -93,7 +93,7 @@ export function TransactionLogTable({
               <td className="px-4 py-3 text-muted-foreground">
                 {tx.fee != null ? `${tx.fee} ${tx.feeToken ?? 'XLM'}` : '—'}
               </td>
-              <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+              <td className="px-4 py-3 text-muted-foreground whitespace-nowrap" suppressHydrationWarning>
                 {new Date(tx.timestamp).toLocaleString()}
               </td>
             </tr>

@@ -185,3 +185,86 @@ export function usePrefersReducedMotion(): boolean {
 
   return mounted ? prefersReduced : false;
 }
+
+/**
+ * Returns true only after component has mounted on the client.
+ */
+export function useMounted(): boolean {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  return mounted;
+}
+
+/**
+ * SafeDate component: formats dates consistently and safely across server/client.
+ * Uses ISO date or deterministic fallback on SSR, and formatted date on client
+ * while suppressing harmless timezone/locale hydration warnings.
+ */
+interface SafeDateProps {
+  date: Date | string | number;
+  format?: 'date' | 'datetime' | 'time' | 'iso';
+  className?: string;
+  locale?: string;
+}
+
+export function SafeDate({
+  date,
+  format = 'date',
+  className,
+  locale = 'en-US',
+}: SafeDateProps) {
+  const d = date instanceof Date ? date : new Date(date);
+  const isValid = !isNaN(d.getTime());
+  const iso = isValid ? d.toISOString() : '';
+
+  let formatted = iso;
+  if (isValid) {
+    if (format === 'date') {
+      formatted = d.toLocaleDateString(locale);
+    } else if (format === 'datetime') {
+      formatted = d.toLocaleString(locale);
+    } else if (format === 'time') {
+      formatted = d.toLocaleTimeString(locale);
+    } else if (format === 'iso') {
+      formatted = iso.split('T')[0];
+    }
+  }
+
+  return (
+    <time dateTime={iso} className={className} suppressHydrationWarning>
+      {formatted}
+    </time>
+  );
+}
+
+/**
+ * SafeNumber component: formats numbers/currency safely with suppressHydrationWarning
+ */
+interface SafeNumberProps {
+  value: number;
+  style?: 'decimal' | 'currency' | 'percent';
+  locale?: string;
+  className?: string;
+}
+
+export function SafeNumber({
+  value,
+  style = 'decimal',
+  locale = 'en-US',
+  className,
+}: SafeNumberProps) {
+  const formatted =
+    style === 'currency'
+      ? `$${value.toLocaleString(locale)}`
+      : style === 'percent'
+        ? `${value.toLocaleString(locale)}%`
+        : value.toLocaleString(locale);
+
+  return (
+    <span className={className} suppressHydrationWarning>
+      {formatted}
+    </span>
+  );
+}
