@@ -10,7 +10,7 @@ mod reentrancy;
 #[cfg(test)]
 mod milestone_tests;
 #[cfg(test)]
-mod invariant_fuzz;
+mod invariant_fuzz_tests;
 use reentrancy::{require_active_escrow, require_authorized_party, ReentrancyGuard};
 
 // Per-dispute arbitration (#1713)
@@ -1101,7 +1101,7 @@ impl EscrowContract {
 
         let mut total: i128 = 0;
         for index in milestone_indices(&env, escrow_id).iter() {
-            let m: Milestone = env.storage().persistent().get(&milestone_key(&env, escrow_id, index)).unwrap();
+            let m: Milestone = env.storage().persistent().get(&milestone_key(&env, escrow_id, index)).ok_or(EscrowError::MilestoneNotFound)?;
             total = total.checked_add(m.amount).ok_or(EscrowError::InvalidAmount)?;
         }
         // Any failure here reverts every write above.

@@ -594,7 +594,8 @@ impl InsuranceContract {
         Self::require_initialized(&env);
 
         let mut claim = Self::load_claim(&env, claim_id);
-        let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+        let admin: Address = env.storage().persistent().get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(&env, InsuranceError::NotInitialized));
         if caller != admin && caller != claim.claimant {
             panic_with_error!(&env, InsuranceError::Unauthorized);
         }
@@ -752,7 +753,8 @@ impl InsuranceContract {
                 (a, t)
             }
             None => {
-                let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+                let admin: Address = env.storage().persistent().get(&DataKey::Admin)
+                    .unwrap_or_else(|| panic_with_error!(env, InsuranceError::NotInitialized));
                 (vec![env, admin], 1)
             }
         }
