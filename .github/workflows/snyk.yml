@@ -47,7 +47,7 @@ jobs:
 
       - name: Upload npm SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        if: always() && hashFiles('snyk-npm.sarif') != ''
         with:
           sarif_file: snyk-npm.sarif
           category: snyk-npm
@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload SAST SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        if: always() && hashFiles('snyk-code.sarif') != ''
         with:
           sarif_file: snyk-code.sarif
           category: snyk-code
