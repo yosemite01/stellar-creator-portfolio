@@ -1,3 +1,6 @@
+// Legacy encryption module - kept for backward compatibility
+// Use kyc-envelope-encryption.ts for new implementations
+
 /**
  * Field-level encryption for KYC PII (Issue #782).
  *

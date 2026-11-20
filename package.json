@@ -35,7 +35,11 @@
     "i18n:check": "pnpm run i18n:web && pnpm run i18n:mobile",
     "prepare": "husky",
     "postinstall": "prisma generate",
-    "contracts:bindings": "./scripts/generate-contract-bindings.sh"
+    "contracts:bindings": "./scripts/generate-contract-bindings.sh",
+    "kyc:rotate-key": "tsx scripts/rotate-kyc-key.ts",
+    "kyc:rekey": "tsx server/jobs/rekey-kyc.ts",
+    "kyc:cleanup-uploads": "tsx server/jobs/cleanup-kyc-uploads.ts",
+    "kyc:sanitize-images": "tsx server/jobs/sanitize-kyc-images.ts"
   },
   "dependencies": {
     "@albedo-link/intent": "^0.13.0",
@@ -166,3 +170,35 @@
     "node": ">=22.19.0"
   }
 }
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "db:test:up": "docker compose -f docker-compose.test.yml up -d",
+    "db:test:down": "docker compose -f docker-compose.test.yml down -v",
+    "check-all": "make check-all",
+    "check-backend": "make check-backend",
+    "check-contracts": "make check-contracts",
+    "check-frontend": "make check-frontend",
+    "frontend:orbit-check": "pnpm run lint && pnpm run build",
+    "backend:clippy": "cd backend && cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "smart-contract:clippy": "cd backend && cargo clippy -p stellar-bounty-contract -p stellar-core-contract -p stellar-escrow-contract -p stellar-freelancer-contract -p stellar-governance-contract -p oracle -p stellar-identity-contract -p stellar-referral-contract -p stellar_insights --all-targets --all-features -- -D warnings",
+    "cli-checks": "pnpm run frontend:orbit-check && pnpm run backend:clippy",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "backfill:embeddings": "node scripts/backfill-embeddings.mjs",
+    "i18n:web": "node scripts/i18n-validate.mjs",
+    "i18n:mobile": "node mobile/scripts/i18n-validate.mjs",
+    "i18n:check": "pnpm run i18n:web && pnpm run i18n:mobile",
+    "prepare": "husky",
+    "postinstall": "prisma generate",
+    "contracts:bindings": "./scripts/generate-contract-bindings.sh",
+    "auth:generate-keys": "tsx scripts/generate-keys.ts"
+  },

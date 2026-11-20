@@ -25,6 +25,8 @@ pub enum AuthError {
     OAuthProviderNotConfigured(String),
     #[error("OAuth flow failed: {0}")]
     OAuthFlowFailed(String),
+    #[error("JWKS error: {0}")]
+    Jwks(String),
 }
 
 impl ResponseError for AuthError {
@@ -65,6 +67,10 @@ impl ResponseError for AuthError {
             AuthError::OAuthFlowFailed(_) => (
                 actix_web::http::StatusCode::BAD_GATEWAY,
                 self.to_string(),
+            ),
+            AuthError::Jwks(_) => (
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to fetch JWKS".to_string(),
             ),
         };
         HttpResponse::build(status).json(json!({ "error": msg }))
@@ -148,6 +154,13 @@ mod tests {
         let (status, _) =
             error_response_parts(AuthError::OAuthFlowFailed("boom".to_string())).await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
+    }
+
+    #[actix_web::test]
+    async fn jwks_error_maps_to_internal_error() {
+        let (status, json) = error_response_parts(AuthError::Jwks("test error".to_string())).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["error"], "failed to fetch JWKS");
     }
 
     #[test]

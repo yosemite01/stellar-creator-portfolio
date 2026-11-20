@@ -1290,3 +1290,28 @@ enum SwapPhase {
   refunded
   error
 }
+// ── Revoked Tokens ───────────────────────────────────────────────────────────
+
+/// Revoked token registry for token invalidation across services.
+/// When a token is revoked, its JTI is added here and both NextAuth and
+/// Rust auth services check this list before accepting tokens.
+model RevokedToken {
+  jti       String   @id
+  exp       DateTime
+  createdAt DateTime @default(now())
+
+  @@index([exp])
+}
+// ── KYC Key Rotation History ───────────────────────────────────────────────
+
+/// Tracks key rotation history for KYC encrypted fields.
+/// Enables tracking which key version was used for each encryption.
+model KycKeyRotationHistory {
+  id             String   @id @default(cuid())
+  previousKeyId  String
+  newKeyId       String
+  rotatedAt      DateTime @default(now())
+  rotatedBy      String?
+
+  @@index([rotatedAt])
+}

@@ -42,3 +42,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = "0.4"
 oauth2.workspace = true
 reqwest.workspace = true
+# For JWKS verification
+base64-url = "2.3"
