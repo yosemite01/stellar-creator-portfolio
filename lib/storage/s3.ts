@@ -109,3 +109,81 @@ export async function listFiles(prefix = ''): Promise<StoredFile[]> {
 export async function deleteObject(key: string): Promise<void> {
   await getClient().send(new DeleteObjectCommand({ Bucket: getBucket(), Key: key }));
 }
+export interface UploadObjectInput {
+  key: string;
+  body: Buffer | Uint8Array | string;
+  contentType?: string;
+  metadata?: Record<string, string>;
+}
+
+/** Interface for stored object with metadata */
+export interface StoredObject {
+  key: string;
+  body: Buffer;
+  contentType?: string;
+  metadata?: Record<string, string>;
+}
+
+/** Uploads an object and returns its key with a signed URL to read it back. */
+export async function uploadObject({
+  key,
+  body,
+  contentType,
+  metadata,
+}: UploadObjectInput): Promise<{ key: string; signedUrl: string }> {
+  const params: any = {
+    Bucket: getBucket(),
+    Key: key,
+    Body: body,
+    ContentType: contentType,
+  };
+
+  if (metadata) {
+    params.Metadata = metadata;
+  }
+
+  await getClient().send(new PutObjectCommand(params));
+  return { key, signedUrl: await getDownloadUrl(key) };
+}
+
+/** Downloads an object with its metadata. */
+export async function getObject(key: string): Promise<StoredObject> {
+  const response = await getClient().send(
+    new GetObjectCommand({ Bucket: getBucket(), Key: key }),
+  );
+
+  const body = await response.Body?.transformToByteArray();
+  if (!body) {
+    throw new Error(`Failed to download object: ${key}`);
+  }
+
+  return {
+    key,
+    body,
+    contentType: response.ContentType,
+    metadata: response.Metadata,
+  };
+}
+
+/** Lists objects under a prefix, each with a signed URL. */
+export async function listFiles(prefix = ''): Promise<StoredFile[]> {
+  const response = await getClient().send(
+    new ListObjectsV2Command({ Bucket: getBucket(), Prefix: prefix }),
+  );
+
+  return Promise.all(
+    (response.Contents ?? [])
+      .filter((object): object is typeof object & { Key: string } => Boolean(object.Key))
+      .map(async (object) => ({
+        key: object.Key,
+        size: object.Size ?? 0,
+        lastModified: object.LastModified,
+        signedUrl: await getDownloadUrl(object.Key),
+      })),
+  );
+}
+
+/** Deletes an object. Succeeds if the object is already absent. */
+export async function deleteObject(key: string): Promise<void> {
+  await getClient().send(new DeleteObjectCommand({ Bucket: getBucket(), Key: key }));
+}

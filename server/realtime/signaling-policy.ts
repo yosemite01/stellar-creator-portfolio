@@ -15,6 +15,11 @@ export interface CallTokenClaims {
   exp: number;
 }
 
+/**
+ * Signaling token secret helper - Deprecated, use secrets.ts
+ * 
+ * @deprecated Use getSecretValue('SIGNALING_TOKEN_SECRET') from @/server/services/secrets instead
+ */
 export function signalingTokenSecret(): string {
   return (
     process.env.SIGNALING_TOKEN_SECRET ||

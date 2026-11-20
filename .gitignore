@@ -75,9 +75,4 @@ __v0_jsx-dev-runtime.ts
 
 # Local scratch notes
 somzilla.md
-
-# Local changelog (kept out of repo)
-CHANGES.md
-
-# Local change log (not for version control)
-CHANGES.md
+CHANGES_LOCAL.md

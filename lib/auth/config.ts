@@ -1,9 +1,11 @@
 import type { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import GoogleProvider from 'next-auth/providers/google';
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, scryptSync, timingSafeEqual, randomUUID } from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { upsertOAuthUser } from '@/lib/auth/oauth-user';
+import { loadPrivateKey, getKeyId, loadPublicKey } from '@/lib/auth/keys';
+import { revokeToken } from '@/lib/auth/revocation';
 
 // Legacy scheme (pre-fix): every account shared this one hardcoded salt,
 // which defeats the point of salting. Kept only so accounts hashed before
@@ -33,6 +35,14 @@ function verifyPassword(password: string, stored: string): boolean {
   if (hash.length !== storedHash.length) return false;
   return timingSafeEqual(hash, storedHash);
 }
+
+// Asymmetric JWT configuration
+const RSA_PRIVATE_KEY = loadPrivateKey();
+const KEY_ID = getKeyId();
+
+// Token expiration times
+const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const SESSION_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: 'jwt' },
@@ -136,7 +146,37 @@ export const authOptions: NextAuthOptions = {
       }
       return session;
     },
+    // Custom JWT signing callback to add JTI and use asymmetric signing
+    async jwtSign({ token }) {
+      // Generate unique token ID for revocation tracking
+      const jti = randomUUID();
+      const now = Date.now();
+      
+      // Create token payload
+      const payload = {
+        ...token,
+        jti,
+        iat: Math.floor(now / 1000),
+        exp: Math.floor((now + ACCESS_TOKEN_TTL_MS) / 1000),
+        iss: 'stellar-creator-portfolio',
+        aud: 'stellar-creator-portfolio',
+      };
+
+      // Sign with RSA private key (RS256)
+      const signer = crypto.createSign('sha256');
+      signer.update(JSON.stringify(payload));
+      const signature = signer.sign(RSA_PRIVATE_KEY);
+
+      return {
+        payload,
+        signature: signature.toString('base64url'),
+        keyId: KEY_ID,
+      };
+    },
   },
 };
 
 export { hashPassword };
+
+// Export public key for external verification
+export const AUTH_PUBLIC_KEY = loadPublicKey();

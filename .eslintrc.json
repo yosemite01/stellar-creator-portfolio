@@ -1,0 +1,12 @@
+{
+  "root": true,
+  "extends": [
+    "next/core-web-vitals"
+  ],
+  "plugins": [
+    "kms"
+  ],
+  "rules": {
+    "kms/no-direct-env-read": "error"
+  }
+}
