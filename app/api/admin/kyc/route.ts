@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/config';
 import { prisma } from '@/lib/prisma';
 import { decryptField } from '@/lib/kyc-encryption';
+import { requireAdmin } from '@/server/services/authorization';
 
 /**
  * GET /api/admin/kyc?status=pending&page=1&limit=20
@@ -14,10 +15,7 @@ import { decryptField } from '@/lib/kyc-encryption';
  */
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  const role = (session?.user as { role?: string })?.role;
-  if (!role || role !== 'ADMIN') {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-  }
+  const user = requireAdmin({ user: session?.user });
 
   const { searchParams } = req.nextUrl;
   const status = (searchParams.get('status') ?? 'PENDING').toUpperCase();

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
+import { requireAuth } from '@/server/services/authorization';
 import { prisma } from '@/lib/db';
 
 /**
@@ -44,11 +45,9 @@ async function requireCreatorProfile(userId: string) {
 
 export async function GET() {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
-  const profile = await requireCreatorProfile(session.user.id);
+  const profile = await requireCreatorProfile(user.id);
   if (!profile) {
     return NextResponse.json({ error: 'No creator profile for this account' }, { status: 404 });
   }
@@ -58,11 +57,9 @@ export async function GET() {
 
 export async function PATCH(req: NextRequest) {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
-  const existing = await requireCreatorProfile(session.user.id);
+  const existing = await requireCreatorProfile(user.id);
   if (!existing) {
     return NextResponse.json({ error: 'No creator profile for this account' }, { status: 404 });
   }
@@ -90,7 +87,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   const updated = await prisma.creatorProfile.update({
-    where: { userId: session.user.id },
+    where: { userId: user.id },
     data: parsed.data,
     select: {
       id: true,

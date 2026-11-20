@@ -1,16 +1,15 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma';
+import { requireAuth } from '@/server/services/authorization';
 import { computeProfileCompletion } from '@/lib/profile-completion';
 
 export async function GET() {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
   const profile = await prisma.creatorProfile.findUnique({
-    where: { userId: session.user.id },
+    where: { userId: user.id },
     select: {
       displayName: true,
       avatar: true,

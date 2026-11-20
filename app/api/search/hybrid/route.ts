@@ -18,6 +18,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { hybridSearchSchema } from '@/lib/search/schema';
 import { hybridSearch, bountyViewSearch, checkClusterHealth } from '@/server/services/search';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/config';
+import { requireAuth } from '@/server/services/authorization';
 
 export const runtime = 'nodejs';
 
@@ -29,26 +32,33 @@ export const runtime = 'nodejs';
  *                              (issue #744). Bypasses the write DB entirely.
  */
 export async function POST(req: NextRequest) {
+  // Require authentication for bounty type searches
+  const body = await req.json().catch(() => null);
+  if (body?.type === 'bounty') {
+    const session = await getServerSession(authOptions);
+    requireAuth({ user: session?.user });
+  }
+  
   try {
-    const parsed = hybridSearchSchema.safeParse(await req.json().catch(() => null));
+    const parsed = hybridSearchSchema.safeParse(body ?? null);
     if (!parsed.success) {
       return NextResponse.json(
         { error: 'Invalid request body', details: parsed.error.flatten() },
         { status: 400 },
       );
     }
-    const body = parsed.data;
-    const { query, limit } = body;
+    const bodyData = parsed.data;
+    const { query, limit } = bodyData;
 
     // Route bounty searches to the read-optimised materialized view.
-    if (body.type === 'bounty') {
+    if (bodyData.type === 'bounty') {
       const results = await bountyViewSearch({
         query,
         limit,
-        minBudget: body.minBudget,
-        maxBudget: body.maxBudget,
-        status: body.status,
-        tags: body.tags,
+        minBudget: bodyData.minBudget,
+        maxBudget: bodyData.maxBudget,
+        status: bodyData.status,
+        tags: bodyData.tags,
       });
 
       return NextResponse.json({
@@ -65,11 +75,11 @@ export async function POST(req: NextRequest) {
     const results = await hybridSearch({
       query,
       limit,
-      minScore: body.minScore,
-      discipline: body.discipline,
-      skills: body.skills,
-      verifiedOnly: body.verifiedOnly === true,
-      expandSynonyms: body.expandSynonyms !== false,
+      minScore: bodyData.minScore,
+      discipline: bodyData.discipline,
+      skills: bodyData.skills,
+      verifiedOnly: bodyData.verifiedOnly === true,
+      expandSynonyms: bodyData.expandSynonyms !== false,
     });
 
     return NextResponse.json({
