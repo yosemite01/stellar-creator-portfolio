@@ -41,7 +41,8 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
-          pnpm exec tsx lib/cron/tier-upgrade.ts
+          # tsx is not a project dependency; fetch it on demand.
+          pnpm dlx tsx lib/cron/tier-upgrade.ts
 
       - name: Notify on failure
         if: failure()
