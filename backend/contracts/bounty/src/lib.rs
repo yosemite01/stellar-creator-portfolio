@@ -5,7 +5,7 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, String, Symbol, Vec,
 };
 
 /// Base resource fee for creating a bounty (derived from benchmarking, update after load testing)
@@ -52,9 +52,9 @@ pub enum BountyError {
     MultisigNotConfigured = 4,
     /// Fewer signers authorised than the required minimum (M-of-N not satisfied).
     InsufficientSigners = 5,
-    /// `initialize` / `set_admin` called after an admin was already stored.
+    /// Constructor found an admin already stored (cannot happen on a fresh deploy).
     AlreadyInitialized = 6,
-    /// An admin-gated method was called before `initialize`.
+    /// An admin-gated method found no stored admin (legacy deploy not yet migrated).
     AdminNotSet = 7,
     /// Caller is not the stored contract admin.
     Unauthorized = 8,
@@ -74,6 +74,11 @@ pub enum BountyError {
     ApproverNotSigner = 16,
     /// The same approver appears more than once.
     DuplicateApprover = 17,
+    /// #1714: the bounty already has an escrow linked.
+    EscrowAlreadyLinked = 18,
+    /// #1714: `check_and_expire_bounty` was given an escrow contract other
+    /// than the one registered via `set_escrow_contract`.
+    EscrowContractMismatch = 19,
 }
 
 /// DataKey for typed storage lookups
@@ -102,6 +107,45 @@ pub trait EscrowContractTrait {
         release_condition: ReleaseCondition,
     ) -> u64;
     fn refund_expired_bounty(env: Env, bounty_id: u64, bounty_contract: Address) -> bool;
+    // #1714: joint bounty × escrow state machine.
+    fn bind_bounty(env: Env, bounty_contract: Address, bounty_id: u64, escrow_id: u64, creator: Address) -> bool;
+    fn release_for_bounty(env: Env, bounty_contract: Address, bounty_id: u64, payee: Address) -> bool;
+    fn refund_for_bounty(env: Env, bounty_contract: Address, bounty_id: u64) -> bool;
+    fn get_escrow_status(env: Env, escrow_id: u64) -> EscrowStatus;
+}
+
+/// Mirror of the escrow contract's `EscrowStatus` (same discriminants, so it
+/// decodes the cross-contract return value without a crate dependency).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[contracttype]
+pub enum EscrowStatus {
+    Active = 0,
+    Released = 1,
+    Refunded = 2,
+    Disputed = 3,
+    Complete = 4,
+}
+
+/// #1714: the joint bounty × escrow state table. `escrow` is `None` when no
+/// escrow is linked. Every entrypoint that changes either side keeps the
+/// pair inside this table, in a single transaction:
+///
+/// | Bounty                                 | Escrow                       |
+/// |----------------------------------------|------------------------------|
+/// | Open / InProgress / PendingCompletion  | none, Active                 |
+/// | Completed                              | none, Released, Complete     |
+/// | Cancelled                              | none, Refunded               |
+/// | Disputed                               | Disputed                     |
+pub fn joint_state_valid(bounty: BountyStatus, escrow: Option<EscrowStatus>) -> bool {
+    match (bounty, escrow) {
+        (_, None) => bounty != BountyStatus::Disputed,
+        (BountyStatus::Open | BountyStatus::InProgress | BountyStatus::PendingCompletion, Some(e)) => {
+            e == EscrowStatus::Active
+        }
+        (BountyStatus::Completed, Some(e)) => e == EscrowStatus::Released || e == EscrowStatus::Complete,
+        (BountyStatus::Cancelled, Some(e)) => e == EscrowStatus::Refunded,
+        (BountyStatus::Disputed, Some(e)) => e == EscrowStatus::Disputed,
+    }
 }
 
 /// Bounty Status Enum
@@ -161,13 +205,18 @@ fn require_admin(env: &Env, admin: &Address) -> Result<(), BountyError> {
     let stored_admin: Address = env
         .storage()
         .persistent()
-        .get::<Symbol, Address>(&Symbol::new(env, "bounty_admin"))
+        .get::<Symbol, Address>(&Symbol::new(env, ADMIN_KEY))
         .ok_or(BountyError::AdminNotSet)?;
     if *admin != stored_admin {
         return Err(BountyError::Unauthorized);
     }
     Ok(())
 }
+
+/// The single storage key holding the bounty admin (issue #1708).
+const ADMIN_KEY: &str = "bounty_admin";
+/// Pre-#1708 key; only read by `migrate_admin_key`.
+const LEGACY_ADMIN_KEY: &str = "admin";
 
 fn ensure(cond: bool, err: BountyError) -> Result<(), BountyError> {
     if cond { Ok(()) } else { Err(err) }
@@ -178,17 +227,40 @@ pub struct BountyContract;
 
 #[contractimpl]
 impl BountyContract {
-    /// Set the contract admin. Must be called once before any admin-gated
-    /// method (`set_escrow_contract`, `set_multisig_signers`, ...).
-    pub fn initialize(env: Env, admin: Address) -> Result<(), BountyError> {
-        admin.require_auth();
-        let stored_admin_key = Symbol::new(&env, "bounty_admin");
-        ensure(
-            !env.storage().persistent().has(&stored_admin_key),
-            BountyError::AlreadyInitialized,
-        )?;
-        env.storage().persistent().set(&stored_admin_key, &admin);
-        Ok(())
+    /// Constructor (protocol 22+). Sets the single admin key (`bounty_admin`)
+    /// atomically inside the deploy transaction, so there is no window in
+    /// which a third party can claim the contract (issue #1708). Later changes
+    /// go through `propose_admin` / `accept_admin`. Emits `(bounty, admin_set)`.
+    pub fn __constructor(env: Env, admin: Address) {
+        let key = Symbol::new(&env, ADMIN_KEY);
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, BountyError::AlreadyInitialized);
+        }
+        env.storage().persistent().set(&key, &admin);
+        env.events().publish((symbol_short!("bounty"), symbol_short!("admin_set")), admin);
+    }
+
+    /// One-off migration for contracts deployed before #1708 that still hold
+    /// their admin under the legacy `admin` key. Moves it into the canonical
+    /// `bounty_admin` key and deletes the legacy entry so there is exactly one
+    /// source of truth. Must be signed by the legacy admin. No-op (returns
+    /// `false`) when there is nothing to migrate. Emits `(bounty, admin_mig)`.
+    pub fn migrate_admin_key(env: Env) -> Result<bool, BountyError> {
+        let legacy_key = Symbol::new(&env, LEGACY_ADMIN_KEY);
+        let key = Symbol::new(&env, ADMIN_KEY);
+        let legacy: Option<Address> = env.storage().persistent().get(&legacy_key);
+        let Some(legacy) = legacy else { return Ok(false) };
+        legacy.require_auth();
+        if let Some(current) = env.storage().persistent().get::<Symbol, Address>(&key) {
+            // Both keys set: the canonical one wins, but only if they agree;
+            // otherwise refuse so a human resolves the conflict.
+            ensure(current == legacy, BountyError::Unauthorized)?;
+        } else {
+            env.storage().persistent().set(&key, &legacy);
+        }
+        env.storage().persistent().remove(&legacy_key);
+        env.events().publish((symbol_short!("bounty"), symbol_short!("admin_mig")), legacy);
+        Ok(true)
     }
 
     pub fn set_escrow_contract(env: Env, admin: Address, escrow: Address) -> Result<bool, BountyError> {
@@ -351,6 +423,9 @@ impl BountyContract {
             &ReleaseCondition::OnCompletion,
         );
 
+        // #1714: bind the escrow so it can only leave Active through this contract.
+        escrow_client.bind_bounty(&env.current_contract_address(), &bounty_id, &escrow_id, &creator);
+
         let mut bounty = load_bounty(&env, bounty_id)?;
         bounty.escrow_id = escrow_id;
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
@@ -365,6 +440,22 @@ impl BountyContract {
 
     pub fn get_bounty(env: Env, bounty_id: u64) -> Result<Bounty, BountyError> {
         load_bounty(&env, bounty_id)
+    }
+
+    /// True when `account` completed a funded bounty: the bounty is
+    /// `Completed`, was funded through escrow (`escrow_id != 0`, budget > 0)
+    /// and `account` is its creator or selected freelancer. Read by the
+    /// referral contract before paying a reward (issue #1716).
+    pub fn is_qualifying_bounty(env: Env, bounty_id: u64, account: Address) -> bool {
+        match load_bounty(&env, bounty_id) {
+            Ok(b) => {
+                b.status == BountyStatus::Completed
+                    && b.escrow_id != 0
+                    && b.budget > 0
+                    && (b.creator == account || b.selected_freelancer == Some(account))
+            }
+            Err(_) => false,
+        }
     }
 
     pub fn apply_for_bounty(
@@ -430,6 +521,9 @@ impl BountyContract {
         let mut bounty = load_bounty(&env, bounty_id)?;
 
         bounty.creator.require_auth();
+        // #1714/#1810: only an Open bounty can be assigned. Without this a
+        // second select re-opened Completed/Cancelled bounties as InProgress.
+        ensure(bounty.status == BountyStatus::Open, BountyError::InvalidStatus)?;
 
         let application = Self::get_application(env.clone(), application_id)?;
         ensure(application.bounty_id == bounty_id, BountyError::ApplicationMismatch)?;
@@ -558,6 +652,18 @@ impl BountyContract {
 
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
 
+        // #1714: pay the linked escrow to the freelancer in the same
+        // transaction. If the escrow cannot release (not Active, timelock not
+        // met) the whole call reverts and the bounty stays PendingCompletion.
+        if bounty.escrow_id != 0 {
+            let freelancer = bounty
+                .selected_freelancer
+                .clone()
+                .ok_or(BountyError::NotSelectedFreelancer)?;
+            let escrow_client = EscrowContractClient::new(&env, &Self::get_escrow_contract(&env)?);
+            escrow_client.release_for_bounty(&env.current_contract_address(), &bounty_id, &freelancer);
+        }
+
         env.events().publish(
             (symbol_short!("bounty"), symbol_short!("completed")),
             (bounty_id, completed_at),
@@ -575,6 +681,13 @@ impl BountyContract {
         bounty.status = BountyStatus::Cancelled;
 
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
+
+        // #1714: refund the linked escrow atomically, so a cancelled bounty
+        // never leaves funds locked in an Active escrow.
+        if bounty.escrow_id != 0 {
+            let escrow_client = EscrowContractClient::new(&env, &Self::get_escrow_contract(&env)?);
+            escrow_client.refund_for_bounty(&env.current_contract_address(), &bounty_id);
+        }
 
         env.events().publish(
             (symbol_short!("bounty"), symbol_short!("cancelled")),
@@ -647,9 +760,20 @@ impl BountyContract {
         applications
     }
 
+    /// Link an escrow the creator deposited directly (with `bounty_id`) to the
+    /// bounty. #1714: only while the bounty is Open and unlinked; the escrow
+    /// contract verifies the escrow is Active, belongs to this bounty and was
+    /// paid by the creator, and binds it so it can only be released/refunded
+    /// through this contract.
     pub fn link_escrow(env: Env, bounty_id: u64, escrow_id: u64) -> Result<bool, BountyError> {
         let mut bounty = load_bounty(&env, bounty_id)?;
         bounty.creator.require_auth();
+        ensure(bounty.status == BountyStatus::Open, BountyError::InvalidStatus)?;
+        ensure(bounty.escrow_id == 0, BountyError::EscrowAlreadyLinked)?;
+
+        let escrow_client = EscrowContractClient::new(&env, &Self::get_escrow_contract(&env)?);
+        escrow_client.bind_bounty(&env.current_contract_address(), &bounty_id, &escrow_id, &bounty.creator);
+
         bounty.escrow_id = escrow_id;
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
 
@@ -667,13 +791,22 @@ impl BountyContract {
         ensure(env.ledger().timestamp() > bounty.deadline, BountyError::DeadlineNotPassed)?;
         ensure(bounty.status == BountyStatus::Open, BountyError::AlreadyProcessed)?;
 
+        // #1714: only the registered escrow contract may be driven, otherwise
+        // a caller could pass a dummy contract, cancel the bounty and leave
+        // the real escrow Active.
+        if let Ok(registered) = Self::get_escrow_contract(&env) {
+            ensure(registered == escrow_contract, BountyError::EscrowContractMismatch)?;
+        }
+
         // Cancel bounty
         bounty.status = BountyStatus::Cancelled;
         env.storage().persistent().set(&bounty_key(&env, bounty_id), &bounty);
 
-        // Trigger escrow refund
-        let escrow_client = EscrowContractClient::new(&env, &escrow_contract);
-        escrow_client.refund_expired_bounty(&bounty_id, &env.current_contract_address());
+        // Trigger escrow refund in the same transaction (only when linked).
+        if bounty.escrow_id != 0 {
+            let escrow_client = EscrowContractClient::new(&env, &escrow_contract);
+            escrow_client.refund_for_bounty(&env.current_contract_address(), &bounty_id);
+        }
 
         // Emit events
         env.events().publish(
@@ -682,6 +815,19 @@ impl BountyContract {
         );
 
         Ok(true)
+    }
+
+    /// #1714: invariant check — true when the bounty and its linked escrow
+    /// are in a valid joint state (see `joint_state_valid`).
+    pub fn check_joint_state(env: Env, bounty_id: u64) -> Result<bool, BountyError> {
+        let bounty = load_bounty(&env, bounty_id)?;
+        let escrow = if bounty.escrow_id == 0 {
+            None
+        } else {
+            let escrow_client = EscrowContractClient::new(&env, &Self::get_escrow_contract(&env)?);
+            Some(escrow_client.get_escrow_status(&bounty.escrow_id))
+        };
+        Ok(joint_state_valid(bounty.status, escrow))
     }
 
     /// Estimate the total fee for creating a bounty with the given budget.
@@ -707,7 +853,7 @@ impl BountyContract {
         let stored_admin: Address = env
             .storage()
             .persistent()
-            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .get::<Symbol, Address>(&Symbol::new(&env, ADMIN_KEY))
             .expect("Contract admin not set");
         stellar_upgradeable::propose_upgrade(&env, &admin, &stored_admin, new_wasm_hash)
     }
@@ -718,7 +864,7 @@ impl BountyContract {
         let stored_admin: Address = env
             .storage()
             .persistent()
-            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .get::<Symbol, Address>(&Symbol::new(&env, ADMIN_KEY))
             .expect("Contract admin not set");
         stellar_upgradeable::execute_upgrade(&env, &admin, &stored_admin);
     }
@@ -728,7 +874,7 @@ impl BountyContract {
         let stored_admin: Address = env
             .storage()
             .persistent()
-            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .get::<Symbol, Address>(&Symbol::new(&env, ADMIN_KEY))
             .expect("Contract admin not set");
         stellar_upgradeable::cancel_upgrade(&env, &admin, &stored_admin);
     }
@@ -743,7 +889,7 @@ impl BountyContract {
         let stored_admin: Address = env
             .storage()
             .persistent()
-            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .get::<Symbol, Address>(&Symbol::new(&env, ADMIN_KEY))
             .expect("Contract admin not set");
         stellar_upgradeable::propose_admin(&env, &admin, &stored_admin, &new_admin);
     }
@@ -754,10 +900,10 @@ impl BountyContract {
         let stored_admin: Address = env
             .storage()
             .persistent()
-            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .get::<Symbol, Address>(&Symbol::new(&env, ADMIN_KEY))
             .expect("Contract admin not set");
         let accepted = stellar_upgradeable::accept_admin(&env, &new_admin, &stored_admin);
-        env.storage().persistent().set(&Symbol::new(&env, "bounty_admin"), &accepted);
+        env.storage().persistent().set(&Symbol::new(&env, ADMIN_KEY), &accepted);
     }
 
     /// Withdraw a pending admin nomination. Admin-only. Emits `(admin, cancelled)`.
@@ -765,7 +911,7 @@ impl BountyContract {
         let stored_admin: Address = env
             .storage()
             .persistent()
-            .get::<Symbol, Address>(&Symbol::new(&env, "bounty_admin"))
+            .get::<Symbol, Address>(&Symbol::new(&env, ADMIN_KEY))
             .expect("Contract admin not set");
         stellar_upgradeable::cancel_admin_transfer(&env, &admin, &stored_admin);
     }
@@ -775,19 +921,12 @@ impl BountyContract {
         stellar_upgradeable::pending_admin(&env)
     }
 
-    /// Set the bounty contract admin (governance multisig). Can only be called once.
-    pub fn set_admin(env: Env, admin: Address) -> Result<(), BountyError> {
-        admin.require_auth();
-        let stored_admin_key = Symbol::new(&env, "bounty_admin");
-        ensure(
-            env.storage()
-                .persistent()
-                .get::<Symbol, Address>(&stored_admin_key)
-                .is_none(),
-            BountyError::AlreadyInitialized,
-        )?;
-        env.storage().persistent().set(&stored_admin_key, &admin);
-        Ok(())
+    /// The current contract admin.
+    pub fn get_admin(env: Env) -> Result<Address, BountyError> {
+        env.storage()
+            .persistent()
+            .get::<Symbol, Address>(&Symbol::new(&env, ADMIN_KEY))
+            .ok_or(BountyError::AdminNotSet)
     }
 }
 
@@ -801,7 +940,7 @@ mod tests {
     fn test_create_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (Address::generate(&env),)));
 
         let creator = Address::generate(&env);
         let title = String::from_str(&env, "Test Bounty");
@@ -826,7 +965,7 @@ mod tests {
     fn test_apply_for_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (Address::generate(&env),)));
 
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
@@ -856,16 +995,15 @@ mod tests {
     #[test]
     fn test_multisig_complete_bounty() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
-
         let admin = Address::generate(&env);
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
+
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
         let signer1 = Address::generate(&env);
         let signer2 = Address::generate(&env);
 
-        contract.set_admin(&admin);
 
         // Configure 2-of-2 multi-sig with threshold of 1000
         let mut signers = soroban_sdk::Vec::new(&env);
@@ -914,17 +1052,16 @@ mod tests {
     #[test]
     fn test_multisig_accepts_non_prefix_subset() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
-
         let admin = Address::generate(&env);
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
+
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
         let signer1 = Address::generate(&env);
         let signer2 = Address::generate(&env);
         let signer3 = Address::generate(&env);
 
-        contract.initialize(&admin);
         let mut signers = soroban_sdk::Vec::new(&env);
         signers.push_back(signer1.clone());
         signers.push_back(signer2.clone());
@@ -961,16 +1098,15 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #17)")]
     fn test_multisig_rejects_duplicate_approver() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
-
         let admin = Address::generate(&env);
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
+
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
         let signer1 = Address::generate(&env);
         let signer2 = Address::generate(&env);
 
-        contract.initialize(&admin);
         let mut signers = soroban_sdk::Vec::new(&env);
         signers.push_back(signer1.clone());
         signers.push_back(signer2.clone());
@@ -1005,16 +1141,15 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #16)")]
     fn test_multisig_rejects_outsider_approver() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
-
         let admin = Address::generate(&env);
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
+
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
         let signer1 = Address::generate(&env);
         let signer2 = Address::generate(&env);
 
-        contract.initialize(&admin);
         let mut signers = soroban_sdk::Vec::new(&env);
         signers.push_back(signer1.clone());
         signers.push_back(signer2.clone());
@@ -1049,16 +1184,15 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #5)")]
     fn test_multisig_rejects_too_few_approvers() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
-
         let admin = Address::generate(&env);
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
+
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
         let signer1 = Address::generate(&env);
         let signer2 = Address::generate(&env);
 
-        contract.initialize(&admin);
         let mut signers = soroban_sdk::Vec::new(&env);
         signers.push_back(signer1.clone());
         signers.push_back(signer2.clone());
@@ -1090,7 +1224,7 @@ mod tests {
     fn test_low_value_bounty_no_multisig_needed() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (Address::generate(&env),)));
 
         let creator = Address::generate(&env);
         let freelancer = Address::generate(&env);
@@ -1123,7 +1257,7 @@ mod tests {
     fn test_create_and_fund_bounty() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (Address::generate(&env),)));
 
         let creator = Address::generate(&env);
         let _token = Address::generate(&env);
@@ -1146,12 +1280,11 @@ mod tests {
     #[test]
     fn test_set_escrow_contract_as_admin() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
-
         let admin = Address::generate(&env);
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
+
         let escrow = Address::generate(&env);
-        contract.set_admin(&admin);
 
         assert!(contract.set_escrow_contract(&admin, &escrow));
     }
@@ -1160,28 +1293,162 @@ mod tests {
     #[should_panic(expected = "Error(Contract, #8)")]
     fn test_set_escrow_contract_rejects_non_admin() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
-
         let admin = Address::generate(&env);
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
+
         let attacker = Address::generate(&env);
         let escrow = Address::generate(&env);
-        contract.set_admin(&admin);
 
         // Attacker authenticates as themselves, but is not the stored admin.
         contract.set_escrow_contract(&attacker, &escrow);
     }
 
     #[test]
-    fn test_set_admin_requires_auth() {
-        use stellar_contract_test_utils::{assert_requires_auth, new_address, unauthorized_env};
-
-        let env = unauthorized_env();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
-        let admin = new_address(&env);
-
-        assert_requires_auth(|| {
-            contract.set_admin(&admin);
+    fn test_constructor_sets_single_admin_key() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let id = env.register(BountyContract, (admin.clone(),));
+        let contract = BountyContractClient::new(&env, &id);
+        assert_eq!(contract.get_admin(), admin);
+        env.as_contract(&id, || {
+            assert!(!env.storage().persistent().has(&Symbol::new(&env, LEGACY_ADMIN_KEY)));
         });
     }
+
+    #[test]
+    #[should_panic]
+    fn test_stranger_cannot_take_admin_after_deploy() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin,)));
+        // Regression for #1708: no first-caller-wins initializer remains.
+        contract.propose_admin(&attacker, &attacker);
+    }
+
+    #[test]
+    fn test_admin_transfer_is_two_step() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let next = Address::generate(&env);
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
+        contract.propose_admin(&admin, &next);
+        assert_eq!(contract.get_admin(), admin);
+        contract.accept_admin(&next);
+        assert_eq!(contract.get_admin(), next);
+    }
+
+    #[test]
+    fn test_migrate_admin_key_consolidates_legacy_key() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let id = env.register(BountyContract, (admin.clone(),));
+        let contract = BountyContractClient::new(&env, &id);
+        // Simulate a pre-#1708 deployment: admin only under the legacy key.
+        env.as_contract(&id, || {
+            env.storage().persistent().remove(&Symbol::new(&env, ADMIN_KEY));
+            env.storage().persistent().set(&Symbol::new(&env, LEGACY_ADMIN_KEY), &admin);
+        });
+        assert!(contract.migrate_admin_key());
+        assert_eq!(contract.get_admin(), admin);
+        env.as_contract(&id, || {
+            assert!(!env.storage().persistent().has(&Symbol::new(&env, LEGACY_ADMIN_KEY)));
+        });
+        // Second run is a no-op.
+        assert!(!contract.migrate_admin_key());
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
+    fn test_migrate_admin_key_rejects_conflicting_keys() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let other = Address::generate(&env);
+        let id = env.register(BountyContract, (admin,));
+        let contract = BountyContractClient::new(&env, &id);
+        env.as_contract(&id, || {
+            env.storage().persistent().set(&Symbol::new(&env, LEGACY_ADMIN_KEY), &other);
+        });
+        contract.migrate_admin_key();
+    }
+
+    // ── #1714: joint state table ────────────────────────────────────────────
+
+    #[test]
+    fn joint_state_table() {
+        use BountyStatus as B;
+        let e = |s| Some(s);
+        for b in [B::Open, B::InProgress, B::PendingCompletion] {
+            assert!(joint_state_valid(b, None));
+            assert!(joint_state_valid(b, e(EscrowStatus::Active)));
+            assert!(!joint_state_valid(b, e(EscrowStatus::Released)));
+            assert!(!joint_state_valid(b, e(EscrowStatus::Refunded)));
+        }
+        assert!(joint_state_valid(B::Completed, e(EscrowStatus::Released)));
+        assert!(!joint_state_valid(B::Completed, e(EscrowStatus::Active)));
+        assert!(joint_state_valid(B::Cancelled, e(EscrowStatus::Refunded)));
+        assert!(!joint_state_valid(B::Cancelled, e(EscrowStatus::Active)));
+        assert!(!joint_state_valid(B::Disputed, None));
+        assert!(joint_state_valid(B::Disputed, e(EscrowStatus::Disputed)));
+    }
+
+    #[test]
+    fn link_escrow_requires_escrow_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let creator = Address::generate(&env);
+        let id = contract.create_bounty(
+            &creator,
+            &String::from_str(&env, "t"),
+            &String::from_str(&env, "d"),
+            &500i128,
+            &100u64,
+        );
+        assert_eq!(contract.try_link_escrow(&id, &1u64), Err(Ok(BountyError::EscrowContractNotSet)));
+        assert_eq!(contract.get_bounty(&id).escrow_id, 0);
+    }
+
+    #[test]
+    fn expire_rejects_unregistered_escrow_contract() {
+        use soroban_sdk::testutils::Ledger;
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let admin = Address::generate(&env);
+        contract.set_admin(&admin);
+        let registered = Address::generate(&env);
+        contract.set_escrow_contract(&admin, &registered);
+        let creator = Address::generate(&env);
+        let id = contract.create_bounty(
+            &creator,
+            &String::from_str(&env, "t"),
+            &String::from_str(&env, "d"),
+            &500i128,
+            &100u64,
+        );
+        env.ledger().set_timestamp(200);
+        let dummy = Address::generate(&env);
+        assert_eq!(
+            contract.try_check_and_expire_bounty(&id, &dummy),
+            Err(Ok(BountyError::EscrowContractMismatch))
+        );
+        assert_eq!(contract.get_bounty(&id).status, BountyStatus::Open);
+    }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    BountyContract,
+    BountyContractClient,
+    |env, id, admin| {
+        BountyContractClient::new(&env, &id).initialize(&admin);
+    }
+);

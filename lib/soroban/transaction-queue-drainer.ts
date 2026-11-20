@@ -13,6 +13,7 @@
  */
 
 import { prisma } from '@/lib/prisma';
+import { getRedisClient } from '@/lib/storage/redis';
 import { stellarClient } from '@/server/stellar/client';
 import { contractService } from '@/server/stellar/contract';
 import type { Signer } from '@/server/stellar/types';
@@ -265,6 +266,15 @@ let drainerTimer: ReturnType<typeof setInterval> | null = null;
 let startedAt: number | null = null;
 
 async function drainerTick(): Promise<void> {
+  const redis = getRedisClient();
+  const lockKey = 'soroban:drainer:lock';
+  let lockAcquired = false;
+  if (redis) {
+    const res = await redis.set(lockKey, 'locked', 'EX', 15, 'NX').catch(() => null);
+    if (!res) return; // Another instance is actively draining (exactly-once across instances)
+    lockAcquired = true;
+  }
+
   try {
     // Find distinct accounts with pending work
     const pending = await prisma.transactionQueue.groupBy({
@@ -288,6 +298,10 @@ async function drainerTick(): Promise<void> {
     }
   } catch (err) {
     console.error('[drainer] tick error:', err);
+  } finally {
+    if (redis && lockAcquired) {
+      await redis.del(lockKey).catch(() => {});
+    }
   }
 }
 
@@ -347,5 +361,7 @@ export async function enqueueTransaction(opts: {
       maxAttempts: opts.maxAttempts ?? MAX_ATTEMPTS,
     },
   });
+  // Fire-and-forget tick for serverless environments where intervals do not run
+  drainerTick().catch(() => {});
   return entry.id;
 }

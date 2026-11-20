@@ -274,6 +274,10 @@ model Bounty {
   budget      Int
   deadline    DateTime
   status      BountyStatus @default(OPEN)
+  /// Optimistic-concurrency version (#1810). Every status transition goes
+  /// through server/services/bounty.service.ts `transitionBounty`, which
+  /// only writes when this still matches and increments it.
+  version     Int      @default(0)
   category    String?
   tags        String[]
   /// Skill level required: beginner | intermediate | advanced | expert
@@ -1097,4 +1101,177 @@ model Message {
   @@index([threadId, createdAt(sort: Desc)])
   @@index([senderId])
   @@map("messages")
+}
+  @@index([threadId, createdAt(sort: Desc)])
+  @@index([senderId])
+  @@map("messages")
+}
+
+// ── SEP-24 Transaction Tracking — Issue #1548 ──────────────────────────────
+
+/// SEP-24 deposit/withdrawal transaction with full state persistence.
+/// Every state transition emits a status entry for timeline display.
+model Sep24Transaction {
+  id                   String        @id @default(cuid())
+  userId               String
+  user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  /// Anchor's transaction ID (from /transactions/{deposit,withdraw}/interactive response)
+  anchorId             String        @unique
+  /// Anchor's TRANSFER_SERVER URL
+  transferServer       String
+  /// deposit or withdrawal
+  kind                 Sep24Kind
+  /// Asset code (e.g. USDC, XLM)
+  assetCode            String
+  
+  /// Amounts from anchor's /transaction response
+  amountIn             String?
+  amountOut            String?
+  amountFee            String?
+  
+  /// Current transaction status (from anchor)
+  status               Sep24Status   @default(pending_user_transfer_start)
+  /// Human-readable message from anchor
+  message              String?       @db.Text
+  /// URL for more info from anchor
+  moreInfoUrl          String?       @db.Text
+  
+  /// Stellar chain references (when available)
+  stellarTransactionId String?
+  externalTransactionId String?
+  
+  /// Timing
+  startedAt            DateTime      @default(now())
+  completedAt          DateTime?
+  /// Last time we polled the anchor
+  lastPolledAt         DateTime?
+  
+  /// Polling metadata
+  pollCount            Int           @default(0)
+  /// When to mark as stale (startedAt + 72h)
+  staleAt              DateTime?
+  
+  /// Full status history for timeline display
+  statusHistory        Sep24StatusEntry[]
+  
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  
+  @@index([userId, createdAt])
+  @@index([anchorId])
+  @@index([status])
+  @@index([status, lastPolledAt])
+}
+
+/// Status history entry for timeline display.
+/// Created on every state change via the service layer.
+model Sep24StatusEntry {
+  id           String        @id @default(cuid())
+  transaction  Sep24Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  transactionId String       @map("transaction_id")
+  
+  status       Sep24Status
+  message      String?       @db.Text
+  /// JSON metadata for debugging (e.g. raw anchor response)
+  metadata     Json?
+  
+  createdAt    DateTime      @default(now())
+  
+  @@index([transactionId, createdAt])
+}
+
+enum Sep24Kind {
+  deposit
+  withdrawal
+}
+
+enum Sep24Status {
+  incomplete
+  pending_user_transfer_start
+  pending_user_transfer_complete
+  pending_external
+  pending_anchor
+  pending_stellar
+  pending_trust
+  pending_user
+  completed
+  refunded
+  expired
+  no_market
+  too_small
+  too_large
+  error
+}
+  @@index([threadId, createdAt(sort: Desc)])
+  @@index([senderId])
+  @@map("messages")
+}
+
+// ── Cross-Chain Swap Sessions — Issue #1725 ────────────────────────────────
+
+/// Cross-chain swap session with crash recovery and refund handling.
+/// Tracks HTLC state, multi-leg routing, and refund progress.
+model SwapSession {
+  id               String       @id @default(cuid())
+  userId           String
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Swap parameters
+  fromChain        String       // ChainId enum value
+  toChain          String       // ChainId enum value
+  fromAmount       String
+  toAmount         String
+  minOut           String       // Minimum output enforced at execution
+  quoteExpiry      DateTime     // Quote expires after this
+  
+  // Route info
+  routeId          String
+  hops             Json         // Route hops with fees and protocols
+  
+  // HTLC state
+  htlcHash         String?      // SHA-256 hash for HTLC
+  htlcSecret       String?      // Preimage (revealed on success)
+  htlcLocktime     Int?         // Locktime in ledger seconds
+  
+  // State machine
+  status           SwapStatus   @default(initiated)
+  phase            SwapPhase    @default(initiated)
+  
+  // Refund tracking
+  refundTxId       String?      // Refund transaction ID
+  refundedAt       DateTime?
+  
+  // Timing
+  startedAt        DateTime     @default(now())
+  completedAt      DateTime?
+  
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  
+  @@index([userId, status])
+  @@index([status, phase])
+  @@index([quoteExpiry, status])  // Expired cleanup
+  @@index([htlcHash])
+}
+
+enum SwapStatus {
+  initiated
+  source_lock
+  destination_claim
+  completed
+  refund_requested
+  refunded
+  error
+  failed
+}
+
+enum SwapPhase {
+  initiated
+  source_lock
+  destination_claim
+  completed
+  refund_requested
+  refunded
+  error
 }

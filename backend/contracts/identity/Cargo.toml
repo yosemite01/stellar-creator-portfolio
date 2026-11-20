@@ -17,3 +17,4 @@ soroban-sdk.workspace = true
 soroban-sdk = { workspace = true, features = ["testutils"] }
 stellar-contract-test-utils = { path = "../test-utils" }
 ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }

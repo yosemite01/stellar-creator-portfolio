@@ -1,7 +1,7 @@
-//! # Insurance Pool Contract (#831)
+//! # Insurance Pool Contract (#831, #1711)
 //!
-//! Accumulates 0.1 % of every platform fee into a token-denominated pool that
-//! can pay out verified claims approved by governance.
+//! Accumulates 0.1 % of every platform fee plus policy premiums into a
+//! token-denominated pool that pays out claims for **verified** losses.
 //!
 //! ## Design
 //!
@@ -9,29 +9,45 @@
 //! escrow::release_funds()
 //!   └─ calls insurance::contribute_to_pool(fee * 0.001, token)
 //!
-//! user              → insurance::submit_claim(amount, evidence)
-//! governance vote   → insurance::approve_claim(claim_id)    (3-day window)
-//! governance/admin  → insurance::execute_payout(claim_id)
+//! holder            → insurance::buy_policy(escrow_id, token, coverage)   (pays premium)
+//! escrow dispute    → escrow::resolve_dispute / resolve_expired_dispute   (records outcome)
+//! holder            → insurance::submit_claim(policy_id, amount, evidence)
+//!                       └─ cross-contract escrow::get_dispute_outcome(escrow_id)
+//! N-of-M assessors  → insurance::approve_claim(claim_id)   (after 3-day window)
+//!                       └─ on threshold: reserve min(amount, free balance)
+//! admin / claimant  → insurance::execute_payout(claim_id)  (pays the reserved amount)
 //! ```
 //!
 //! ## Storage layout
 //!
-//! | Key                       | Value      | TTL      |
-//! |---------------------------|------------|----------|
-//! | `PoolBalance(token)`      | `i128`     | persistent |
-//! | `Claim(id)`               | `Claim`    | persistent |
-//! | `ClaimCounter`            | `u64`      | persistent |
-//! | `Admin`                   | `Address`  | persistent |
+//! | Key                       | Value          | TTL        |
+//! |---------------------------|----------------|------------|
+//! | `PoolBalance(token)`      | `i128`         | persistent |
+//! | `Reserved(token)`         | `i128`         | persistent |
+//! | `Claim(id)`               | `Claim`        | persistent |
+//! | `ClaimCounter`            | `u64`          | persistent |
+//! | `Policy(id)`              | `Policy`       | persistent |
+//! | `PolicyCounter`           | `u64`          | persistent |
+//! | `ClaimApprovals(id)`      | `Vec<Address>` | persistent |
+//! | `Assessors` / `Threshold` | `Vec<Address>` / `u32` | persistent |
+//! | `EscrowContract`          | `Address`      | persistent |
+//! | `PremiumBps`              | `u32`          | persistent |
+//! | `Admin`                   | `Address`      | persistent |
 //!
 //! ## Invariants
 //!
-//! * Pool balance **never** goes negative: `execute_payout` panics if the
-//!   requested amount exceeds the pool.
-//! * Claims accumulate in the `Pending` state until governance calls
-//!   `approve_claim`.  Only approved, un-executed claims can be paid out.
-//! * The 0.1 % insurance levy is computed by the caller (escrow contract)
-//!   before calling `contribute_to_pool`, keeping this contract stateless
-//!   with respect to fee logic.
+//! * **Solvency**: `Reserved(token) <= PoolBalance(token)` at all times.
+//!   Approval reserves funds; it never reserves more than the free balance
+//!   (`pool - reserved`). If the free balance is smaller than the claim, the
+//!   claim is approved for the free balance only (pro-rated); if it is zero
+//!   approval fails with `InsufficientPoolBalance`.
+//! * **Verified losses only**: a claim must reference a policy bought before
+//!   the escrow was disputed, and the escrow contract must report a resolved
+//!   dispute in which the holder lost at least the claimed amount.
+//! * **Per-policy cap**: `claim.amount <= policy.coverage`, one claim per policy.
+//! * **Multi-assessor**: `Threshold` distinct assessors must approve. With no
+//!   assessors configured the admin is the sole assessor (threshold 1).
+//! * Every state change emits an event.
 
 #![no_std]
 // `Events::publish` is deprecated in soroban-sdk 23 in favour of `#[contractevent]`.
@@ -41,16 +57,25 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    Address, Env, String,
+    vec, Address, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
-// ── Basis-point constant ─────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────────────
 
 /// Insurance levy: 0.1 % = 10 bps of the platform fee collected per escrow.
 pub const INSURANCE_BPS: i128 = 10;
 
 /// Governance voting window for claims: 3 days in seconds.
 pub const CLAIM_VOTING_PERIOD_SECS: u64 = 3 * 24 * 60 * 60;
+
+/// Default policy premium: 2 % of coverage (200 bps).
+pub const DEFAULT_PREMIUM_BPS: u32 = 200;
+
+/// Upper bound on the configurable premium (50 %).
+pub const MAX_PREMIUM_BPS: u32 = 5_000;
+
+/// Upper bound on assessor-set size, keeps approval checks cheap.
+pub const MAX_ASSESSORS: u32 = 20;
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -64,6 +89,20 @@ pub enum DataKey {
     ClaimCounter,
     /// Contract administrator (set by governance multisig).
     Admin,
+    /// Amount approved but not yet paid out, per token (#1711).
+    Reserved(Address),
+    /// Policy by ID (#1711).
+    Policy(u64),
+    PolicyCounter,
+    /// Assessors who have approved a claim so far (#1711).
+    ClaimApprovals(u64),
+    /// Assessor set and approval threshold (#1711).
+    Assessors,
+    Threshold,
+    /// Escrow contract queried for dispute outcomes (#1711).
+    EscrowContract,
+    /// Premium rate charged on policy coverage, in bps (#1711).
+    PremiumBps,
 }
 
 // ── Error codes ──────────────────────────────────────────────────────────────
@@ -82,6 +121,22 @@ pub enum InsuranceError {
     InvalidAmount = 8,
     VotingPeriodNotEnded = 9,
     ClaimAlreadyApproved = 10,
+    // ── #1711 ──
+    PolicyNotFound = 11,
+    PolicyAlreadyClaimed = 12,
+    ExceedsCoverage = 13,
+    /// The escrow has no resolved dispute (claim not linked to a verified loss).
+    NoVerifiedDispute = 14,
+    /// Claimant was not a party to the escrow, or token mismatch.
+    NotEscrowParty = 15,
+    /// The claimed amount exceeds what the holder lost in the dispute.
+    ExceedsLoss = 16,
+    /// Policy was bought after the dispute was raised.
+    PolicyAfterDispute = 17,
+    EscrowNotConfigured = 18,
+    AlreadyVoted = 19,
+    InvalidAssessorConfig = 20,
+    InvalidPremium = 21,
 }
 
 // ── Claim lifecycle ───────────────────────────────────────────────────────────
@@ -89,9 +144,9 @@ pub enum InsuranceError {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClaimStatus {
-    /// Waiting for governance vote.
+    /// Waiting for assessor approvals.
     Pending,
-    /// Governance approved — ready for `execute_payout`.
+    /// Threshold reached, funds reserved — ready for `execute_payout`.
     Approved,
     /// Fully paid out.
     Executed,
@@ -99,23 +154,63 @@ pub enum ClaimStatus {
     Rejected,
 }
 
-/// A single insurance claim submitted by a user.
+/// Coverage bought by an escrow party against losing a dispute (#1711).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Policy {
+    pub id: u64,
+    pub holder: Address,
+    pub escrow_id: u64,
+    pub token: Address,
+    /// Maximum payout for this policy.
+    pub coverage: i128,
+    /// Premium paid into the pool at purchase.
+    pub premium: i128,
+    pub purchased_at: u64,
+    /// Set while a claim is open or paid; cleared if the claim is rejected.
+    pub claimed: bool,
+}
+
+/// Mirror of the escrow contract's `DisputeOutcome` (field names must match:
+/// Soroban structs are encoded as maps keyed by field name).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisputeOutcome {
+    pub escrow_id: u64,
+    pub payer: Address,
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub payer_amount: i128,
+    pub payee_amount: i128,
+    pub disputed_at: u64,
+    pub resolved_at: u64,
+}
+
+/// A single insurance claim submitted by a policy holder.
 #[contracttype]
 pub struct Claim {
     pub id: u64,
     pub claimant: Address,
     /// Token the payout should be denominated in.
     pub token: Address,
-    /// Amount requested (must not exceed pool balance at execution time).
+    /// Amount requested (capped by coverage and verified loss).
     pub amount: i128,
     /// Arbitrary evidence string supplied by the claimant.
     pub evidence: String,
     pub status: ClaimStatus,
     /// Ledger timestamp when the claim was submitted.
     pub submitted_at: u64,
-    /// Earliest ledger timestamp at which governance may approve/reject.
+    /// Earliest ledger timestamp at which assessors may approve.
     /// Set to `submitted_at + CLAIM_VOTING_PERIOD_SECS`.
     pub voting_deadline: u64,
+    /// Policy this claim is made against (#1711).
+    pub policy_id: u64,
+    /// Escrow whose dispute outcome verifies the loss (#1711).
+    pub escrow_id: u64,
+    /// Amount reserved on approval; may be below `amount` if the pool was
+    /// short (pro-rated). Zero until approved (#1711).
+    pub approved_amount: i128,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -127,22 +222,10 @@ pub struct InsuranceContract;
 impl InsuranceContract {
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    /// Initialize the insurance pool contract.
+    /// Initialize the insurance pool contract. Must be called exactly once.
     ///
-    /// Stores the governance multisig address as the contract admin and
-    /// sets the claim counter to zero.  Must be called exactly once before
-    /// any other public function.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin` – Address of the governance multisig that will control
-    ///   claim approvals, rejections, and payouts.
-    ///
-    /// # Panics
-    ///
-    /// * Panics with `InsuranceError::AlreadyInitialized` if the contract
-    ///   has already been initialized.
-    /// * Panics if `admin` does not authorize the transaction.
+    /// `admin` is the governance multisig. It configures the escrow link,
+    /// assessors and premium, and rejects claims.
     pub fn initialize(env: Env, admin: Address) {
         admin.require_auth();
         if env.storage().persistent().has(&DataKey::Admin) {
@@ -154,6 +237,69 @@ impl InsuranceContract {
             .set(&DataKey::ClaimCounter, &0u64);
     }
 
+    // ── Configuration (#1711) ────────────────────────────────────────────────
+
+    /// Set the escrow contract used to verify dispute outcomes. Admin-only.
+    /// Emits `(ins, escrow)`.
+    pub fn set_escrow_contract(env: Env, admin: Address, escrow: Address) {
+        admin.require_auth();
+        Self::require_admin(&env, &admin);
+        env.storage().persistent().set(&DataKey::EscrowContract, &escrow);
+        env.events()
+            .publish((symbol_short!("ins"), symbol_short!("escrow")), escrow);
+    }
+
+    /// Replace the assessor set and approval threshold. Admin-only.
+    /// `threshold` must be in `1..=assessors.len()`; assessors must be unique.
+    /// Emits `(ins, assessrs)`.
+    pub fn set_assessors(env: Env, admin: Address, assessors: Vec<Address>, threshold: u32) {
+        admin.require_auth();
+        Self::require_admin(&env, &admin);
+        let n = assessors.len();
+        if n == 0 || n > MAX_ASSESSORS || threshold == 0 || threshold > n {
+            panic_with_error!(&env, InsuranceError::InvalidAssessorConfig);
+        }
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if assessors.get_unchecked(i) == assessors.get_unchecked(j) {
+                    panic_with_error!(&env, InsuranceError::InvalidAssessorConfig);
+                }
+            }
+        }
+        env.storage().persistent().set(&DataKey::Assessors, &assessors);
+        env.storage().persistent().set(&DataKey::Threshold, &threshold);
+        env.events().publish(
+            (symbol_short!("ins"), symbol_short!("assessrs")),
+            (n, threshold),
+        );
+    }
+
+    /// Set the premium rate charged on coverage (bps). Admin-only.
+    /// Emits `(ins, premium)`.
+    pub fn set_premium_bps(env: Env, admin: Address, premium_bps: u32) {
+        admin.require_auth();
+        Self::require_admin(&env, &admin);
+        if premium_bps == 0 || premium_bps > MAX_PREMIUM_BPS {
+            panic_with_error!(&env, InsuranceError::InvalidPremium);
+        }
+        env.storage().persistent().set(&DataKey::PremiumBps, &premium_bps);
+        env.events()
+            .publish((symbol_short!("ins"), symbol_short!("premium")), premium_bps);
+    }
+
+    pub fn get_premium_bps(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PremiumBps)
+            .unwrap_or(DEFAULT_PREMIUM_BPS)
+    }
+
+    /// Current assessor set and threshold. Falls back to `([admin], 1)`.
+    pub fn get_assessors(env: Env) -> (Vec<Address>, u32) {
+        Self::require_initialized(&env);
+        Self::assessor_config(&env)
+    }
+
     // ── Pool management ───────────────────────────────────────────────────────
 
     /// Deposit tokens into the insurance pool.
@@ -161,22 +307,6 @@ impl InsuranceContract {
     /// Called by the escrow contract on every fee collection.  The caller
     /// is responsible for computing the levy amount before calling this
     /// function (i.e. `amount = fee * INSURANCE_BPS / 10_000`).
-    ///
-    /// # Arguments
-    ///
-    /// * `from`   – Address transferring the tokens (typically the escrow
-    ///              contract address).  Must authorize the transaction.
-    /// * `amount` – Positive number of token units to deposit.
-    /// * `token`  – Soroban address of the SPL token contract.
-    ///
-    /// # Errors
-    ///
-    /// * `InsuranceError::InvalidAmount` – if `amount <= 0`.
-    /// * `InsuranceError::NotInitialized` – if `initialize` has not been called.
-    ///
-    /// # Panics
-    ///
-    /// * Panics if `from` does not authorize the transaction.
     pub fn contribute_to_pool(env: Env, from: Address, amount: i128, token: Address) {
         from.require_auth();
         Self::require_initialized(&env);
@@ -187,11 +317,7 @@ impl InsuranceContract {
 
         // Pull tokens into this contract.
         token::Client::new(&env, &token).transfer(&from, env.current_contract_address(), &amount);
-
-        let current = Self::get_pool_balance(env.clone(), token.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::PoolBalance(token.clone()), &(current + amount));
+        Self::credit_pool(&env, &token, amount);
 
         env.events().publish(
             (symbol_short!("ins"), symbol_short!("contrib")),
@@ -199,16 +325,7 @@ impl InsuranceContract {
         );
     }
 
-    /// Return the current pool balance for a given token.
-    ///
-    /// # Arguments
-    ///
-    /// * `token` – Soroban address of the token to query.
-    ///
-    /// # Returns
-    ///
-    /// The number of token units currently held in the pool.  Returns `0`
-    /// if no deposits have been made for this token yet.
+    /// Return the current pool balance for a given token (including reserved).
     pub fn get_pool_balance(env: Env, token: Address) -> i128 {
         env.storage()
             .persistent()
@@ -216,40 +333,86 @@ impl InsuranceContract {
             .unwrap_or(0)
     }
 
+    /// Amount approved but not yet paid out for `token` (#1711).
+    pub fn get_reserved(env: Env, token: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get::<DataKey, i128>(&DataKey::Reserved(token))
+            .unwrap_or(0)
+    }
+
+    /// Pool balance not committed to approved claims (#1711).
+    pub fn get_available_balance(env: Env, token: Address) -> i128 {
+        Self::get_pool_balance(env.clone(), token.clone()) - Self::get_reserved(env, token)
+    }
+
+    // ── Policies (#1711) ──────────────────────────────────────────────────────
+
+    /// Buy coverage for an escrow. The premium (`coverage * premium_bps /
+    /// 10_000`, at least 1 unit) is transferred into the pool. Party and
+    /// token are verified at claim time against the escrow's dispute outcome,
+    /// and only policies bought *before* the dispute was raised can claim.
+    /// Emits `(ins, policy)`.
+    pub fn buy_policy(env: Env, holder: Address, escrow_id: u64, token: Address, coverage: i128) -> u64 {
+        holder.require_auth();
+        Self::require_initialized(&env);
+        if coverage <= 0 {
+            panic_with_error!(&env, InsuranceError::InvalidAmount);
+        }
+        let bps = Self::get_premium_bps(env.clone()) as i128;
+        let mut premium = coverage
+            .checked_mul(bps)
+            .unwrap_or_else(|| panic_with_error!(&env, InsuranceError::InvalidAmount))
+            / 10_000;
+        if premium == 0 {
+            premium = 1;
+        }
+        token::Client::new(&env, &token).transfer(&holder, env.current_contract_address(), &premium);
+        Self::credit_pool(&env, &token, premium);
+
+        let id: u64 = env.storage().persistent().get(&DataKey::PolicyCounter).unwrap_or(0);
+        let policy = Policy {
+            id,
+            holder: holder.clone(),
+            escrow_id,
+            token: token.clone(),
+            coverage,
+            premium,
+            purchased_at: env.ledger().timestamp(),
+            claimed: false,
+        };
+        env.storage().persistent().set(&DataKey::Policy(id), &policy);
+        env.storage().persistent().set(&DataKey::PolicyCounter, &(id + 1));
+        env.events().publish(
+            (symbol_short!("ins"), symbol_short!("policy")),
+            (id, holder, escrow_id, token, coverage, premium),
+        );
+        id
+    }
+
+    pub fn get_policy(env: Env, policy_id: u64) -> Policy {
+        Self::load_policy(&env, policy_id)
+    }
+
     // ── Claims ────────────────────────────────────────────────────────────────
 
-    /// Submit a new insurance claim.
+    /// Submit a claim against a policy.
     ///
-    /// Creates a claim in `Pending` status.  Governance has
-    /// `CLAIM_VOTING_PERIOD_SECS` (3 days) to review and call
-    /// `approve_claim` or `reject_claim` before the voting deadline.
+    /// The escrow contract is queried for the policy's escrow dispute
+    /// outcome. The claim is rejected unless:
+    /// * the dispute is resolved (`NoVerifiedDispute`),
+    /// * the claimant is the policy holder and a party to the escrow, and the
+    ///   token matches (`NotEscrowParty`),
+    /// * the policy predates the dispute (`PolicyAfterDispute`),
+    /// * `amount <= coverage` (`ExceedsCoverage`) and `amount <=` the
+    ///   holder's loss in the outcome (`ExceedsLoss`).
     ///
-    /// # Arguments
-    ///
-    /// * `claimant` – Address of the user submitting the claim.  Must
-    ///                authorize the transaction.
-    /// * `amount`   – Number of token units requested as payout.
-    /// * `token`    – Soroban address of the token for the payout.
-    /// * `evidence` – Arbitrary string describing the claim (e.g. a
-    ///                transaction hash or IPFS CID).
-    ///
-    /// # Returns
-    ///
-    /// The newly assigned claim ID (monotonically increasing `u64`).
-    ///
-    /// # Errors
-    ///
-    /// * `InsuranceError::InvalidAmount` – if `amount <= 0`.
-    /// * `InsuranceError::NotInitialized` – if `initialize` has not been called.
-    ///
-    /// # Panics
-    ///
-    /// * Panics if `claimant` does not authorize the transaction.
+    /// Returns the new claim ID. Emits `(ins, claim)`.
     pub fn submit_claim(
         env: Env,
         claimant: Address,
+        policy_id: u64,
         amount: i128,
-        token: Address,
         evidence: String,
     ) -> u64 {
         claimant.require_auth();
@@ -258,6 +421,38 @@ impl InsuranceContract {
         if amount <= 0 {
             panic_with_error!(&env, InsuranceError::InvalidAmount);
         }
+
+        let mut policy = Self::load_policy(&env, policy_id);
+        if policy.holder != claimant {
+            panic_with_error!(&env, InsuranceError::Unauthorized);
+        }
+        if policy.claimed {
+            panic_with_error!(&env, InsuranceError::PolicyAlreadyClaimed);
+        }
+        if amount > policy.coverage {
+            panic_with_error!(&env, InsuranceError::ExceedsCoverage);
+        }
+
+        let outcome = Self::fetch_dispute_outcome(&env, policy.escrow_id);
+        if outcome.token != policy.token {
+            panic_with_error!(&env, InsuranceError::NotEscrowParty);
+        }
+        let loss = if claimant == outcome.payer {
+            outcome.amount - outcome.payer_amount
+        } else if claimant == outcome.payee {
+            outcome.amount - outcome.payee_amount
+        } else {
+            panic_with_error!(&env, InsuranceError::NotEscrowParty)
+        };
+        if policy.purchased_at >= outcome.disputed_at {
+            panic_with_error!(&env, InsuranceError::PolicyAfterDispute);
+        }
+        if amount > loss {
+            panic_with_error!(&env, InsuranceError::ExceedsLoss);
+        }
+
+        policy.claimed = true;
+        env.storage().persistent().set(&DataKey::Policy(policy_id), &policy);
 
         let id: u64 = env
             .storage()
@@ -269,12 +464,15 @@ impl InsuranceContract {
         let claim = Claim {
             id,
             claimant: claimant.clone(),
-            token: token.clone(),
+            token: policy.token.clone(),
             amount,
             evidence,
             status: ClaimStatus::Pending,
             submitted_at,
             voting_deadline: submitted_at + CLAIM_VOTING_PERIOD_SECS,
+            policy_id,
+            escrow_id: policy.escrow_id,
+            approved_amount: 0,
         };
         env.storage().persistent().set(&DataKey::Claim(id), &claim);
         env.storage()
@@ -283,37 +481,26 @@ impl InsuranceContract {
 
         env.events().publish(
             (symbol_short!("ins"), symbol_short!("claim")),
-            (id, claimant, token, amount),
+            (id, claimant, policy.token, amount, policy_id, policy.escrow_id),
         );
         id
     }
 
-    /// Approve a pending claim.
+    /// Record an assessor's approval of a pending claim.
     ///
-    /// Only the admin (governance multisig) may call this.  The claim's
-    /// voting deadline must have elapsed.
+    /// The voting deadline must have elapsed. Each assessor may vote once.
+    /// When the threshold is reached the claim moves to `Approved` and
+    /// `min(amount, available)` is reserved from the pool (pro-rated if the
+    /// pool is short; `InsufficientPoolBalance` if nothing is free).
     ///
-    /// # Arguments
-    ///
-    /// * `admin`    – Address of the governance multisig.  Must authorize
-    ///                the transaction and match the stored admin.
-    /// * `claim_id` – ID of the claim to approve.
-    ///
-    /// # Errors
-    ///
-    /// * `InsuranceError::Unauthorized`        – if `admin` is not the stored admin.
-    /// * `InsuranceError::ClaimNotFound`       – if no claim exists with `claim_id`.
-    /// * `InsuranceError::ClaimAlreadyApproved` – if the claim is not in `Pending`
-    ///   status (i.e. already approved, rejected, or executed).
-    /// * `InsuranceError::VotingPeriodNotEnded` – if the current ledger timestamp
-    ///   is before `claim.voting_deadline`.
-    ///
-    /// # Panics
-    ///
-    /// * Panics if `admin` does not authorize the transaction.
-    pub fn approve_claim(env: Env, admin: Address, claim_id: u64) {
-        admin.require_auth();
-        Self::require_admin(&env, &admin);
+    /// Emits `(ins, vote)` per approval and `(ins, approved)` on threshold.
+    pub fn approve_claim(env: Env, assessor: Address, claim_id: u64) {
+        assessor.require_auth();
+        Self::require_initialized(&env);
+        let (assessors, threshold) = Self::assessor_config(&env);
+        if !assessors.contains(&assessor) {
+            panic_with_error!(&env, InsuranceError::Unauthorized);
+        }
 
         let mut claim = Self::load_claim(&env, claim_id);
         if env.ledger().timestamp() < claim.voting_deadline {
@@ -322,37 +509,58 @@ impl InsuranceContract {
         if claim.status != ClaimStatus::Pending {
             panic_with_error!(&env, InsuranceError::ClaimAlreadyApproved);
         }
+
+        let key = DataKey::ClaimApprovals(claim_id);
+        let mut approvals: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if approvals.contains(&assessor) {
+            panic_with_error!(&env, InsuranceError::AlreadyVoted);
+        }
+        approvals.push_back(assessor.clone());
+        env.storage().persistent().set(&key, &approvals);
+        env.events().publish(
+            (symbol_short!("ins"), symbol_short!("vote")),
+            (claim_id, assessor, approvals.len(), threshold),
+        );
+
+        if approvals.len() < threshold {
+            return;
+        }
+
+        let available = Self::get_available_balance(env.clone(), claim.token.clone());
+        if available <= 0 {
+            panic_with_error!(&env, InsuranceError::InsufficientPoolBalance);
+        }
+        let reserve = if claim.amount > available { available } else { claim.amount };
+        let reserved = Self::get_reserved(env.clone(), claim.token.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reserved(claim.token.clone()), &(reserved + reserve));
+
         claim.status = ClaimStatus::Approved;
+        claim.approved_amount = reserve;
         env.storage()
             .persistent()
             .set(&DataKey::Claim(claim_id), &claim);
         env.events().publish(
             (symbol_short!("ins"), symbol_short!("approved")),
-            claim_id,
+            (claim_id, claim.amount, reserve),
         );
     }
 
-    /// Reject a pending claim.
-    ///
-    /// Only the admin (governance multisig) may call this.  The claim
-    /// must still be in `Pending` status.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin`    – Address of the governance multisig.  Must authorize
-    ///                the transaction and match the stored admin.
-    /// * `claim_id` – ID of the claim to reject.
-    ///
-    /// # Errors
-    ///
-    /// * `InsuranceError::Unauthorized`         – if `admin` is not the stored admin.
-    /// * `InsuranceError::ClaimNotFound`        – if no claim exists with `claim_id`.
-    /// * `InsuranceError::ClaimAlreadyApproved` – if the claim is not in `Pending`
-    ///   status (i.e. already approved, rejected, or executed).
-    ///
-    /// # Panics
-    ///
-    /// * Panics if `admin` does not authorize the transaction.
+    /// Approvals recorded so far for a claim.
+    pub fn get_claim_approvals(env: Env, claim_id: u64) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ClaimApprovals(claim_id))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Reject a pending claim. Admin-only. Frees the policy for a new claim.
+    /// Emits `(ins, rejected)`.
     pub fn reject_claim(env: Env, admin: Address, claim_id: u64) {
         admin.require_auth();
         Self::require_admin(&env, &admin);
@@ -365,43 +573,31 @@ impl InsuranceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Claim(claim_id), &claim);
+
+        let mut policy = Self::load_policy(&env, claim.policy_id);
+        policy.claimed = false;
+        env.storage().persistent().set(&DataKey::Policy(claim.policy_id), &policy);
+
         env.events().publish(
             (symbol_short!("ins"), symbol_short!("rejected")),
             claim_id,
         );
     }
 
-    /// Execute payout for an approved claim.
+    /// Pay out an approved claim's reserved amount to the claimant.
     ///
-    /// Transfers `claim.amount` token units from the pool to the
-    /// claimant and marks the claim as `Executed`.  Only the admin
-    /// (governance multisig) may call this.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin`    – Address of the governance multisig.  Must authorize
-    ///                the transaction and match the stored admin.
-    /// * `claim_id` – ID of the approved claim to pay out.
-    ///
-    /// # Errors
-    ///
-    /// * `InsuranceError::Unauthorized`           – if `admin` is not the stored admin.
-    /// * `InsuranceError::ClaimNotFound`          – if no claim exists with `claim_id`.
-    /// * `InsuranceError::ClaimNotApproved`       – if the claim status is not
-    ///   `Approved` (e.g. `Pending` or `Rejected`).
-    /// * `InsuranceError::ClaimAlreadyExecuted`   – if the claim has already been
-    ///   paid out.
-    /// * `InsuranceError::InsufficientPoolBalance` – if the pool does not hold
-    ///   enough tokens to cover `claim.amount`.
-    ///
-    /// # Panics
-    ///
-    /// * Panics if `admin` does not authorize the transaction.
-    pub fn execute_payout(env: Env, admin: Address, claim_id: u64) {
-        admin.require_auth();
-        Self::require_admin(&env, &admin);
+    /// `caller` must be the admin or the claimant. The payout is exactly
+    /// `claim.approved_amount`, which was reserved at approval, so the pool
+    /// can never be overdrawn. Emits `(ins, payout)`.
+    pub fn execute_payout(env: Env, caller: Address, claim_id: u64) {
+        caller.require_auth();
+        Self::require_initialized(&env);
 
         let mut claim = Self::load_claim(&env, claim_id);
+        let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+        if caller != admin && caller != claim.claimant {
+            panic_with_error!(&env, InsuranceError::Unauthorized);
+        }
         if claim.status != ClaimStatus::Approved {
             if claim.status == ClaimStatus::Executed {
                 panic_with_error!(&env, InsuranceError::ClaimAlreadyExecuted);
@@ -410,50 +606,41 @@ impl InsuranceContract {
             }
         }
 
+        let payout = claim.approved_amount;
         let pool_balance = Self::get_pool_balance(env.clone(), claim.token.clone());
-        if claim.amount > pool_balance {
+        let reserved = Self::get_reserved(env.clone(), claim.token.clone());
+        if payout > pool_balance || payout > reserved {
+            // Unreachable while the solvency invariant holds.
             panic_with_error!(&env, InsuranceError::InsufficientPoolBalance);
         }
 
-        // Transfer payout to claimant.
-        token::Client::new(&env, &claim.token).transfer(
-            &env.current_contract_address(),
-            &claim.claimant,
-            &claim.amount,
-        );
-
-        // Update pool balance.
+        // EFFECTS before the token transfer.
         env.storage().persistent().set(
             &DataKey::PoolBalance(claim.token.clone()),
-            &(pool_balance - claim.amount),
+            &(pool_balance - payout),
         );
-
+        env.storage().persistent().set(
+            &DataKey::Reserved(claim.token.clone()),
+            &(reserved - payout),
+        );
         claim.status = ClaimStatus::Executed;
         env.storage()
             .persistent()
             .set(&DataKey::Claim(claim_id), &claim);
 
+        token::Client::new(&env, &claim.token).transfer(
+            &env.current_contract_address(),
+            &claim.claimant,
+            &payout,
+        );
+
         env.events().publish(
             (symbol_short!("ins"), symbol_short!("payout")),
-            (claim_id, claim.claimant, claim.token, claim.amount),
+            (claim_id, claim.claimant, claim.token, payout),
         );
     }
 
     /// Retrieve a claim record by ID.
-    ///
-    /// # Arguments
-    ///
-    /// * `claim_id` – Numeric ID assigned when the claim was submitted.
-    ///
-    /// # Returns
-    ///
-    /// The full `Claim` struct including status, amounts, timestamps,
-    /// and evidence.
-    ///
-    /// # Errors
-    ///
-    /// * `InsuranceError::ClaimNotFound`  – if no claim exists with `claim_id`.
-    /// * `InsuranceError::NotInitialized` – if `initialize` has not been called.
     pub fn get_claim(env: Env, claim_id: u64) -> Claim {
         Self::require_initialized(&env);
         Self::load_claim(&env, claim_id)
@@ -552,10 +739,42 @@ impl InsuranceContract {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
+            .unwrap_or_else(|| panic_with_error!(env, InsuranceError::NotInitialized));
         if *caller != admin {
             panic_with_error!(env, InsuranceError::Unauthorized);
         }
+    }
+
+    fn assessor_config(env: &Env) -> (Vec<Address>, u32) {
+        match env.storage().persistent().get::<DataKey, Vec<Address>>(&DataKey::Assessors) {
+            Some(a) => {
+                let t: u32 = env.storage().persistent().get(&DataKey::Threshold).unwrap_or(1);
+                (a, t)
+            }
+            None => {
+                let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+                (vec![env, admin], 1)
+            }
+        }
+    }
+
+    fn credit_pool(env: &Env, token: &Address, amount: i128) {
+        let current = Self::get_pool_balance(env.clone(), token.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolBalance(token.clone()), &(current + amount));
+    }
+
+    fn fetch_dispute_outcome(env: &Env, escrow_id: u64) -> DisputeOutcome {
+        let escrow: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic_with_error!(env, InsuranceError::EscrowNotConfigured));
+        let args: Vec<Val> = vec![env, escrow_id.into_val(env)];
+        let outcome: Option<DisputeOutcome> =
+            env.invoke_contract(&escrow, &Symbol::new(env, "get_dispute_outcome"), args);
+        outcome.unwrap_or_else(|| panic_with_error!(env, InsuranceError::NoVerifiedDispute))
     }
 
     fn load_claim(env: &Env, claim_id: u64) -> Claim {
@@ -563,6 +782,13 @@ impl InsuranceContract {
             .persistent()
             .get::<DataKey, Claim>(&DataKey::Claim(claim_id))
             .unwrap_or_else(|| panic_with_error!(env, InsuranceError::ClaimNotFound))
+    }
+
+    fn load_policy(env: &Env, policy_id: u64) -> Policy {
+        env.storage()
+            .persistent()
+            .get::<DataKey, Policy>(&DataKey::Policy(policy_id))
+            .unwrap_or_else(|| panic_with_error!(env, InsuranceError::PolicyNotFound))
     }
 }
 
@@ -573,164 +799,343 @@ mod tests {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
+        token::StellarAssetClient,
         Env,
     };
 
-    fn setup(env: &Env) -> (InsuranceContractClient<'_>, Address) {
+    /// Minimal stand-in for the escrow contract's `get_dispute_outcome`.
+    #[contract]
+    pub struct MockEscrow;
+
+    #[contractimpl]
+    impl MockEscrow {
+        pub fn set_outcome(env: Env, outcome: DisputeOutcome) {
+            env.storage().persistent().set(&outcome.escrow_id, &outcome);
+        }
+        pub fn get_dispute_outcome(env: Env, escrow_id: u64) -> Option<DisputeOutcome> {
+            env.storage().persistent().get(&escrow_id)
+        }
+    }
+
+    struct Ctx<'a> {
+        env: Env,
+        client: InsuranceContractClient<'a>,
+        admin: Address,
+        token: Address,
+        escrow: MockEscrowClient<'a>,
+        payer: Address,
+        payee: Address,
+    }
+
+    fn setup<'a>() -> Ctx<'a> {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
         let id = env.register(InsuranceContract, ());
-        let client = InsuranceContractClient::new(env, &id);
-        let admin = Address::generate(env);
+        let client = InsuranceContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
         client.initialize(&admin);
-        (client, admin)
+        let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+        let token = sac.address();
+        let escrow_id = env.register(MockEscrow, ());
+        let escrow = MockEscrowClient::new(&env, &escrow_id);
+        client.set_escrow_contract(&admin, &escrow_id);
+        let payer = Address::generate(&env);
+        let payee = Address::generate(&env);
+        let sa = StellarAssetClient::new(&env, &token);
+        sa.mint(&payer, &10_000);
+        sa.mint(&payee, &10_000);
+        Ctx { env, client, admin, token, escrow, payer, payee }
+    }
+
+    /// Fund the pool with `amount` from a fresh contributor.
+    fn fund(c: &Ctx, amount: i128) {
+        let from = Address::generate(&c.env);
+        StellarAssetClient::new(&c.env, &c.token).mint(&from, &amount);
+        c.client.contribute_to_pool(&from, &amount, &c.token);
+    }
+
+    /// Record a resolved dispute in which the payer lost `payer_loss`.
+    fn resolve(c: &Ctx, escrow_id: u64, amount: i128, payer_loss: i128) {
+        let now = c.env.ledger().timestamp();
+        c.escrow.set_outcome(&DisputeOutcome {
+            escrow_id,
+            payer: c.payer.clone(),
+            payee: c.payee.clone(),
+            token: c.token.clone(),
+            amount,
+            payer_amount: amount - payer_loss,
+            payee_amount: payer_loss,
+            disputed_at: now + 10,
+            resolved_at: now + 20,
+        });
+        c.env.ledger().with_mut(|l| l.timestamp = now + 30);
+    }
+
+    fn pass_voting(c: &Ctx) {
+        c.env.ledger().with_mut(|l| l.timestamp += CLAIM_VOTING_PERIOD_SECS + 1);
+    }
+
+    fn ev(c: &Ctx) -> String {
+        String::from_str(&c.env, "dispute #1")
     }
 
     #[test]
     fn test_initialize_and_pool_balance_zero() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, _) = setup(&env);
-        let token = Address::generate(&env);
-        assert_eq!(client.get_pool_balance(&token), 0);
+        let c = setup();
+        assert_eq!(c.client.get_pool_balance(&c.token), 0);
+        assert_eq!(c.client.get_reserved(&c.token), 0);
     }
 
     #[test]
     #[should_panic]
     fn test_double_initialize_panics() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, admin) = setup(&env);
-        client.initialize(&admin);
+        let c = setup();
+        c.client.initialize(&c.admin);
     }
 
     #[test]
-    fn test_get_pool_balance_unknown_token_returns_zero() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, _) = setup(&env);
-        assert_eq!(client.get_pool_balance(&Address::generate(&env)), 0);
+    fn test_buy_policy_charges_premium_into_pool() {
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        let p = c.client.get_policy(&pid);
+        assert_eq!(p.premium, 20); // 2 % default
+        assert_eq!(c.client.get_pool_balance(&c.token), 20);
     }
 
     #[test]
-    fn test_submit_claim_increments_counter() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, _) = setup(&env);
-        let claimant = Address::generate(&env);
-        let token = Address::generate(&env);
-        let evidence = String::from_str(&env, "tx-hash-abc123");
-        let id1 = client.submit_claim(&claimant, &500, &token, &evidence);
-        let id2 = client.submit_claim(&claimant, &200, &token, &evidence);
-        assert_eq!(id1, 0);
-        assert_eq!(id2, 1);
+    fn test_full_flow_verified_claim_paid() {
+        let c = setup();
+        fund(&c, 5_000);
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 800);
+        let id = c.client.submit_claim(&c.payer, &pid, &800, &ev(&c));
+        pass_voting(&c);
+        c.client.approve_claim(&c.admin, &id);
+        assert_eq!(c.client.get_claim(&id).status, ClaimStatus::Approved);
+        assert_eq!(c.client.get_reserved(&c.token), 800);
+        c.client.execute_payout(&c.payer, &id);
+        assert_eq!(c.client.get_claim(&id).status, ClaimStatus::Executed);
+        assert_eq!(c.client.get_reserved(&c.token), 0);
+        assert_eq!(c.client.get_pool_balance(&c.token), 5_020 - 800);
     }
 
     #[test]
-    fn test_claim_initial_status_is_pending() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, _) = setup(&env);
-        let claimant = Address::generate(&env);
-        let token = Address::generate(&env);
-        let evidence = String::from_str(&env, "evidence");
-        let id = client.submit_claim(&claimant, &100, &token, &evidence);
-        let claim = client.get_claim(&id);
-        assert_eq!(claim.status, ClaimStatus::Pending);
-        assert_eq!(claim.amount, 100);
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn test_claim_without_matching_dispute_rejected() {
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        c.client.submit_claim(&c.payer, &pid, &100, &ev(&c));
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Error(Contract, #16)")]
+    fn test_claim_above_verified_loss_rejected() {
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 300);
+        c.client.submit_claim(&c.payer, &pid, &301, &ev(&c));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #13)")]
+    fn test_claim_above_coverage_rejected() {
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &100);
+        resolve(&c, 1, 2_000, 1_000);
+        c.client.submit_claim(&c.payer, &pid, &101, &ev(&c));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #17)")]
+    fn test_policy_bought_after_dispute_rejected() {
+        let c = setup();
+        resolve(&c, 1, 2_000, 1_000);
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        c.client.submit_claim(&c.payer, &pid, &100, &ev(&c));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_one_claim_per_policy() {
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 1_000);
+        c.client.submit_claim(&c.payer, &pid, &100, &ev(&c));
+        c.client.submit_claim(&c.payer, &pid, &100, &ev(&c));
+    }
+
+    #[test]
+    fn test_approval_pro_rates_when_pool_short() {
+        let c = setup();
+        fund(&c, 480); // pool = 480 + 2 premiums of 20 = 520
+        let p1 = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        let p2 = c.client.buy_policy(&c.payer, &2, &c.token, &1_000);
+        resolve(&c, 1, 1_000, 400);
+        resolve(&c, 2, 1_000, 400);
+        let a = c.client.submit_claim(&c.payer, &p1, &400, &ev(&c));
+        let b = c.client.submit_claim(&c.payer, &p2, &400, &ev(&c));
+        pass_voting(&c);
+        c.client.approve_claim(&c.admin, &a);
+        c.client.approve_claim(&c.admin, &b);
+        assert_eq!(c.client.get_claim(&a).approved_amount, 400);
+        assert_eq!(c.client.get_claim(&b).approved_amount, 120);
+        // Solvency: reserved never exceeds the pool.
+        assert_eq!(c.client.get_reserved(&c.token), c.client.get_pool_balance(&c.token));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn test_approval_fails_when_pool_fully_reserved() {
+        let c = setup();
+        let p1 = c.client.buy_policy(&c.payer, &1, &c.token, &1_000); // pool = 20
+        let p2 = c.client.buy_policy(&c.payer, &2, &c.token, &1_000); // pool = 40
+        resolve(&c, 1, 1_000, 500);
+        resolve(&c, 2, 1_000, 500);
+        let a = c.client.submit_claim(&c.payer, &p1, &500, &ev(&c));
+        let b = c.client.submit_claim(&c.payer, &p2, &500, &ev(&c));
+        pass_voting(&c);
+        c.client.approve_claim(&c.admin, &a); // reserves all 40
+        c.client.approve_claim(&c.admin, &b);
+    }
+
+    #[test]
+    fn test_multi_assessor_threshold() {
+        let c = setup();
+        fund(&c, 5_000);
+        let a1 = Address::generate(&c.env);
+        let a2 = Address::generate(&c.env);
+        let a3 = Address::generate(&c.env);
+        c.client.set_assessors(&c.admin, &vec![&c.env, a1.clone(), a2.clone(), a3.clone()], &2);
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 500);
+        let id = c.client.submit_claim(&c.payer, &pid, &500, &ev(&c));
+        pass_voting(&c);
+        c.client.approve_claim(&a1, &id);
+        assert_eq!(c.client.get_claim(&id).status, ClaimStatus::Pending);
+        assert_eq!(c.client.get_reserved(&c.token), 0);
+        c.client.approve_claim(&a2, &id);
+        assert_eq!(c.client.get_claim(&id).status, ClaimStatus::Approved);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #19)")]
+    fn test_assessor_cannot_vote_twice() {
+        let c = setup();
+        let a1 = Address::generate(&c.env);
+        let a2 = Address::generate(&c.env);
+        c.client.set_assessors(&c.admin, &vec![&c.env, a1.clone(), a2.clone()], &2);
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 500);
+        let id = c.client.submit_claim(&c.payer, &pid, &500, &ev(&c));
+        pass_voting(&c);
+        c.client.approve_claim(&a1, &id);
+        c.client.approve_claim(&a1, &id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn test_non_assessor_cannot_approve() {
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 500);
+        let id = c.client.submit_claim(&c.payer, &pid, &500, &ev(&c));
+        pass_voting(&c);
+        c.client.approve_claim(&Address::generate(&c.env), &id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn test_non_admin_cannot_set_assessors() {
+        let c = setup();
+        let a1 = Address::generate(&c.env);
+        c.client.set_assessors(&a1, &vec![&c.env, a1.clone()], &1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #20)")]
+    fn test_invalid_threshold_rejected() {
+        let c = setup();
+        let a1 = Address::generate(&c.env);
+        c.client.set_assessors(&c.admin, &vec![&c.env, a1], &2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
     fn test_approve_before_voting_deadline_panics() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, admin) = setup(&env);
-        let claimant = Address::generate(&env);
-        let token = Address::generate(&env);
-        let evidence = String::from_str(&env, "evidence");
-        let id = client.submit_claim(&claimant, &100, &token, &evidence);
-        // Voting deadline hasn't passed yet — should panic.
-        client.approve_claim(&admin, &id);
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 500);
+        let id = c.client.submit_claim(&c.payer, &pid, &500, &ev(&c));
+        c.client.approve_claim(&c.admin, &id);
     }
 
     #[test]
-    fn test_approve_claim_after_voting_deadline() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, admin) = setup(&env);
-        let claimant = Address::generate(&env);
-        let token = Address::generate(&env);
-        let evidence = String::from_str(&env, "evidence");
-        let id = client.submit_claim(&claimant, &100, &token, &evidence);
-        // Advance time past the voting deadline.
-        env.ledger().with_mut(|l| {
-            l.timestamp += CLAIM_VOTING_PERIOD_SECS + 1;
-        });
-        client.approve_claim(&admin, &id);
-        let claim = client.get_claim(&id);
-        assert_eq!(claim.status, ClaimStatus::Approved);
+    fn test_reject_claim_frees_policy() {
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 500);
+        let id = c.client.submit_claim(&c.payer, &pid, &500, &ev(&c));
+        c.client.reject_claim(&c.admin, &id);
+        assert_eq!(c.client.get_claim(&id).status, ClaimStatus::Rejected);
+        assert!(!c.client.get_policy(&pid).claimed);
     }
 
     #[test]
-    fn test_reject_claim() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, admin) = setup(&env);
-        let claimant = Address::generate(&env);
-        let token = Address::generate(&env);
-        let evidence = String::from_str(&env, "evidence");
-        let id = client.submit_claim(&claimant, &100, &token, &evidence);
-        client.reject_claim(&admin, &id);
-        let claim = client.get_claim(&id);
-        assert_eq!(claim.status, ClaimStatus::Rejected);
-    }
-
-    #[test]
-    #[should_panic]
+    #[should_panic(expected = "Error(Contract, #5)")]
     fn test_execute_payout_on_pending_claim_panics() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, admin) = setup(&env);
-        let claimant = Address::generate(&env);
-        let token = Address::generate(&env);
-        let evidence = String::from_str(&env, "evidence");
-        let id = client.submit_claim(&claimant, &100, &token, &evidence);
-        client.execute_payout(&admin, &id);
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 500);
+        let id = c.client.submit_claim(&c.payer, &pid, &500, &ev(&c));
+        c.client.execute_payout(&c.admin, &id);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn test_stranger_cannot_execute_payout() {
+        let c = setup();
+        fund(&c, 5_000);
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 500);
+        let id = c.client.submit_claim(&c.payer, &pid, &500, &ev(&c));
+        pass_voting(&c);
+        c.client.approve_claim(&c.admin, &id);
+        c.client.execute_payout(&Address::generate(&c.env), &id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn test_non_party_policy_holder_rejected() {
+        let c = setup();
+        let stranger = Address::generate(&c.env);
+        StellarAssetClient::new(&c.env, &c.token).mint(&stranger, &1_000);
+        let pid = c.client.buy_policy(&stranger, &1, &c.token, &1_000);
+        resolve(&c, 1, 2_000, 500);
+        c.client.submit_claim(&stranger, &pid, &100, &ev(&c));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
     fn test_submit_claim_zero_amount_panics() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, _) = setup(&env);
-        let claimant = Address::generate(&env);
-        let token = Address::generate(&env);
-        let evidence = String::from_str(&env, "evidence");
-        client.submit_claim(&claimant, &0, &token, &evidence);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_non_admin_cannot_approve_claim() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, _) = setup(&env);
-        let claimant = Address::generate(&env);
-        let token = Address::generate(&env);
-        let evidence = String::from_str(&env, "evidence");
-        let id = client.submit_claim(&claimant, &100, &token, &evidence);
-        env.ledger().with_mut(|l| {
-            l.timestamp += CLAIM_VOTING_PERIOD_SECS + 1;
-        });
-        let stranger = Address::generate(&env);
-        client.approve_claim(&stranger, &id);
+        let c = setup();
+        let pid = c.client.buy_policy(&c.payer, &1, &c.token, &1_000);
+        c.client.submit_claim(&c.payer, &pid, &0, &ev(&c));
     }
 
     #[test]
     fn test_insurance_bps_constant() {
-        // 0.1 % = 10 bps
         assert_eq!(INSURANCE_BPS, 10);
-        // Levy on 1_000 units = 1 unit
         assert_eq!(1_000i128 * INSURANCE_BPS / 10_000, 1);
     }
 }
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    InsuranceContract,
+    InsuranceContractClient,
+    |env, id, admin| {
+        InsuranceContractClient::new(&env, &id).initialize(&admin);
+    }
+);

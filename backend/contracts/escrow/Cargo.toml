@@ -11,7 +11,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 stellar-upgradeable = { path = "../upgradeable" }
+stellar-contract-ttl = { path = "../ttl" }
 soroban-sdk.workspace = true
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+stellar-contract-test-utils = { path = "../test-utils" }
+oracle = { path = "../oracle" }
+stellar-insurance-contract = { path = "../insurance" }
