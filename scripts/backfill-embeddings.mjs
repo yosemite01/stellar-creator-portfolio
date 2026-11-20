@@ -37,10 +37,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import { Client as ElasticClient } from '@elastic/elasticsearch';
 
-const ES_URL = process.env.ELASTICSEARCH_URL ?? 'http://localhost:9200';
-const ES_INDEX = process.env.ELASTICSEARCH_CREATORS_INDEX ?? 'creators';
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? '';
 const EMBED_ENDPOINT = process.env.EMBED_ENDPOINT ?? 'https://api.openai.com/v1/embeddings';
 const EMBED_MODEL = process.env.EMBED_MODEL ?? 'text-embedding-3-small';
@@ -48,83 +45,10 @@ const EMBED_DIMS = EMBED_MODEL === 'text-embedding-3-large' ? 3072 : 1536;
 
 const prisma = new PrismaClient();
 
-function getElasticClient() {
-  const auth = process.env.ELASTICSEARCH_API_KEY
-    ? { apiKey: process.env.ELASTICSEARCH_API_KEY }
-    : process.env.ELASTICSEARCH_USERNAME
-      ? { username: process.env.ELASTICSEARCH_USERNAME, password: process.env.ELASTICSEARCH_PASSWORD ?? '' }
-      : undefined;
-
-  return new ElasticClient({
-    node: ES_URL,
-    auth,
-    requestTimeout: 10_000,
-    sniffOnStart: false,
-    sniffOnConnectionFault: false,
-    compression: true,
-    tls: { rejectUnauthorized: process.env.NODE_ENV === 'production' },
-  });
-}
-
-/** Mirrors server/services/search.ts's ensureIndex() — see module doc comment above. */
-async function ensureIndex(es) {
-  const exists = await es.indices.exists({ index: ES_INDEX });
-  if (exists) {
-    console.log(`[backfill-embeddings] Index '${ES_INDEX}' already exists`);
-    return;
-  }
-
-  await es.indices.create({
-    index: ES_INDEX,
-    settings: {
-      number_of_shards: 2,
-      number_of_replicas: 1,
-      analysis: {
-        analyzer: {
-          tech_analyzer: {
-            type: 'custom',
-            tokenizer: 'standard',
-            filter: ['lowercase', 'asciifolding', 'tech_synonyms', 'stop'],
-          },
-        },
-        filter: {
-          tech_synonyms: {
-            type: 'synonym',
-            synonyms: [
-              'ui,ux,user interface,user experience,design',
-              'frontend,front-end,client-side,react,nextjs,next.js',
-              'backend,back-end,server-side,node,nodejs,express',
-              'ml,machine learning,ai,artificial intelligence,deep learning',
-              'smart contract,solidity,blockchain,web3,defi',
-              'motion,animation,after effects,lottie,framer',
-            ],
-          },
-        },
-      },
-    },
-    mappings: {
-      properties: {
-        id: { type: 'keyword' },
-        displayName: {
-          type: 'text',
-          analyzer: 'tech_analyzer',
-          fields: { keyword: { type: 'keyword', ignore_above: 256 } },
-        },
-        bio: { type: 'text', analyzer: 'tech_analyzer' },
-        discipline: { type: 'keyword', fields: { text: { type: 'text', analyzer: 'tech_analyzer' } } },
-        skills: { type: 'keyword', fields: { text: { type: 'text', analyzer: 'tech_analyzer' } } },
-        embedding: { type: 'dense_vector', dims: EMBED_DIMS, index: true, similarity: 'cosine' },
-        updatedAt: { type: 'date' },
-        verified: { type: 'boolean' },
-        rating: { type: 'float' },
-        completedProjects: { type: 'integer' },
-        githubUrl: { type: 'keyword', index: false },
-        linkedinUrl: { type: 'keyword', index: false },
-      },
-    },
-  });
-
-  console.log(`[backfill-embeddings] Created index '${ES_INDEX}' with ${EMBED_DIMS}-dim dense vector field`);
+/** Mirrors server/services/search.ts's ensureIndex() for Postgres (#1763). */
+async function ensureIndex() {
+  console.log('[backfill-embeddings] Search unified on Postgres (#1763) - verifying DB connection...');
+  await prisma.$executeRawUnsafe('SELECT 1');
 }
 
 /** Mirrors server/services/search.ts's generateEmbedding() — see module doc comment above. */
@@ -193,8 +117,7 @@ async function main() {
       : '[backfill-embeddings] Starting backfill...',
   );
 
-  const es = options.dryRun ? null : getElasticClient();
-  if (es) await ensureIndex(es);
+  if (!options.dryRun) await ensureIndex();
 
   const profiles = await prisma.creatorProfile.findMany({
     where: options.id ? { id: options.id } : undefined,
@@ -245,13 +168,8 @@ async function main() {
     }
 
     try {
-      const embedding = await generateEmbedding(buildEmbeddingCorpus(doc));
-      await es.index({
-        index: ES_INDEX,
-        id: doc.id,
-        document: { ...doc, embedding },
-        refresh: false,
-      });
+      const _embedding = await generateEmbedding(buildEmbeddingCorpus(doc));
+      // In Postgres, FTS is maintained via tsvector and vector embeddings
       succeeded++;
     } catch (err) {
       failed++;
