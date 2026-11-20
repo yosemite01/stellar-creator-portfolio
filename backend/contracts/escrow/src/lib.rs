@@ -10,7 +10,7 @@ mod reentrancy;
 #[cfg(test)]
 mod milestone_tests;
 #[cfg(test)]
-mod invariant_fuzz_tests;
+mod invariant_fuzz;
 use reentrancy::{require_active_escrow, require_authorized_party, ReentrancyGuard};
 
 // Per-dispute arbitration (#1713)
@@ -18,9 +18,6 @@ pub mod arbitration;
 pub use arbitration::{
     vote_commitment, ArbitrationConfig, Arbiter, CasePhase, DisputeCase, Evidence,
 };
-
-// Fee calculation - read config from core contract (#344, #1724)
-use fee::{compute_fee, MAX_FEE_BPS};
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec,
@@ -47,11 +44,7 @@ pub enum ReleaseCondition {
     Timelock(u64),
 }
 
-// Fee calculation module - mirrors core contract's fee.rs (#344)
-// Uses exact same integer truncation: `(amount * fee_bps) / 10_000`
-
-/// Hard ceiling for governance-settable platform fees: 10% (1000 bps).
-pub const MAX_FEE_BPS: u32 = 1_000;
+// ---- Fee constants (#344/#722) --------------------------------------------------
 
 /// Default platform fee in basis points (2.5 %).
 pub const DEFAULT_PLATFORM_FEE_BPS: i128 = 250;
@@ -59,7 +52,19 @@ pub const DEFAULT_PLATFORM_FEE_BPS: i128 = 250;
 /// Default maximum platform fee in token units (500 USDC-equivalent).
 pub const DEFAULT_PLATFORM_FEE_CAP: i128 = 500;
 
-/// Fee configuration read from the escrow contract's storage.
+/// Dispute timeout: 30 days in ledger seconds (#731).
+/// If no arbiter panel could be drawn for a dispute within this window, anyone
+/// can call `resolve_expired_dispute` for a fixed 50/50 split (#1713). The
+/// split is a constant: there is no admin-settable dispute outcome any more.
+pub const DISPUTE_TIMEOUT_SECS: u64 = 30 * 24 * 3600;
+
+/// Bounds for the governance-configurable oracle freshness threshold (#1110).
+/// A value of 0 would mark every recorded price stale immediately, while an
+/// unbounded value would defeat the freshness guard entirely.
+pub const MIN_ORACLE_STALENESS_SECS: u64 = 60;
+pub const MAX_ORACLE_STALENESS_SECS: u64 = 86_400;
+
+/// Governance-configurable fee configuration stored on-chain (#722).
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct FeeConfig {
@@ -67,8 +72,23 @@ pub struct FeeConfig {
     pub fee_cap: i128,
 }
 
-/// Read the effective fee config: from escrow storage or default values.
-pub fn get_fee_config(env: &Env) -> FeeConfig {
+/// Delay before a fee *increase* takes effect (#1724): 48 hours.
+///
+/// Decreases apply immediately because they can only help users; increases are
+/// announced with a `(escrow, fee_prop)` event and only become effective once
+/// this window has elapsed, so a transaction quoted under the old fee can be
+/// submitted (or abandoned) before the new fee bites.
+pub const FEE_CHANGE_DELAY_SECS: u64 = 48 * 3600;
+
+/// A scheduled fee increase waiting out `FEE_CHANGE_DELAY_SECS` (#1724).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PendingFeeConfig {
+    pub config: FeeConfig,
+    pub effective_at: u64,
+}
+
+fn stored_fee_config(env: &Env) -> FeeConfig {
     env.storage()
         .persistent()
         .get::<DataKey, FeeConfig>(&DataKey::FeeConfig)
@@ -78,29 +98,33 @@ pub fn get_fee_config(env: &Env) -> FeeConfig {
         })
 }
 
-/// Compute platform fee with cap.
-/// 
-/// Uses integer truncation matching Rust's i128 division: `(amount * fee_bps) / 10_000`
-/// 
-/// # Example
-/// ```ignore
-/// assert_eq!(platform_fee_with_cap(1000, 250, 500), 25);
-/// assert_eq!(platform_fee_with_cap(30000, 250, 500), 500);  // At cap
-/// ```
-pub fn platform_fee_with_cap(amount: i128, fee_bps: i128, fee_cap: i128) -> i128 {
-    let raw_fee = amount * fee_bps / 10_000;
-    if raw_fee > fee_cap { fee_cap } else { raw_fee }
+/// Read the *effective* fee config: the stored config, or a pending increase
+/// whose timelock has elapsed (activated lazily, so no keeper is required).
+pub fn get_fee_config(env: &Env) -> FeeConfig {
+    if let Some(p) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, PendingFeeConfig>(&DataKey::PendingFeeConfig)
+    {
+        if env.ledger().timestamp() >= p.effective_at {
+            return p.config;
+        }
+    }
+    stored_fee_config(env)
 }
 
 /// Compute the platform fee for a given gross amount using the current config.
+/// Fee = min(amount * fee_bps / 10_000, fee_cap)
 pub fn platform_fee(amount: i128) -> i128 {
-    let config = get_fee_config(env);
-    platform_fee_with_cap(amount, config.fee_bps, config.fee_cap)
+    // When called from storage-aware code use platform_fee_with_config instead.
+    let raw = amount * DEFAULT_PLATFORM_FEE_BPS / 10_000;
+    if raw > DEFAULT_PLATFORM_FEE_CAP { DEFAULT_PLATFORM_FEE_CAP } else { raw }
 }
 
 /// Compute platform fee using a specific FeeConfig (snapshot on deposit).
 pub fn platform_fee_with_config(amount: i128, config: &FeeConfig) -> i128 {
-    platform_fee_with_cap(amount, config.fee_bps, config.fee_cap)
+    let raw = amount * config.fee_bps / 10_000;
+    if raw > config.fee_cap { config.fee_cap } else { raw }
 }
 
 /// Escrow Account
@@ -1101,7 +1125,7 @@ impl EscrowContract {
 
         let mut total: i128 = 0;
         for index in milestone_indices(&env, escrow_id).iter() {
-            let m: Milestone = env.storage().persistent().get(&milestone_key(&env, escrow_id, index)).ok_or(EscrowError::MilestoneNotFound)?;
+            let m: Milestone = env.storage().persistent().get(&milestone_key(&env, escrow_id, index)).unwrap();
             total = total.checked_add(m.amount).ok_or(EscrowError::InvalidAmount)?;
         }
         // Any failure here reverts every write above.
