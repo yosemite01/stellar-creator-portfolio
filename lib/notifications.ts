@@ -1,12 +1,19 @@
 /**
- * In-app notification persistence.
+ * Unified Notification Dispatcher (#1758)
  *
- * Queued transactional email (delivery log, unsubscribe tokens, per-category
- * preferences) is not implemented yet; see docs/MAINTENANCE_NOTES.md.
+ * Exposes notification persistence and multi-channel dispatch honoring
+ * preferences (email, push, SMS, and in-app).
  */
 import { prisma } from '@/lib/prisma';
+export {
+  dispatchNotification,
+  notificationDispatcher,
+  type DispatchNotificationRequest,
+  type DispatchNotificationResult,
+  type DispatchChannel,
+} from '@/server/services/notifications/dispatcher';
 
-interface InAppNotificationInput {
+export interface InAppNotificationInput {
   id: string;
   userId: string;
   title: string;
@@ -19,10 +26,7 @@ interface InAppNotificationInput {
 
 /**
  * Persist a fire-and-forget copy of an in-app notification to the
- * InAppNotification table, alongside the in-memory store bounty-service.ts
- * keeps for the current process. Never throws - callers invoke this with
- * `void persistInAppNotification(record)` and don't await or catch it, so
- * a DB failure here must not become an unhandled promise rejection.
+ * InAppNotification table. Never throws.
  */
 export async function persistInAppNotification(
   record: InAppNotificationInput,

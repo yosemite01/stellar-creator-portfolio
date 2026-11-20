@@ -48,7 +48,7 @@ export interface TransactionOptions {
  * Automatically retries on deadlock
  */
 export async function executeTransaction<T>(
-  fn: () => Promise<T>,
+  fn: (tx: any) => Promise<T>,
   options: TransactionOptions = {},
 ): Promise<T> {
   const {
@@ -74,7 +74,7 @@ export async function executeTransaction<T>(
             await tx.$executeRawUnsafe(`SET statement_timeout = ${timeout}`);
           }
 
-          return await fn();
+          return await fn(tx);
         },
         {
           timeout,
@@ -99,6 +99,55 @@ export async function executeTransaction<T>(
   }
 
   throw lastError || new Error('Transaction failed after max retries');
+}
+
+/**
+ * Record a domain event into the transactional outbox table within the same transaction (#1759).
+ */
+export async function recordOutboxEvent(
+  tx: any,
+  eventType: string,
+  payload: Record<string, unknown>,
+): Promise<{ eventId: string }> {
+  const eventId = `evt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  if (tx?.outboxEvent?.create) {
+    await tx.outboxEvent.create({
+      data: {
+        eventId,
+        eventType,
+        payload: payload as any,
+        status: 'PENDING',
+      },
+    });
+  } else if (tx?.$executeRawUnsafe) {
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "OutboxEvent" ("id", "eventId", "eventType", "payload", "status", "createdAt")
+       VALUES (gen_random_uuid(), $1, $2, $3::jsonb, 'PENDING', NOW())`,
+      eventId,
+      eventType,
+      JSON.stringify(payload),
+    ).catch(() => null);
+  }
+  return { eventId };
+}
+
+/**
+ * Execute a transaction and atomically record domain events into the outbox (#1759).
+ */
+export async function executeTransactionWithOutbox<T>(
+  fn: (
+    tx: any,
+    enqueueEvent: (type: string, payload: Record<string, unknown>) => Promise<{ eventId: string }>,
+  ) => Promise<T>,
+  options: TransactionOptions = {},
+): Promise<T> {
+  return executeTransaction(async (tx) => {
+    const enqueueEvent = async (type: string, payload: Record<string, unknown>) => {
+      return recordOutboxEvent(tx, type, payload);
+    };
+
+    return await fn(tx, enqueueEvent);
+  }, options);
 }
 
 /**

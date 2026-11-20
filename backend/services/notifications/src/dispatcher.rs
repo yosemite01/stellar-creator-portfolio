@@ -114,6 +114,39 @@ impl NotificationDispatcher {
             }
         }
     }
+
+    pub fn is_channel_enabled(
+        &self,
+        channel: &NotificationChannel,
+        prefs: &crate::models::UserNotificationPreferences,
+    ) -> bool {
+        match channel {
+            NotificationChannel::Email => prefs.email_enabled,
+            NotificationChannel::SMS => prefs.sms_enabled,
+            NotificationChannel::Push => prefs.push_enabled,
+        }
+    }
+
+    /// Dispatches notification only if permitted by user preferences (#1758).
+    pub async fn dispatch_with_preferences(
+        &self,
+        notification: Notification,
+        preferences: Option<&crate::models::UserNotificationPreferences>,
+    ) -> Result<()> {
+        if let Some(prefs) = preferences {
+            if !self.is_channel_enabled(&notification.channel, prefs) {
+                tracing::info!(
+                    "Skipping {:?} notification to {}: user opted out",
+                    notification.channel,
+                    notification.recipient
+                );
+                return Err(crate::models::NotificationError::PreferenceOptOut {
+                    channel: notification.channel,
+                });
+            }
+        }
+        self.dispatch(notification).await
+    }
 }
 
 #[cfg(test)]
@@ -262,5 +295,39 @@ mod tests {
         });
         let result: std::result::Result<Notification, _> = serde_json::from_value(raw);
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_preferences_respects_opt_out() {
+        let email = Arc::new(FakeSender::always_ok());
+        let dispatcher = NotificationDispatcher::from_senders(
+            email.clone(),
+            Arc::new(PanicSender),
+            Arc::new(PanicSender),
+        );
+
+        let prefs = crate::models::UserNotificationPreferences {
+            user_id: "user-1".into(),
+            email_enabled: false,
+            sms_enabled: true,
+            push_enabled: true,
+            quiet_hours_start: None,
+            quiet_hours_end: None,
+        };
+
+        let result = dispatcher
+            .dispatch_with_preferences(
+                test_notification(NotificationChannel::Email),
+                Some(&prefs),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::models::NotificationError::PreferenceOptOut {
+                channel: NotificationChannel::Email
+            })
+        ));
+        assert_eq!(email.call_count(), 0);
     }
 }

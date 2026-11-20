@@ -1,93 +1,38 @@
+/**
+ * Supabase Client Configuration
+ *
+ * NOTE (#1760): Dual data access paths for application tables (users, creators,
+ * bounties, applications, reviews) have been unified on Prisma (`@/lib/prisma`).
+ *
+ * Supabase client is reserved strictly for external auth or bucket storage if configured.
+ * All relational entity reads and writes must go through Prisma to ensure ACID guarantees,
+ * consistent transaction boundaries, and to prevent RLS bypass or schema desynchronisation.
+ */
+
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder_anon_key';
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder_service_key';
 
-// Client-side Supabase instance
+// Client-side Supabase instance (storage/auth only)
 export const supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
-// Server-side Supabase instance with service role
+// Server-side Supabase instance (storage/admin only)
 export const supabaseServer = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-// Database schemas and types exported here for type safety across the app
-export type Database = {
+// Deprecated: All application tables are now managed through Prisma.
+// Retained for type compatibility during deprecation window.
+export type DeprecatedDatabase = {
   public: {
     Tables: {
-      users: {
-        Row: {
-          id: string;
-          email: string;
-          name: string;
-          avatar_url?: string;
-          bio?: string;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: Omit<Database['public']['Tables']['users']['Row'], 'id' | 'created_at' | 'updated_at'>;
-      };
-      creators: {
-        Row: {
-          id: string;
-          user_id: string;
-          title: string;
-          discipline: string;
-          tagline: string;
-          cover_image?: string;
-          skills: string[];
-          hourly_rate?: number;
-          availability: 'available' | 'limited' | 'unavailable';
-          rating: number;
-          review_count: number;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: Omit<Database['public']['Tables']['creators']['Row'], 'id' | 'created_at' | 'updated_at'>;
-      };
-      bounties: {
-        Row: {
-          id: string;
-          title: string;
-          description: string;
-          budget: number;
-          currency: string;
-          deadline: string;
-          difficulty: 'beginner' | 'intermediate' | 'advanced' | 'expert';
-          category: string;
-          tags: string[];
-          status: 'open' | 'in-progress' | 'completed' | 'cancelled';
-          created_by: string;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: Omit<Database['public']['Tables']['bounties']['Row'], 'id' | 'created_at' | 'updated_at'>;
-      };
-      bounty_applications: {
-        Row: {
-          id: string;
-          bounty_id: string;
-          creator_id: string;
-          proposed_budget: number;
-          timeline_days: number;
-          proposal_text: string;
-          status: 'pending' | 'accepted' | 'rejected';
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: Omit<Database['public']['Tables']['bounty_applications']['Row'], 'id' | 'created_at' | 'updated_at'>;
-      };
-      reviews: {
-        Row: {
-          id: string;
-          creator_id: string;
-          reviewer_id: string;
-          rating: number;
-          text: string;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: Omit<Database['public']['Tables']['reviews']['Row'], 'id' | 'created_at' | 'updated_at'>;
-      };
+      users: Record<string, unknown>;
+      creators: Record<string, unknown>;
+      bounties: Record<string, unknown>;
+      bounty_applications: Record<string, unknown>;
+      reviews: Record<string, unknown>;
     };
   };
 };
+
+export type Database = DeprecatedDatabase;

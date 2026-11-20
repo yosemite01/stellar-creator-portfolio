@@ -1342,3 +1342,28 @@ model CSPViolation {
   @@index([createdAt])
   @@index([directive])
 }
+
+// ── Transactional Outbox for Domain Events (#1759) ───────────────────────────
+
+model OutboxEvent {
+  id          String            @id @default(cuid())
+  eventId     String            @unique
+  eventType   String
+  payload     Json
+  status      OutboxEventStatus @default(PENDING)
+  retryCount  Int               @default(0)
+  maxRetries  Int               @default(5)
+  lastError   String?           @db.Text
+  createdAt   DateTime          @default(now())
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+  @@index([eventType])
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}

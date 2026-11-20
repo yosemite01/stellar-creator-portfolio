@@ -15,6 +15,7 @@
  */
 
 import EventEmitter from 'events';
+import { prisma } from '@/lib/prisma';
 
 // ── Typed domain events ──────────────────────────────────────────────────────
 
@@ -176,6 +177,11 @@ export function claimEvent(listenerKey: string, eventId: string): boolean {
   return true;
 }
 
+/** Check if an event was already claimed/processed by a given listener. */
+export function isEventProcessed(listenerKey: string, eventId: string): boolean {
+  return processedEventIds.has(`${listenerKey}:${eventId}`);
+}
+
 /** @internal — exposed only for tests. */
 export function _resetProcessedEvents(): void {
   processedEventIds.clear();
@@ -282,6 +288,103 @@ export function onAnyEvent(
   handler: (event: DomainEvent) => void | Promise<void>,
 ): void {
   bus.onAny(handler);
+}
+
+// ── Outbox Relay Worker & Monitoring (#1759) ─────────────────────────────────
+
+export interface RelayResult {
+  processed: number;
+  published: number;
+  failed: number;
+}
+
+/**
+ * Polls the outbox table for pending events and publishes them to the event bus.
+ */
+export async function relayOutboxEvents(batchSize: number = 20): Promise<RelayResult> {
+  const result: RelayResult = { processed: 0, published: 0, failed: 0 };
+  try {
+    const pendingEvents = await (prisma as any).outboxEvent?.findMany({
+      where: { status: 'PENDING' },
+      orderBy: { createdAt: 'asc' },
+      take: batchSize,
+    });
+
+    if (!pendingEvents || pendingEvents.length === 0) {
+      return result;
+    }
+
+    for (const record of pendingEvents) {
+      result.processed++;
+      try {
+        bus.emit(record.eventType as DomainEventType, record.payload as any);
+
+        await (prisma as any).outboxEvent?.update({
+          where: { id: record.id },
+          data: {
+            status: 'PUBLISHED',
+            processedAt: new Date(),
+          },
+        });
+        result.published++;
+      } catch (err: any) {
+        result.failed++;
+        const nextRetries = (record.retryCount ?? 0) + 1;
+        const maxRetries = record.maxRetries ?? 5;
+        await (prisma as any).outboxEvent?.update({
+          where: { id: record.id },
+          data: {
+            status: nextRetries >= maxRetries ? 'FAILED' : 'PENDING',
+            retryCount: nextRetries,
+            lastError: err?.message ?? String(err),
+          },
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[EventBus] Relay outbox worker error:', err);
+  }
+  return result;
+}
+
+/**
+ * Monitoring metrics for the transactional outbox queue.
+ */
+export async function getOutboxStats(): Promise<{
+  pending: number;
+  processing: number;
+  published: number;
+  failed: number;
+  oldestPendingCreatedAt: Date | null;
+}> {
+  try {
+    const [pending, published, failed, oldest] = await Promise.all([
+      (prisma as any).outboxEvent?.count({ where: { status: 'PENDING' } }) ?? 0,
+      (prisma as any).outboxEvent?.count({ where: { status: 'PUBLISHED' } }) ?? 0,
+      (prisma as any).outboxEvent?.count({ where: { status: 'FAILED' } }) ?? 0,
+      (prisma as any).outboxEvent?.findFirst({
+        where: { status: 'PENDING' },
+        orderBy: { createdAt: 'asc' },
+        select: { createdAt: true },
+      }),
+    ]);
+
+    return {
+      pending,
+      processing: 0,
+      published,
+      failed,
+      oldestPendingCreatedAt: oldest?.createdAt ?? null,
+    };
+  } catch {
+    return {
+      pending: 0,
+      processing: 0,
+      published: 0,
+      failed: 0,
+      oldestPendingCreatedAt: null,
+    };
+  }
 }
 
 export default bus;
