@@ -74,22 +74,25 @@ pub enum KycLevel {
     Institutional = 2,
 }
 
-/// Current KYC attestation schema (issue #1717). Bump when fields change.
-pub const KYC_SCHEMA_VERSION: u32 = 2;
+/// Current KYC attestation schema. v2 added issuers (#1717); v3 replaces
+/// the plaintext level with a salted commitment (#1718).
+pub const KYC_SCHEMA_VERSION: u32 = 3;
 
 /// Issuer id reserved for the platform admin (`attest_kyc` / `verify_kyc`)
 /// and for attestations written before issue #1717.
 pub const ADMIN_ISSUER_ID: u32 = 0;
 
-/// KYC attestation (schema v2, issue #1717). Each attestation names the
-/// issuer that wrote it and the issuer key version that signed it, so an
-/// issuer (or one of its compromised keys) can be cut off in O(1) without
-/// touching individual attestations.
+/// KYC attestation (schema v3). Each attestation names the issuer that
+/// wrote it and the issuer key version that signed it, so an issuer (or one
+/// of its compromised keys) can be cut off in O(1) without touching
+/// individual attestations (#1717). Contract storage is public, so only a
+/// salted commitment to the level is stored, never the level itself (#1718).
 #[contracttype]
 #[derive(Clone)]
 pub struct KycAttestation {
     pub user: Address,
-    pub level: KycLevel,
+    /// `sha256([level as u8] || salt)`; see [`kyc_commitment`].
+    pub commitment: BytesN<32>,
     pub issuer_id: u32,
     pub key_version: u32,
     pub issued_at: u64,
@@ -97,8 +100,8 @@ pub struct KycAttestation {
     pub schema_version: u32,
 }
 
-/// Pre-#1717 attestation layout, still readable so existing records keep
-/// working until they expire. Treated as issued by `ADMIN_ISSUER_ID`, key 0.
+/// Pre-#1717 plaintext attestation layout. No longer counts for `check_kyc`
+/// (it reveals the level); kept so old entries can be detected and purged.
 #[contracttype]
 #[derive(Clone)]
 pub struct LegacyKycAttestation {
@@ -106,6 +109,23 @@ pub struct LegacyKycAttestation {
     pub level: KycLevel,
     pub attested_at: u64,
     pub expires_at: u64,
+}
+
+/// Commitment view of a user's attestation (#1718). Reveals no level.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct KycCommitment {
+    pub commitment: BytesN<32>,
+    pub attested_at: u64,
+    pub expires_at: u64,
+}
+
+/// `sha256([level as u8] || salt)`, matching `lib/kyc-commitment.ts`.
+pub fn kyc_commitment(env: &Env, level: KycLevel, salt: &BytesN<32>) -> BytesN<32> {
+    let mut msg = Bytes::new(env);
+    msg.push_back(level as u8);
+    msg.append(&salt.clone().into());
+    env.crypto().sha256(&msg).to_bytes()
 }
 
 /// A registered KYC issuer. `signer` is the issuer's current key; rotating
@@ -127,11 +147,13 @@ pub struct KycIssuer {
 pub enum DataKey {
     Proof(Address, BytesN<32>),
     ProofCount(Address),
-    /// Legacy (schema v1) attestation slot; read-only after #1717.
+    /// Legacy plaintext (schema v1) attestation slot. Never written any more;
+    /// read only by `has_legacy_kyc` and removed by `purge_legacy_kyc` /
+    /// `revoke_kyc`.
     KycAttestation(Address),
     Admin,
     Tier(Address),
-    /// Schema v2 attestation (#1717).
+    /// Current (v3) attestation.
     Kyc(Address),
     /// Issuer registry (#1717).
     Issuer(u32),
@@ -191,39 +213,38 @@ fn load_issuer(env: &Env, issuer_id: u32) -> Result<KycIssuer, KycError> {
 }
 
 fn read_attestation(env: &Env, user: &Address) -> Option<KycAttestation> {
-    if let Some(a) = env.storage().persistent().get::<DataKey, KycAttestation>(&DataKey::Kyc(user.clone())) {
-        return Some(a);
-    }
-    env.storage()
-        .persistent()
-        .get::<DataKey, LegacyKycAttestation>(&DataKey::KycAttestation(user.clone()))
-        .map(|l| KycAttestation {
-            user: l.user,
-            level: l.level,
-            issuer_id: ADMIN_ISSUER_ID,
-            key_version: 0,
-            issued_at: l.attested_at,
-            expires_at: l.expires_at,
-            schema_version: 1,
-        })
+    env.storage().persistent().get::<DataKey, KycAttestation>(&DataKey::Kyc(user.clone()))
 }
 
-fn write_attestation(env: &Env, user: &Address, level: KycLevel, issuer: &KycIssuer, ttl_secs: u64) {
+fn write_attestation(env: &Env, user: &Address, commitment: &BytesN<32>, issuer: &KycIssuer, ttl_secs: u64) -> u64 {
     let now = env.ledger().timestamp();
+    let expires_at = now + ttl_secs;
     env.storage().persistent().set(
         &DataKey::Kyc(user.clone()),
         &KycAttestation {
             user: user.clone(),
-            level,
+            commitment: commitment.clone(),
             issuer_id: issuer.id,
             key_version: issuer.key_version,
             issued_at: now,
-            expires_at: now + ttl_secs,
+            expires_at,
             schema_version: KYC_SCHEMA_VERSION,
         },
     );
-    // A fresh v2 record supersedes any legacy one.
+    // A fresh record supersedes (and deletes) any legacy plaintext one.
     env.storage().persistent().remove(&DataKey::KycAttestation(user.clone()));
+    expires_at
+}
+
+/// The admin issuer, checked to be active. Panics like the other admin
+/// entrypoints when the contract is not initialized.
+fn admin_issuer(env: &Env, admin: &Address, msg: &'static str) -> KycIssuer {
+    admin.require_auth();
+    let stored: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
+    assert!(*admin == stored, "{}", msg);
+    let issuer = load_issuer(env, ADMIN_ISSUER_ID).expect("Not initialized");
+    assert!(!issuer.revoked, "Admin issuer revoked");
+    issuer
 }
 
 /// Is this attestation currently valid: unexpired, issuer not revoked, and
@@ -346,20 +367,26 @@ impl IdentityContract {
             .unwrap_or(0)
     }
 
-    /// Admin-issued KYC attestation (issuer `ADMIN_ISSUER_ID`, one-year
+    // ── KYC: issuer-signed commitments (#1717, #1718) ───────────────────────
+    //
+    // Contract storage and events are public, so the contract never stores or
+    // emits a user's KYC level. Issuers record only
+    // `commitment = sha256(level_byte || salt)` with a 32-byte secret salt
+    // kept off-chain. At use time the user (or the platform on their behalf)
+    // presents the opening `(level, salt)` to `check_kyc`, which recomputes the
+    // hash and also checks the issuer and key version are still trusted.
+    // See docs/identity-verification.md (Privacy).
+
+    /// Admin-issued KYC commitment (issuer `ADMIN_ISSUER_ID`, one-year
     /// validity). Overwrites any existing attestation.
-    pub fn attest_kyc(env: Env, admin: Address, user: Address, level: KycLevel) {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
-        assert_eq!(admin, stored_admin, "Only admin can attest KYC");
-        let issuer = load_issuer(&env, ADMIN_ISSUER_ID).expect("Not initialized");
-        assert!(!issuer.revoked, "Admin issuer revoked");
-
-        write_attestation(&env, &user, level, &issuer, ONE_YEAR_SECS);
-
+    ///
+    /// Event: `(kyc, attested)` → `(user, commitment)`.
+    pub fn attest_kyc(env: Env, admin: Address, user: Address, commitment: BytesN<32>) {
+        let issuer = admin_issuer(&env, &admin, "Only admin can attest KYC");
+        write_attestation(&env, &user, &commitment, &issuer, ONE_YEAR_SECS);
         env.events().publish(
             (symbol_short!("kyc"), symbol_short!("attested")),
-            (user, level),
+            (user, commitment),
         );
     }
 
@@ -435,15 +462,15 @@ impl IdentityContract {
         load_issuer(&env, issuer_id)
     }
 
-    /// Attestation written by a registered issuer, signed by its current
+    /// Commitment written by a registered issuer, signed by its current
     /// key. `ttl_secs` must be in `1..=MAX_KYC_TTL_SECS`. Emits
-    /// `(kyc, iss_att)` → `(user, level, issuer_id, expires_at)`.
+    /// `(kyc, iss_att)` → `(user, commitment, issuer_id, expires_at)`.
     pub fn issuer_attest_kyc(
         env: Env,
         signer: Address,
         issuer_id: u32,
         user: Address,
-        level: KycLevel,
+        commitment: BytesN<32>,
         ttl_secs: u64,
     ) -> Result<(), KycError> {
         signer.require_auth();
@@ -457,94 +484,120 @@ impl IdentityContract {
         if ttl_secs == 0 || ttl_secs > MAX_KYC_TTL_SECS {
             return Err(KycError::InvalidTtl);
         }
-        write_attestation(&env, &user, level, &issuer, ttl_secs);
+        let expires_at = write_attestation(&env, &user, &commitment, &issuer, ttl_secs);
         env.events().publish(
             (symbol_short!("kyc"), symbol_short!("iss_att")),
-            (user, level, issuer_id, env.ledger().timestamp() + ttl_secs),
+            (user, commitment, issuer_id, expires_at),
         );
         Ok(())
     }
 
-    /// Canonical KYC read. True only if an attestation exists, has not
-    /// expired, its issuer is not revoked, it was signed by a key version the
-    /// issuer still accepts, and its level is at least `required_level`.
-    pub fn check_kyc(env: Env, user: Address, required_level: KycLevel) -> bool {
-        match read_attestation(&env, &user) {
-            Some(a) => attestation_valid(&env, &a) && (a.level as u8) >= (required_level as u8),
-            None => false,
-        }
-        (level as u8) >= (required_level as u8)
+    /// Canonical KYC read: checks a presented opening `(level, salt)`.
+    /// True only if an attestation exists, has not expired, its issuer is not
+    /// revoked, it was signed by a key version the issuer still accepts,
+    /// `sha256(level || salt)` matches its commitment, and
+    /// `level >= required_level`.
+    pub fn check_kyc(
+        env: Env,
+        user: Address,
+        required_level: KycLevel,
+        level: KycLevel,
+        salt: BytesN<32>,
+    ) -> bool {
+        let a = match read_attestation(&env, &user) {
+            Some(a) => a,
+            None => return false,
+        };
+        attestation_valid(&env, &a)
+            && kyc_commitment(&env, level, &salt) == a.commitment
+            && (level as u8) >= (required_level as u8)
     }
 
-    /// The stored attestation (legacy records mapped to schema v1), valid or
-    /// not. Use `check_kyc` for decisions.
+    /// The stored attestation, valid or not. Reveals no level; use
+    /// `check_kyc` for decisions.
     pub fn get_kyc_attestation(env: Env, user: Address) -> Option<KycAttestation> {
         read_attestation(&env, &user)
     }
 
-    /// Mark a user as KYC-verified following off-chain OCR document review
-    /// and admin approval (see `KYCSubmission` in the application database).
-    /// Only the platform admin may call this. Records a `Basic`-level
-    /// `KycAttestation` (issuer `ADMIN_ISSUER_ID`, one year) and emits an
-    /// event carrying `kyc_submission_id` so on-chain activity can be traced
-    /// back to the reviewed document. Also used by the re-attestation job.
-    pub fn verify_kyc(env: Env, admin: Address, user: Address, kyc_submission_id: BytesN<32>) -> bool {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
-        assert_eq!(admin, stored_admin, "Only admin can verify KYC");
-        let issuer = load_issuer(&env, ADMIN_ISSUER_ID).expect("Not initialized");
-        assert!(!issuer.revoked, "Admin issuer revoked");
+    /// The stored commitment for `user`, if any. Reveals no level.
+    pub fn get_kyc_commitment(env: Env, user: Address) -> Option<KycCommitment> {
+        read_attestation(&env, &user).map(|a| KycCommitment {
+            commitment: a.commitment,
+            attested_at: a.issued_at,
+            expires_at: a.expires_at,
+        })
+    }
 
-        write_attestation(&env, &user, KycLevel::Basic, &issuer, ONE_YEAR_SECS);
+    /// Compute the commitment for an opening. Read-only helper so clients can
+    /// check their encoding matches the contract's.
+    pub fn compute_kyc_commitment(env: Env, level: KycLevel, salt: BytesN<32>) -> BytesN<32> {
+        kyc_commitment(&env, level, &salt)
+    }
 
-    /// Delete a pre-#1718 plaintext `KycAttestation` for `user`. Admin-only.
-    /// Returns `false` if there was nothing to delete. Ledger history still
-    /// holds the old value; this only removes it from current state.
+    /// Record a KYC commitment following off-chain document review (see
+    /// `KYCSubmission` in the application database). Admin-only (issuer
+    /// `ADMIN_ISSUER_ID`, one year). The event carries the hashed
+    /// `kyc_submission_id` so activity can be traced to the reviewed record.
+    /// Also used by the re-attestation job.
     ///
-    /// Event: `(kyc, purged)` → `user`.
-    pub fn purge_legacy_kyc(env: Env, admin: Address, user: Address) -> bool {
-        Self::require_admin(&env, &admin, "Only admin can purge KYC");
-        let legacy = DataKey::KycAttestation(user.clone());
-        if !env.storage().persistent().has(&legacy) {
-            return false;
-        }
-        env.storage().persistent().remove(&legacy);
+    /// Event: `(kyc, verified)` → `(user, kyc_submission_id)`.
+    pub fn verify_kyc(
+        env: Env,
+        admin: Address,
+        user: Address,
+        commitment: BytesN<32>,
+        kyc_submission_id: BytesN<32>,
+    ) -> bool {
+        let issuer = admin_issuer(&env, &admin, "Only admin can verify KYC");
+        write_attestation(&env, &user, &commitment, &issuer, ONE_YEAR_SECS);
         env.events().publish(
-            (symbol_short!("kyc"), symbol_short!("purged")),
-            user,
+            (symbol_short!("kyc"), symbol_short!("verified")),
+            (user, kyc_submission_id),
         );
         true
     }
 
-    /// Revoke a user's KYC attestation. Admin-only.
+    /// Revoke a user's KYC attestation (and any legacy plaintext record).
+    /// Admin-only. Afterwards `check_kyc` returns `false` for every opening
+    /// and `get_kyc_attestation` returns `None`. To cut off every attestation
+    /// from one issuer at once, use `revoke_issuer`.
     ///
-    /// Removes the attestation outright (both v2 and legacy slots), so
-    /// `check_kyc` returns `false` for every level and `get_kyc_attestation`
-    /// returns `None`. Emits `(kyc, revoked)` → `(user, level)`. To cut off
-    /// every attestation from one issuer at once, use `revoke_issuer`.
+    /// Event: `(kyc, revoked)` → `user`.
     pub fn revoke_kyc(env: Env, admin: Address, user: Address) {
         admin.require_auth();
         let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
         assert_eq!(admin, stored_admin, "Only admin can revoke KYC");
 
-        let attestation = read_attestation(&env, &user).expect("KYC attestation not found");
-        env.storage().persistent().remove(&DataKey::Kyc(user.clone()));
-        env.storage().persistent().remove(&DataKey::KycAttestation(user.clone()));
+        let key = DataKey::Kyc(user.clone());
+        let legacy = DataKey::KycAttestation(user.clone());
+        let storage = env.storage().persistent();
+        assert!(storage.has(&key) || storage.has(&legacy), "KYC attestation not found");
+        storage.remove(&key);
+        storage.remove(&legacy);
+        env.events().publish((symbol_short!("kyc"), symbol_short!("revoked")), user);
+    }
 
-    fn store_commitment(env: &Env, user: &Address, commitment: &BytesN<32>) {
-        let now = env.ledger().timestamp();
-        env.storage().persistent().set(
-            &DataKey::KycCommitment(user.clone()),
-            &KycCommitment {
-                commitment: commitment.clone(),
-                attested_at: now,
-                expires_at: now + ONE_YEAR_SECS,
-            },
-        );
-        // Writing a commitment also drops any legacy plaintext record.
-        env.storage()
-            .persistent()
-            .remove(&DataKey::KycAttestation(user.clone()));
+    /// Delete a pre-#1718 plaintext attestation for `user`. Admin-only.
+    /// Returns `false` if there was nothing to delete. Ledger history still
+    /// holds the old value; this only removes it from current state.
+    ///
+    /// Event: `(kyc, purged)` → `user`.
+    pub fn purge_legacy_kyc(env: Env, admin: Address, user: Address) -> bool {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
+        assert_eq!(admin, stored_admin, "Only admin can purge KYC");
+        let legacy = DataKey::KycAttestation(user.clone());
+        if !env.storage().persistent().has(&legacy) {
+            return false;
+        }
+        env.storage().persistent().remove(&legacy);
+        env.events().publish((symbol_short!("kyc"), symbol_short!("purged")), user);
+        true
+    }
+
+    /// Whether a legacy plaintext KYC record still exists for `user`.
+    pub fn has_legacy_kyc(env: Env, user: Address) -> bool {
+        env.storage().persistent().has(&DataKey::KycAttestation(user))
     }
 
     /// Attest a creator's verification tier on-chain. Admin-only.

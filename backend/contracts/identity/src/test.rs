@@ -3,7 +3,7 @@
 use soroban_sdk::{Address, BytesN, Env};
 use stellar_contract_test_utils::{new_address, test_env};
 
-use crate::{DataKey, IdentityContract, IdentityContractClient, KycAttestation, KycLevel};
+use crate::{DataKey, IdentityContract, IdentityContractClient, KycLevel};
 
 fn deploy(env: &Env) -> (IdentityContractClient<'_>, Address) {
     let admin = new_address(env);
@@ -337,7 +337,7 @@ fn test_purge_legacy_plaintext_kyc() {
     env.as_contract(&cid, || {
         env.storage().persistent().set(
             &DataKey::KycAttestation(user.clone()),
-            &KycAttestation {
+            &crate::LegacyKycAttestation {
                 user: user.clone(),
                 level: KycLevel::Enhanced,
                 attested_at: 0,
@@ -360,7 +360,7 @@ fn test_new_commitment_replaces_legacy_record() {
     env.as_contract(&cid, || {
         env.storage().persistent().set(
             &DataKey::KycAttestation(user.clone()),
-            &KycAttestation { user: user.clone(), level: KycLevel::Basic, attested_at: 0, expires_at: 1 },
+            &crate::LegacyKycAttestation { user: user.clone(), level: KycLevel::Basic, attested_at: 0, expires_at: 1 },
         );
     });
     client.attest_kyc(&admin, &user, &commit(&env, KycLevel::Basic, &salt(&env, 1)));
@@ -391,7 +391,7 @@ mod issuer_registry {
         let (client, admin) = deploy(&env);
         let user = new_address(&env);
         env.ledger().set_timestamp(1_000);
-        client.attest_kyc(&admin, &user, &KycLevel::Basic);
+        client.attest_kyc(&admin, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)));
         let a = client.get_kyc_attestation(&user).unwrap();
         assert_eq!(a.issuer_id, ADMIN_ISSUER_ID);
         assert_eq!(a.schema_version, KYC_SCHEMA_VERSION);
@@ -406,11 +406,11 @@ mod issuer_registry {
         let signer = new_address(&env);
         let user = new_address(&env);
         let issuer = client.register_issuer(&admin, &signer);
-        client.issuer_attest_kyc(&signer, &issuer, &user, &KycLevel::Enhanced, &(30 * DAY));
-        assert!(client.check_kyc(&user, &KycLevel::Enhanced));
+        client.issuer_attest_kyc(&signer, &issuer, &user, &commit(&env, KycLevel::Enhanced, &salt(&env, 9)), &(30 * DAY));
+        assert!(client.check_kyc(&user, &KycLevel::Enhanced, &KycLevel::Enhanced, &salt(&env, 9)));
 
         env.ledger().set_timestamp(30 * DAY + 1);
-        assert!(!client.check_kyc(&user, &KycLevel::Basic));
+        assert!(!client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Enhanced, &salt(&env, 9)));
     }
 
     #[test]
@@ -421,18 +421,18 @@ mod issuer_registry {
         let issuer = client.register_issuer(&admin, &signer);
         let users: [Address; 3] = [new_address(&env), new_address(&env), new_address(&env)];
         for u in users.iter() {
-            client.issuer_attest_kyc(&signer, &issuer, u, &KycLevel::Basic, &(90 * DAY));
+            client.issuer_attest_kyc(&signer, &issuer, u, &commit(&env, KycLevel::Basic, &salt(&env, 9)), &(90 * DAY));
         }
         // An admin-issued attestation is unaffected.
         let other = new_address(&env);
-        client.attest_kyc(&admin, &other, &KycLevel::Basic);
+        client.attest_kyc(&admin, &other, &commit(&env, KycLevel::Basic, &salt(&env, 9)));
 
         client.revoke_issuer(&admin, &issuer);
 
         for u in users.iter() {
-            assert!(!client.check_kyc(u, &KycLevel::Basic));
+            assert!(!client.check_kyc(u, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
         }
-        assert!(client.check_kyc(&other, &KycLevel::Basic));
+        assert!(client.check_kyc(&other, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
         assert!(client.get_issuer(&issuer).revoked);
     }
 
@@ -444,7 +444,7 @@ mod issuer_registry {
         let issuer = client.register_issuer(&admin, &signer);
         client.revoke_issuer(&admin, &issuer);
         assert_eq!(
-            client.try_issuer_attest_kyc(&signer, &issuer, &new_address(&env), &KycLevel::Basic, &DAY),
+            client.try_issuer_attest_kyc(&signer, &issuer, &new_address(&env), &commit(&env, KycLevel::Basic, &salt(&env, 9)), &DAY),
             Err(Ok(KycError::IssuerRevoked))
         );
     }
@@ -457,18 +457,18 @@ mod issuer_registry {
         let new_key = new_address(&env);
         let issuer = client.register_issuer(&admin, &old_key);
         let user = new_address(&env);
-        client.issuer_attest_kyc(&old_key, &issuer, &user, &KycLevel::Basic, &DAY);
+        client.issuer_attest_kyc(&old_key, &issuer, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)), &DAY);
 
         assert_eq!(client.rotate_issuer_key(&admin, &issuer, &new_key, &true), 2);
-        assert!(!client.check_kyc(&user, &KycLevel::Basic));
+        assert!(!client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
 
         // Old key can no longer attest; the new one can.
         assert_eq!(
-            client.try_issuer_attest_kyc(&old_key, &issuer, &user, &KycLevel::Basic, &DAY),
+            client.try_issuer_attest_kyc(&old_key, &issuer, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)), &DAY),
             Err(Ok(KycError::Unauthorized))
         );
-        client.issuer_attest_kyc(&new_key, &issuer, &user, &KycLevel::Basic, &DAY);
-        assert!(client.check_kyc(&user, &KycLevel::Basic));
+        client.issuer_attest_kyc(&new_key, &issuer, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)), &DAY);
+        assert!(client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
     }
 
     #[test]
@@ -478,10 +478,10 @@ mod issuer_registry {
         let old_key = new_address(&env);
         let issuer = client.register_issuer(&admin, &old_key);
         let user = new_address(&env);
-        client.issuer_attest_kyc(&old_key, &issuer, &user, &KycLevel::Basic, &DAY);
+        client.issuer_attest_kyc(&old_key, &issuer, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)), &DAY);
         // The issuer rotates its own key without invalidation.
         client.rotate_issuer_key(&old_key, &issuer, &new_address(&env), &false);
-        assert!(client.check_kyc(&user, &KycLevel::Basic));
+        assert!(client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
     }
 
     #[test]
@@ -509,11 +509,11 @@ mod issuer_registry {
         let issuer = client.register_issuer(&admin, &signer);
         let user = new_address(&env);
         assert_eq!(
-            client.try_issuer_attest_kyc(&signer, &issuer, &user, &KycLevel::Basic, &0),
+            client.try_issuer_attest_kyc(&signer, &issuer, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)), &0),
             Err(Ok(KycError::InvalidTtl))
         );
         assert_eq!(
-            client.try_issuer_attest_kyc(&signer, &issuer, &user, &KycLevel::Basic, &(MAX_KYC_TTL_SECS + 1)),
+            client.try_issuer_attest_kyc(&signer, &issuer, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)), &(MAX_KYC_TTL_SECS + 1)),
             Err(Ok(KycError::InvalidTtl))
         );
     }
@@ -524,18 +524,18 @@ mod issuer_registry {
         let (client, _admin) = deploy(&env);
         let signer = new_address(&env);
         assert_eq!(
-            client.try_issuer_attest_kyc(&signer, &42, &new_address(&env), &KycLevel::Basic, &DAY),
+            client.try_issuer_attest_kyc(&signer, &42, &new_address(&env), &commit(&env, KycLevel::Basic, &salt(&env, 9)), &DAY),
             Err(Ok(KycError::IssuerNotFound))
         );
     }
 
     #[test]
-    fn revoking_admin_issuer_invalidates_admin_and_legacy_attestations() {
+    fn revoking_admin_issuer_invalidates_admin_attestations() {
         let env = test_env();
         let (client, admin) = deploy(&env);
         let user = new_address(&env);
         let legacy_user = new_address(&env);
-        client.verify_kyc(&admin, &user, &BytesN::from_array(&env, &[1; 32]));
+        client.verify_kyc(&admin, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)), &BytesN::from_array(&env, &[1; 32]));
         // Simulate a record written before #1717.
         env.as_contract(&client.address, || {
             env.storage().persistent().set(
@@ -548,12 +548,15 @@ mod issuer_registry {
                 },
             );
         });
-        assert!(client.check_kyc(&legacy_user, &KycLevel::Basic));
-        assert_eq!(client.get_kyc_attestation(&legacy_user).unwrap().schema_version, 1);
+        // Plaintext legacy records never count once commitments exist (#1718).
+        assert!(client.has_legacy_kyc(&legacy_user));
+        assert!(client.get_kyc_attestation(&legacy_user).is_none());
+        assert!(!client.check_kyc(&legacy_user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
+        assert!(client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
 
         client.revoke_issuer(&admin, &ADMIN_ISSUER_ID);
-        assert!(!client.check_kyc(&user, &KycLevel::Basic));
-        assert!(!client.check_kyc(&legacy_user, &KycLevel::Basic));
+        assert!(!client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
+        assert!(!client.check_kyc(&legacy_user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
     }
 
     #[test]
@@ -561,9 +564,9 @@ mod issuer_registry {
         let env = test_env();
         let (client, admin) = deploy(&env);
         let user = new_address(&env);
-        client.attest_kyc(&admin, &user, &KycLevel::Basic);
+        client.attest_kyc(&admin, &user, &commit(&env, KycLevel::Basic, &salt(&env, 9)));
         client.revoke_kyc(&admin, &user);
         assert!(client.get_kyc_attestation(&user).is_none());
-        assert!(!client.check_kyc(&user, &KycLevel::Basic));
+        assert!(!client.check_kyc(&user, &KycLevel::Basic, &KycLevel::Basic, &salt(&env, 9)));
     }
 }
