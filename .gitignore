@@ -78,3 +78,8 @@ somzilla.md
 
 # Local changelog (kept out of repo)
 CHANGES.md
+
+# RSA keys for JWT signing (do not commit)
+.auth-keys/
+# RSA keys for JWT signing (do not commit)
+.auth-keys/
