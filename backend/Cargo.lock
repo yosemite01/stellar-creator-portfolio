@@ -4722,6 +4722,7 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-contract-ttl",
  "stellar-upgradeable",
 ]
 
@@ -4740,6 +4741,13 @@ dependencies = [
 
 [[package]]
 name = "stellar-contract-test-utils"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "stellar-contract-ttl"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -4776,6 +4784,7 @@ dependencies = [
  "oracle",
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-contract-ttl",
  "stellar-insurance-contract",
  "stellar-upgradeable",
 ]
@@ -4794,6 +4803,7 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-contract-ttl",
  "stellar-upgradeable",
 ]
 
