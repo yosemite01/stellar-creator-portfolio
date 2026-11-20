@@ -730,7 +730,7 @@ model AuditLog {
   prevHash      String?
 
   /// Computed hash of this entry (SHA-256 of entry data + prevHash).
-  entryHash     String    @unique
+  entryHash     String    @unique @default("") // filled in by the DB trigger
 
   /// Whether this entry (or any prior entry) has been tampered with.
   isTampered    Boolean   @default(false)

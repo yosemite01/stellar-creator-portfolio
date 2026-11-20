@@ -3,7 +3,7 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/config';
 import { prisma } from '@/lib/prisma';
-import { Role, AdminRole } from '@prisma/client';
+import { Role } from '@prisma/client';
 import { 
   requireSuperadminRole, 
   requireModeratorRole, 
