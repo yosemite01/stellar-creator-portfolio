@@ -41,8 +41,8 @@ export async function GET(req: NextRequest) {
       keyVersion: true,
       verifiedOnChain: true,
       txHash: true,
-      createdAt: true,
-      updatedAt: true,
+      uploadedAt: true,
+      adminReviewedAt: true,
     },
   });
 
@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
         });
       } catch (error) {
         return NextResponse.json(
-          { error: 'Failed to decrypt KYC fields', details: error.message },
+          { error: 'Failed to decrypt KYC fields', details: (error instanceof Error ? error.message : String(error)) },
           { status: 500 },
         );
       }

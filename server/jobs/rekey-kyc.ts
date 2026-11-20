@@ -76,7 +76,7 @@ async function rekeyBatch(batchSize: number, cursor?: string) {
 
       console.log(`Successfully re-keyed record ${record.id}`);
     } catch (error) {
-      console.error(`Failed to re-key record ${record.id}:`, error.message);
+      console.error(`Failed to re-key record ${record.id}:`, (error instanceof Error ? error.message : String(error)));
       // Continue with next record
     }
   }
@@ -102,7 +102,7 @@ async function decryptFieldsWithEnvelope<T extends Record<string, string | undef
         const decrypted = await decryptFieldWithEnvelope(value as string, userId, key);
         return [key, decrypted] as const;
       } catch (error) {
-        throw new Error(`Failed to decrypt field ${key}: ${error.message}`);
+        throw new Error(`Failed to decrypt field ${key}: ${(error instanceof Error ? error.message : String(error))}`);
       }
     }),
   );
@@ -128,7 +128,7 @@ async function encryptFieldsWithEnvelope<T extends Record<string, string | undef
 // Parse command line arguments
 function parseArgs(): { batchSize: number; cursor?: string } {
   const args = process.argv.slice(2);
-  const result = { batchSize: 100, cursor: undefined };
+  const result: { batchSize: number; cursor?: string } = { batchSize: 100 };
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--batch-size' && args[i + 1]) {
@@ -154,7 +154,7 @@ async function main() {
     // Output for cron/scheduler
     process.exit(0);
   } catch (error) {
-    console.error('Rekey job failed:', error.message);
+    console.error('Rekey job failed:', (error instanceof Error ? error.message : String(error)));
     process.exit(1);
   }
 }

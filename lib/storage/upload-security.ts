@@ -18,7 +18,7 @@
  *   await promoteUpload(result.key, 'user123', 'document');
  */
 
-import { putObject, getObject, deleteObject } from './s3';
+import { uploadObject as putObject, getObject, deleteObject } from './s3';
 import { readStreamWithLimit } from './upload-validation';
 import { prisma } from '@/lib/prisma';
 import { randomUUID } from 'crypto';
@@ -160,16 +160,16 @@ export async function uploadToQuarantine(
         resourceId: uploadId,
         payload: {
           fileName: originalFileName,
-          error: error.message,
+          error: (error instanceof Error ? error.message : String(error)),
         },
         httpMethod: 'POST',
         requestPath: '/api/kyc/submit',
         status: 'FAILURE',
-        errorMessage: error.message,
+        errorMessage: (error instanceof Error ? error.message : String(error)),
       },
     });
 
-    throw new Error(`Failed to upload to quarantine: ${error.message}`);
+    throw new Error(`Failed to upload to quarantine: ${(error instanceof Error ? error.message : String(error))}`);
   }
 }
 
@@ -227,7 +227,7 @@ export async function promoteUpload(
       finalUrl: '', // Would generate signed URL here
     };
   } catch (error) {
-    throw new Error(`Failed to promote upload: ${error.message}`);
+    throw new Error(`Failed to promote upload: ${(error instanceof Error ? error.message : String(error))}`);
   }
 }
 
@@ -308,7 +308,7 @@ export async function deleteFile(key: string): Promise<void> {
   try {
     await deleteObject(key);
   } catch (error) {
-    console.error(`Failed to delete file ${key}:`, error.message);
+    console.error(`Failed to delete file ${key}:`, (error instanceof Error ? error.message : String(error)));
   }
 }
 
@@ -360,7 +360,7 @@ export async function cleanupExpiredUploads(): Promise<void> {
         },
       });
     } catch (error) {
-      console.error(`Failed to cleanup upload ${upload.resourceId}:`, error.message);
+      console.error(`Failed to cleanup upload ${upload.resourceId}:`, (error instanceof Error ? error.message : String(error)));
     }
   }
 }

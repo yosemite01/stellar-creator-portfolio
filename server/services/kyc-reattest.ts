@@ -34,7 +34,7 @@ export interface KycReattestCandidate {
 export interface KycReattestDeps {
   listCandidates: () => Promise<KycReattestCandidate[]>;
   readAttestation: (walletAddress: string) => Promise<OnChainKycAttestation | null>;
-  reattest: (walletAddress: string, submissionIdHash: Uint8Array) => Promise<string>;
+  reattest: (walletAddress: string, submissionIdHash: Uint8Array) => Promise<string | null>;
   now?: () => Date;
 }
 

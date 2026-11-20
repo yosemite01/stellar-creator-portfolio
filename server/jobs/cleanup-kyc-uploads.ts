@@ -17,7 +17,6 @@
 
 import { prisma } from '@/lib/prisma';
 import { deleteFile } from '@/lib/storage/upload-security';
-import { parseArgs } from 'node:util';
 
 // Configuration
 const RETENTION_DAYS = parseInt(process.env.KYC_RETENTION_DAYS || '90', 10);
@@ -94,7 +93,7 @@ async function cleanupBatch(batchSize: number, dryRun: boolean = false) {
         });
       }
     } catch (error) {
-      console.error(`  Failed to cleanup upload ${upload.resourceId}:`, error.message);
+      console.error(`  Failed to cleanup upload ${upload.resourceId}:`, (error instanceof Error ? error.message : String(error)));
       failedCount++;
     }
   }
@@ -131,7 +130,7 @@ async function main() {
     console.log(`\nCleanup job complete.`);
     process.exit(0);
   } catch (error) {
-    console.error(`Cleanup job failed:`, error.message);
+    console.error(`Cleanup job failed:`, (error instanceof Error ? error.message : String(error)));
     process.exit(1);
   }
 }

@@ -86,12 +86,11 @@ export async function POST(
       },
     });
     await writeAuditLog({
-      actorId: adminUser.id,
+      userId: adminUser.id,
+      resource: 'KYCSubmission',
       action: 'kyc.review.reject',
-      targetType: 'KYCSubmission',
-      targetId: submission.id,
-      before: { status: submission.status },
-      after: { status: updated.status, reason },
+      resourceId: submission.id,
+      payload: { before: { status: submission.status }, after: { status: updated.status, reason } },
     });
     return NextResponse.json({ id: updated.id, status: updated.status });
   }
@@ -114,12 +113,11 @@ export async function POST(
   ]);
 
   await writeAuditLog({
-    actorId: adminUser.id,
+    userId: adminUser.id,
+    resource: 'KYCSubmission',
     action: 'kyc.review.approve',
-    targetType: 'KYCSubmission',
-    targetId: submission.id,
-    before: { status: submission.status },
-    after: { status: 'APPROVED', reason: reason ?? null },
+    resourceId: submission.id,
+    payload: { before: { status: submission.status }, after: { status: 'APPROVED', reason: reason ?? null } },
   });
 
   if (!submission.user.walletAddress) {

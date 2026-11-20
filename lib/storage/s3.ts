@@ -32,12 +32,6 @@ export interface StoredFile {
   signedUrl: string;
 }
 
-export interface UploadObjectInput {
-  key: string;
-  body: Buffer | Uint8Array | string;
-  contentType?: string;
-}
-
 let client: S3Client | undefined;
 
 function getClient(): S3Client {
@@ -75,40 +69,6 @@ export async function getDownloadUrl(key: string): Promise<string> {
   });
 }
 
-/** Uploads an object and returns its key with a signed URL to read it back. */
-export async function uploadObject({
-  key,
-  body,
-  contentType,
-}: UploadObjectInput): Promise<{ key: string; signedUrl: string }> {
-  await getClient().send(
-    new PutObjectCommand({ Bucket: getBucket(), Key: key, Body: body, ContentType: contentType }),
-  );
-  return { key, signedUrl: await getDownloadUrl(key) };
-}
-
-/** Lists objects under a prefix, each with a signed URL. */
-export async function listFiles(prefix = ''): Promise<StoredFile[]> {
-  const response = await getClient().send(
-    new ListObjectsV2Command({ Bucket: getBucket(), Prefix: prefix }),
-  );
-
-  return Promise.all(
-    (response.Contents ?? [])
-      .filter((object): object is typeof object & { Key: string } => Boolean(object.Key))
-      .map(async (object) => ({
-        key: object.Key,
-        size: object.Size ?? 0,
-        lastModified: object.LastModified,
-        signedUrl: await getDownloadUrl(object.Key),
-      })),
-  );
-}
-
-/** Deletes an object. Succeeds if the object is already absent. */
-export async function deleteObject(key: string): Promise<void> {
-  await getClient().send(new DeleteObjectCommand({ Bucket: getBucket(), Key: key }));
-}
 export interface UploadObjectInput {
   key: string;
   body: Buffer | Uint8Array | string;
@@ -131,18 +91,15 @@ export async function uploadObject({
   contentType,
   metadata,
 }: UploadObjectInput): Promise<{ key: string; signedUrl: string }> {
-  const params: any = {
-    Bucket: getBucket(),
-    Key: key,
-    Body: body,
-    ContentType: contentType,
-  };
-
-  if (metadata) {
-    params.Metadata = metadata;
-  }
-
-  await getClient().send(new PutObjectCommand(params));
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: getBucket(),
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ...(metadata ? { Metadata: metadata } : {}),
+    }),
+  );
   return { key, signedUrl: await getDownloadUrl(key) };
 }
 
@@ -159,7 +116,7 @@ export async function getObject(key: string): Promise<StoredObject> {
 
   return {
     key,
-    body,
+    body: Buffer.from(body),
     contentType: response.ContentType,
     metadata: response.Metadata,
   };

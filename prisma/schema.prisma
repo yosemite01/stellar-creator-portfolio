@@ -1005,6 +1005,16 @@ model KYCSubmission {
   encryptedDOB      String
   encryptedIdNumber String
 
+  // Envelope encryption: which data key encrypted this row (see lib/kyc-envelope-encryption.ts).
+  keyId      String @default("default") @map("key_id")
+  keyVersion String @default("v1") @map("key_version")
+
+  // Uploaded document in object storage
+  documentKey            String?
+  documentImageKey       String?
+  encryptedDocumentImage String?   @db.Text
+  sanitizedAt            DateTime?
+
   // Verification flow
   status          KYCStatus @default(PENDING)
   adminReviewedBy String?
@@ -1018,6 +1028,8 @@ model KYCSubmission {
   @@index([userId])
   @@index([status])
   @@index([expiresAt])
+  @@index([keyVersion], map: "idx_kyc_submissions_key_version")
+  @@index([keyId], map: "idx_kyc_submissions_key_id")
 }
 
 /// Portfolio project. `description` holds sanitized rich-text HTML produced by

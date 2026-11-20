@@ -21,7 +21,7 @@ function generateKeyVersion(): string {
   return `v${timestamp}-${random}`;
 }
 
-async function rotateKey(previousKeyId: string, reason: string) {
+async function rotateKey(previousKeyId: string | undefined, reason: string | undefined) {
   const currentKeyId = previousKeyId || 'default';
   const newKeyId = generateKeyVersion();
 
@@ -82,7 +82,7 @@ async function main() {
     console.log(`\nKey rotation complete.`);
     console.log(`  Rotation ID: ${result.rotationId}`);
   } catch (error) {
-    console.error(`Key rotation failed: ${error.message}`);
+    console.error(`Key rotation failed: ${(error instanceof Error ? error.message : String(error))}`);
     process.exit(1);
   }
 }

@@ -245,7 +245,7 @@ export async function decryptFieldsWithEnvelope<T extends Record<string, string 
         const decrypted = await decryptFieldWithEnvelope(value as string, userId, key);
         return [key, decrypted] as const;
       } catch (error) {
-        throw new Error(`Failed to decrypt field ${key}: ${error.message}`);
+        throw new Error(`Failed to decrypt field ${key}: ${(error instanceof Error ? error.message : String(error))}`);
       }
     }),
   );
