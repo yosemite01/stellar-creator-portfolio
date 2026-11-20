@@ -69,7 +69,7 @@ export async function startSep24Poller(
           AND: [
             {
               status: {
-                notIn: ['completed', 'refunded', 'expired', 'error', 'stale'],
+                notIn: ['completed', 'refunded', 'expired', 'error'],
               },
             },
             {

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getSep24Transaction } from '@/lib/stellar/sep24-service'
+import { prisma } from '@/lib/prisma'
+import type { Sep24Status } from '@prisma/client'
 
 /**
  * GET /api/payments/sep24/[id] — fetch a single SEP-24 transaction.
@@ -23,10 +25,7 @@ export async function GET(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const transaction = await getSep24Transaction(
-    (await import('@prisma/client')).PrismaClient,
-    params.id,
-  )
+  const transaction = await getSep24Transaction(prisma, params.id)
 
   if (!transaction) {
     return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
@@ -83,7 +82,8 @@ export async function POST(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const db = (await import('@prisma/client')).PrismaClient
+  // Shared client; never disconnect it per request.
+  const db = prisma
 
   try {
     const transaction = await db.sep24Transaction.findUnique({
@@ -159,7 +159,7 @@ export async function POST(
         // Update status with history
         statusHistory: {
           create: {
-            status: anchorTx.status,
+            status: anchorTx.status as Sep24Status,
             message: anchorTx.message ?? undefined,
             metadata: { reason: 'manual_poll' },
           },
@@ -188,7 +188,7 @@ export async function POST(
       })),
     })
   } finally {
-    await db.$disconnect()
+    // nothing to clean up
   }
 }
 

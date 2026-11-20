@@ -12,7 +12,27 @@ import {
   startInteractiveFlow,
   type Sep24Transaction,
 } from '@/lib/stellar/sep24'
-import { Sep24Timeline } from './sep24-timeline'
+import { Sep24Timeline, type Sep24TimelineTransaction } from './sep24-timeline'
+
+/** Shape an anchor transaction for the timeline (history comes from the DB view). */
+function toTimelineTransaction(tx: Sep24Transaction, assetCode: string): Sep24TimelineTransaction {
+  return {
+    id: tx.id,
+    kind: tx.kind,
+    assetCode,
+    status: tx.status,
+    amountIn: tx.amount_in,
+    amountOut: tx.amount_out,
+    amountFee: tx.amount_fee,
+    message: tx.message,
+    moreInfoUrl: tx.more_info_url,
+    stellarTransactionId: tx.stellar_transaction_id,
+    externalTransactionId: tx.external_transaction_id,
+    startedAt: tx.started_at ?? new Date().toISOString(),
+    completedAt: tx.completed_at,
+    statusHistory: [],
+  }
+}
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
@@ -152,7 +172,7 @@ export function Sep24Flow({
         id: interactive.id,
         authToken,
         signal: controller.signal,
-        onUpdate: (tx) => {
+        onUpdate: (tx: Sep24Transaction) => {
           onTransactionUpdate?.(tx)
           setTransaction(tx)
           const mapped = toComponentStatus(tx)
@@ -216,7 +236,7 @@ export function Sep24Flow({
       {/* Timeline (shown after start or when transaction is available) */}
       {showTimeline && transaction && (
         <Sep24Timeline
-          transaction={transaction}
+          transaction={toTimelineTransaction(transaction, assetCode)}
           onRetry={startFlow}
         />
       )}

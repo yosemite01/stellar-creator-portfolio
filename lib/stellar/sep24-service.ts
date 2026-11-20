@@ -10,7 +10,12 @@
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0024.md
  */
 
-import { type PrismaClient } from '@prisma/client'
+import { type Prisma, type PrismaClient, type Sep24Status, type Sep24Transaction } from '@prisma/client'
+
+/** A transaction with its status history, as returned by the getters below. */
+export type Sep24TransactionWithHistory = Prisma.Sep24TransactionGetPayload<{
+  include: { statusHistory: true }
+}>
 import {
   type Sep24Transaction as Sep24ApiTransaction,
   isTerminalStatus,
@@ -160,7 +165,7 @@ export async function updateSep24TransactionFromAnchor(
 export async function getSep24Transaction(
   prisma: PrismaClient,
   id: string,
-): Promise<Sep24Transaction | null> {
+): Promise<Sep24TransactionWithHistory | null> {
   return prisma.sep24Transaction.findUnique({
     where: { id },
     include: {
@@ -181,7 +186,7 @@ export async function getSep24Transaction(
 export async function getSep24TransactionByAnchorId(
   prisma: PrismaClient,
   anchorId: string,
-): Promise<Sep24Transaction | null> {
+): Promise<Sep24TransactionWithHistory | null> {
   return prisma.sep24Transaction.findUnique({
     where: { anchorId },
     include: {
@@ -232,27 +237,35 @@ export async function listUserSep24Transactions(
 export async function markStaleTransactions(
   prisma: PrismaClient,
 ): Promise<number> {
-  const result = await prisma.sep24Transaction.updateMany({
+  // updateMany can't create nested history rows, so update each stale row.
+  const stale = await prisma.sep24Transaction.findMany({
     where: {
       AND: [
         { staleAt: { lt: new Date() } },
         { status: { notIn: ['completed', 'refunded', 'expired', 'error'] } },
       ],
     },
-    data: {
-      status: 'error',
-      message: 'Polling abandoned - transaction marked stale',
-      statusHistory: {
-        create: {
-          status: 'error',
-          message: 'Polling abandoned - transaction marked stale',
-          metadata: { reason: 'stale' },
-        },
-      },
-    },
+    select: { id: true },
   })
 
-  return result.count
+  for (const { id } of stale) {
+    await prisma.sep24Transaction.update({
+      where: { id },
+      data: {
+        status: 'error',
+        message: 'Polling abandoned - transaction marked stale',
+        statusHistory: {
+          create: {
+            status: 'error',
+            message: 'Polling abandoned - transaction marked stale',
+            metadata: { reason: 'stale' },
+          },
+        },
+      },
+    })
+  }
+
+  return stale.length
 }
 
 /**
@@ -267,7 +280,7 @@ export async function markStaleTransactions(
  */
 export async function pollSep24Transaction(
   prisma: PrismaClient,
-  transaction: Sep24Transaction,
+  initial: Sep24Transaction,
   options: PollOptions,
 ): Promise<Sep24Transaction> {
   const { transferServer, id: anchorId, authToken, onUpdate, intervalMs = 3_000, signal } = options
@@ -280,7 +293,7 @@ export async function pollSep24Transaction(
     if (signal?.aborted) {
       await updateSep24TransactionStatus(
         prisma,
-        transaction.id,
+        initial.id,
         'error',
         'Polling aborted',
         { reason: 'aborted' },
@@ -289,14 +302,14 @@ export async function pollSep24Transaction(
     }
 
     const transaction = await prisma.sep24Transaction.findUnique({
-      where: { id: transaction.id },
+      where: { id: initial.id },
     })
 
     if (!transaction) {
-      throw new Error(`Transaction ${transaction.id} not found`)
+      throw new Error(`Transaction ${initial.id} not found`)
     }
 
-    if (transaction.status === 'stale') {
+    if (transaction.staleAt && transaction.staleAt < new Date()) {
       throw new Error('Transaction marked as stale')
     }
 

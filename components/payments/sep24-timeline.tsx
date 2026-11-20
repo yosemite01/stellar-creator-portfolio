@@ -87,10 +87,10 @@ const STATUS_DESCRIPTIONS: Record<string, { title: string; description: string; 
   },
 }
 
-interface Sep24Transaction {
+export interface Sep24TimelineTransaction {
   id: string
-  anchorId: string
-  transferServer: string
+  anchorId?: string
+  transferServer?: string
   kind: 'deposit' | 'withdrawal'
   assetCode: string
   amountIn?: string
@@ -103,10 +103,10 @@ interface Sep24Transaction {
   externalTransactionId?: string
   startedAt: string
   completedAt?: string
-  statusHistory: Sep24StatusEntry[]
+  statusHistory: Sep24TimelineEntry[]
 }
 
-interface Sep24StatusEntry {
+export interface Sep24TimelineEntry {
   id: string
   status: string
   message?: string
@@ -115,7 +115,7 @@ interface Sep24StatusEntry {
 }
 
 interface Sep24TimelineProps {
-  transaction: Sep24Transaction
+  transaction: Sep24TimelineTransaction
   onRetry?: () => void
 }
 
@@ -255,7 +255,7 @@ export function Sep24Timeline({ transaction, onRetry }: Sep24TimelineProps) {
                       <p className="text-sm text-muted-foreground mt-1">{entry.message}</p>
                     )}
                     
-                    {entry.metadata && (
+                    {entry.metadata != null && (
                       <pre className="text-xs text-muted-foreground bg-muted p-2 rounded mt-1 overflow-x-auto">
                         {JSON.stringify(entry.metadata, null, 2)}
                       </pre>

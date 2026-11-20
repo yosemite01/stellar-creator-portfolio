@@ -1,3 +1,4 @@
+import type { Sep24Status } from '@prisma/client'
 import { NextRequest, NextResponse } from 'next/server'
 import { getSep24Transaction, updateSep24TransactionStatus } from '@/lib/stellar/sep24-service'
 
@@ -111,7 +112,7 @@ export async function POST(request: NextRequest) {
         // Update status with history if changed
         statusHistory: {
           create: {
-            status,
+            status: status as Sep24Status,
             message: (anchorTx as { message?: string })?.message ?? undefined,
             metadata: {
               reason: 'callback',
