@@ -255,6 +255,8 @@ model ApiKey {
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   keyHash    String    @unique
+  /// Public, non-secret part of the key shown in the dashboard (see lib/api-keys.ts).
+  prefix     String?   @unique
   name       String
   scopes     String[]
   lastUsedAt DateTime?

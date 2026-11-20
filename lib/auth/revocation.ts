@@ -1,13 +1,7 @@
+import type { RevokedToken } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
-/**
- * Revoked token entry in database
- */
-export interface RevokedToken {
-  jti: string;
-  exp: number;
-  createdAt: Date;
-}
+export type { RevokedToken };
 
 /**
  * Check if a token has been revoked
@@ -24,8 +18,7 @@ export async function isTokenRevoked(jti: string): Promise<boolean> {
   }
 
   // Check if revocation has expired (cleanup old entries)
-  const now = Date.now();
-  if (revoked.exp < now / 1000) {
+  if (revoked.exp < new Date()) {
     await prisma.revokedToken.delete({ where: { jti } });
     return false;
   }
@@ -39,10 +32,11 @@ export async function isTokenRevoked(jti: string): Promise<boolean> {
  * @param exp - Token expiration timestamp (seconds)
  */
 export async function revokeToken(jti: string, exp: number): Promise<void> {
+  const expiresAt = new Date(exp * 1000);
   await prisma.revokedToken.upsert({
     where: { jti },
-    update: { exp },
-    create: { jti, exp },
+    update: { exp: expiresAt },
+    create: { jti, exp: expiresAt },
   });
 }
 
@@ -51,9 +45,8 @@ export async function revokeToken(jti: string, exp: number): Promise<void> {
  * @returns number - Number of entries cleaned up
  */
 export async function cleanupRevokedTokens(): Promise<number> {
-  const now = Date.now();
   const result = await prisma.revokedToken.deleteMany({
-    where: { exp: { lt: now / 1000 } },
+    where: { exp: { lt: new Date() } },
   });
 
   return result.count;

@@ -65,8 +65,8 @@ export async function getAdminSession(requiredRole?: AdminRole): Promise<AdminSe
   return {
     userId: session.user.id,
     role: adminRole,
-    email: user.email,
-    name: user.name,
+    email: user.email ?? undefined,
+    name: user.name ?? undefined,
   };
 }
 
