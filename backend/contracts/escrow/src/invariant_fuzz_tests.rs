@@ -70,12 +70,11 @@ impl World {
         env.ledger().set_timestamp(1_000);
         let token_admin = Address::generate(&env);
         let token = env.register_stellar_asset_contract_v2(token_admin).address();
-        let escrow_id = env.register(EscrowContract, ());
+        let admin = Address::generate(&env);
+        let escrow_id = env.register(EscrowContract, (admin.clone(),));
         let escrow = EscrowContractClient::new(&env, &escrow_id);
         let insurance_id = env.register(InsuranceContract, ());
         let insurance = InsuranceContractClient::new(&env, &insurance_id);
-        let admin = Address::generate(&env);
-        escrow.set_admin(&admin);
         insurance.initialize(&admin);
         let users = (0..3).map(|_| Address::generate(&env)).collect();
         let stranger = Address::generate(&env);
@@ -159,12 +158,14 @@ impl World {
                 }
             }
             4 => {
+                // No admin-settled disputes since #1713: a dispute without an
+                // arbiter panel is settled 50/50 by anyone once it expires.
                 let e = rng.index(self.escrows.len());
-                let as_admin = rng.chance(70);
-                let who = if as_admin { self.admin.clone() } else { self.stranger.clone() };
-                let ok = as_admin && self.escrows[e].status == St::Disputed;
-                let r = self.escrow.try_resolve_dispute(&who, &self.escrows[e].id, &rng.chance(50));
-                assert_eq!(r.is_ok(), ok, "resolve_dispute admin={as_admin}");
+                let t = self.env.ledger().timestamp();
+                self.env.ledger().set_timestamp(t + DISPUTE_TIMEOUT_SECS + 1);
+                let ok = self.escrows[e].status == St::Disputed;
+                let r = self.escrow.try_resolve_expired_dispute(&self.escrows[e].id);
+                assert_eq!(r.is_ok(), ok, "resolve_expired_dispute");
                 if ok {
                     let m = &mut self.escrows[e];
                     m.released = m.amount;
@@ -216,21 +217,13 @@ impl World {
                 self.pool += amt;
             }
             _ => {
-                // Insurance claim lifecycle.
+                // Claims now need a policy on a disputed escrow (#1711); a claim
+                // against a policy that does not exist must never be accepted,
+                // and the pool must be untouched.
                 let claimant = self.users[rng.index(3)].clone();
                 let amt = rng.amount(1, 200);
-                let cid = self.insurance.submit_claim(&claimant, &amt, &self.token, &String::from_str(&self.env, "ev"));
-                let t = self.env.ledger().timestamp();
-                self.env.ledger().set_timestamp(t + stellar_insurance_contract::CLAIM_VOTING_PERIOD_SECS);
-                // Stranger can never approve.
-                assert!(self.insurance.try_approve_claim(&self.stranger, &cid).is_err());
-                self.insurance.approve_claim(&self.admin, &cid);
-                let ok = amt <= self.pool;
-                let r = self.insurance.try_execute_payout(&self.admin, &cid);
-                assert_eq!(r.is_ok(), ok, "execute_payout amt={amt} pool={}", self.pool);
-                if ok {
-                    self.pool -= amt;
-                }
+                let r = self.insurance.try_submit_claim(&claimant, &u64::MAX, &amt, &String::from_str(&self.env, "ev"));
+                assert!(r.is_err(), "claim without a policy was accepted");
             }
         }
     }
@@ -268,7 +261,11 @@ impl World {
             let (id, payer) = (self.escrows[e].id, self.users[self.escrows[e].payer].clone());
             match self.escrows[e].status {
                 St::Active => { self.escrow.release_funds(&payer, &id); }
-                St::Disputed => { self.escrow.resolve_dispute(&self.admin, &id, &true); }
+                St::Disputed => {
+                    let t = self.env.ledger().timestamp();
+                    self.env.ledger().set_timestamp(t + DISPUTE_TIMEOUT_SECS + 1);
+                    self.escrow.resolve_expired_dispute(&id);
+                }
                 St::Closed => continue,
             }
             let m = &mut self.escrows[e];

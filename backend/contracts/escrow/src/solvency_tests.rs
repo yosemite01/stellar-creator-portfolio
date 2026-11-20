@@ -28,9 +28,8 @@ impl Ctx {
         let payer = Address::generate(&env);
         let payee = Address::generate(&env);
         StellarAssetClient::new(&env, &token).mint(&payer, &mint);
-        let cid = env.register(EscrowContract, ());
         let admin = Address::generate(&env);
-        EscrowContractClient::new(&env, &cid).set_admin(&admin);
+        let cid = env.register(EscrowContract, (admin.clone(),));
         Ctx { env, cid, admin, token, payer, payee }
     }
 
@@ -273,9 +272,10 @@ fn fuzz_solvency_invariant_holds_for_random_sequences() {
                 }
                 5 if !ids.is_empty() => {
                     let id = pick(&mut rng, &ids);
+                    // Disputes without an arbiter panel settle 50/50 once expired (#1713).
                     if client.try_dispute_escrow(&c.payer, &id).is_ok() {
-                        let to_payee = rng.below(2) == 0;
-                        let _ = client.try_resolve_dispute(&c.admin, &id, &to_payee);
+                        c.env.ledger().with_mut(|l| l.timestamp += DISPUTE_TIMEOUT_SECS + 1);
+                        let _ = client.try_resolve_expired_dispute(&id);
                     }
                 }
                 6 if !ids.is_empty() => {
@@ -304,7 +304,8 @@ fn fuzz_solvency_invariant_holds_for_random_sequences() {
             if e.status == EscrowStatus::Active {
                 client.release_funds(&c.payer, id);
             } else if e.status == EscrowStatus::Disputed {
-                client.resolve_dispute(&c.admin, id, &true);
+                c.env.ledger().with_mut(|l| l.timestamp += DISPUTE_TIMEOUT_SECS + 1);
+                client.resolve_expired_dispute(id);
             }
         }
         assert_eq!(client.get_total_liabilities(&c.token), 0);

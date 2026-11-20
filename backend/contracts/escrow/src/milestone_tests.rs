@@ -12,11 +12,12 @@ use stellar_contract_test_utils::fuzz::{run_seeds, Rng};
 fn setup(env: &Env, mint: i128) -> (EscrowContractClient<'static>, Address, Address, Address, Address) {
     env.mock_all_auths();
     let admin = Address::generate(env);
-    let token = env.register_stellar_asset_contract_v2(admin).address();
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
     let payer = Address::generate(env);
     let payee = Address::generate(env);
     StellarAssetClient::new(env, &token).mint(&payer, &mint);
-    let cid = env.register(EscrowContract, ());
+    // The token admin doubles as the escrow's constructor admin.
+    let cid = env.register(EscrowContract, (admin,));
     (EscrowContractClient::new(env, &cid), cid, token, payer, payee)
 }
 
@@ -220,8 +221,7 @@ fn stale_oracle_price_reverts_release() {
     o.set_oracle(&o_admin, &feeder);
     o.update_price(&feeder, &PriceData { price_micro_usd: 120_000, timestamp: 10_000, sources: 1 });
 
-    let admin = Address::generate(&env);
-    c.set_admin(&admin);
+    let admin = c.get_admin();
     c.set_oracle_address(&admin, &oracle_id);
     let id = c.deposit(&1, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
 
@@ -247,8 +247,7 @@ fn fresh_oracle_price_allows_release() {
     o.set_oracle(&o_admin, &feeder);
     o.update_price(&feeder, &PriceData { price_micro_usd: 120_000, timestamp: 10_000, sources: 1 });
 
-    let admin = Address::generate(&env);
-    c.set_admin(&admin);
+    let admin = c.get_admin();
     c.set_oracle_address(&admin, &oracle_id);
     let id = c.deposit(&1, &payer, &payee, &1000, &token, &ReleaseCondition::OnCompletion);
     assert!(c.release_funds(&payer, &id));

@@ -269,6 +269,15 @@ pub fn pending_admin(env: &Env) -> Option<Address> {
 #[macro_export]
 macro_rules! upgrade_timelock_tests {
     ($mod_name:ident, $contract:expr, $client:ident, |$env:ident, $id:ident, $admin:ident| $init:block) => {
+        $crate::upgrade_timelock_tests!(@inner $mod_name, $client, $env, $id, $admin,
+            $env.register($contract, ()), $init);
+    };
+    // For contracts whose `__constructor(admin)` sets the upgrade authority.
+    ($mod_name:ident, $contract:expr, $client:ident, constructor_admin) => {
+        $crate::upgrade_timelock_tests!(@inner $mod_name, $client, env, id, admin,
+            env.register($contract, (admin.clone(),)), {});
+    };
+    (@inner $mod_name:ident, $client:ident, $env:ident, $id:ident, $admin:ident, $register:expr, $init:block) => {
         #[cfg(test)]
         mod $mod_name {
             #[allow(unused_imports)]
@@ -283,8 +292,8 @@ macro_rules! upgrade_timelock_tests {
                 let $env = soroban_sdk::Env::default();
                 $env.mock_all_auths();
                 $env.ledger().set_timestamp(1_000_000);
-                let $id = $env.register($contract, ());
                 let $admin = soroban_sdk::Address::generate(&$env);
+                let $id = $register;
                 $init
                 ($env, $id, $admin)
             }
