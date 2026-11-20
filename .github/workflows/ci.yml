@@ -137,6 +137,9 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      # #1762 — expand/contract: no unmarked destructive statements in new migrations.
+      - name: Migration safety lint
+        run: node scripts/check-migration-safety.mjs
       - name: Apply all migrations
         run: pnpm exec prisma migrate deploy
       - name: Fail if schema has objects no migration creates (drift check)
