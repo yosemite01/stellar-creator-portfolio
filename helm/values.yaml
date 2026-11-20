@@ -1,4 +1,9 @@
 # Umbrella values — override per subchart
+discovery:
+  # Native Kubernetes DNS discovery (#1756); Consul is no longer required in dev or prod
+  type: k8s
+  clusterDomain: svc.cluster.local
+
 api:
   enabled: true
 auth:
