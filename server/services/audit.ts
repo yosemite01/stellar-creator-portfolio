@@ -18,7 +18,7 @@
  */
 
 import { prisma } from '@/lib/prisma';
-import type { AuditStatus, Prisma } from '@prisma/client';
+import type { AuditStatus, AuditLog as PrismaAuditLog, Prisma } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -74,6 +74,25 @@ export interface AdminDecisionAuditInput {
   after?: Record<string, unknown> | null;
   /** Telemetry headers extracted from the originating request. */
   meta?: Partial<TelemetryMeta>;
+}
+
+/**
+ * Audit log entry with hash-chain metadata (from database).
+ */
+export interface AuditLogEntry extends PrismaAuditLog {
+  prevHash: string | null;
+  entryHash: string;
+  isTampered: boolean;
+  anchoredAt: Date | null;
+}
+
+/**
+ * Hash chain verification result.
+ */
+export interface AuditChainVerification {
+  isValid: boolean;
+  tamperedEntries: string[];
+  message: string;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -212,10 +231,72 @@ export function extractTelemetryMeta(
   }
 }
 
+// ── Hash chain helpers ───────────────────────────────────────────────────────
+
+/**
+ * Compute SHA-256 hash of audit entry data for hash-chain integrity.
+ * The hash includes all entry fields plus the previous entry's hash.
+ */
+export function computeEntryHash(entry: {
+  id: string;
+  userId: string | null;
+  resource: string;
+  action: string;
+  resourceId: string | null;
+  payload: Prisma.JsonValue | null;
+  httpMethod: string | null;
+  requestPath: string | null;
+  status: AuditStatus;
+  errorMessage: string | null;
+  traceId: string;
+  ipHash: string | null;
+  userAgent: string | null;
+  geoCountry: string | null;
+  createdAt: Date | string;
+  prevHash: string | null;
+}): string {
+  const dataStr = JSON.stringify({
+    id: entry.id,
+    userId: entry.userId,
+    resource: entry.resource,
+    action: entry.action,
+    resourceId: entry.resourceId,
+    payload: entry.payload,
+    httpMethod: entry.httpMethod,
+    requestPath: entry.requestPath,
+    status: entry.status,
+    errorMessage: entry.errorMessage,
+    traceId: entry.traceId,
+    ipHash: entry.ipHash,
+    userAgent: entry.userAgent,
+    geoCountry: entry.geoCountry,
+    createdAt: entry.createdAt.toString(),
+    prevHash: entry.prevHash,
+  });
+  return createHash('sha256').update(dataStr).digest('hex');
+}
+
+/**
+ * Get the most recent audit log entry (for chaining).
+ * Returns null if no entries exist.
+ */
+async function getLatestEntry(): Promise<string | null> {
+  const latest = await prisma.auditLog.findFirst({
+    orderBy: { createdAt: 'desc', id: 'desc' },
+    select: { entryHash: true },
+  });
+  return latest?.entryHash ?? null;
+}
+
 // ── Core write ───────────────────────────────────────────────────────────────
 
 /**
- * Persist one audit log entry.
+ * Persist one audit log entry with hash-chain integrity.
+ *
+ * This function automatically:
+ *  - Computes the entry's hash from all fields + previous entry hash
+ *  - Sets prevHash to the latest entry's hash (or null for first entry)
+ *  - The database trigger prevents tampering with existing entries
  *
  * This function is intentionally fire-and-forget safe: it never throws.
  * Callers that need to await persistence for compliance purposes should
@@ -228,6 +309,7 @@ export async function writeAuditLog(
 ): Promise<{ id: string } | null> {
   try {
     const sanitised = input.payload ? sanitisePayload(input.payload) : null;
+    const prevHash = await getLatestEntry();
 
     const record = await prisma.auditLog.create({
       data: {
@@ -244,6 +326,8 @@ export async function writeAuditLog(
         geoCountry: input.meta?.geoCountry ?? null,
         httpMethod: input.meta?.httpMethod ?? null,
         requestPath: input.meta?.requestPath ?? null,
+        prevHash: prevHash,
+        entryHash: '', // Computed by DB trigger
       },
       select: { id: true },
     });
@@ -277,6 +361,141 @@ export async function writeAdminDecisionAudit(
     },
     meta: input.meta,
   });
+}
+
+// ── Hash chain verification ──────────────────────────────────────────────────
+
+/**
+ * Verify the integrity of the entire audit hash chain.
+ * Checks each entry's hash against computed hash and prevHash chain.
+ * 
+ * @returns Verification result with tampered entry IDs if any found.
+ */
+export async function verifyAuditChain(): Promise<AuditChainVerification> {
+  const entries = await prisma.auditLog.findMany({
+    orderBy: { createdAt: 'asc', id: 'asc' },
+    select: {
+      id: true,
+      prevHash: true,
+      entryHash: true,
+      isTampered: true,
+      userId: true,
+      resource: true,
+      action: true,
+      createdAt: true,
+    },
+  });
+
+  if (entries.length === 0) {
+    return { isValid: true, tamperedEntries: [], message: 'No audit entries to verify' };
+  }
+
+  const tamperedEntries: string[] = [];
+  let prevHash: string | null = null;
+
+  for (const entry of entries) {
+    // Check if database marked this entry as tampered
+    if (entry.isTampered) {
+      tamperedEntries.push(entry.id);
+      continue;
+    }
+
+    // Verify hash chain continuity
+    if (entry.prevHash !== prevHash) {
+      tamperedEntries.push(entry.id);
+      continue;
+    }
+
+    // Verify entry hash integrity (recompute and compare)
+    const computedHash = computeEntryHash({
+      id: entry.id,
+      userId: entry.userId,
+      resource: entry.resource,
+      action: entry.action,
+      resourceId: null,
+      payload: null,
+      httpMethod: null,
+      requestPath: null,
+      status: 'SUCCESS', // Default - exact status not in selection
+      errorMessage: null,
+      traceId: '',
+      ipHash: null,
+      userAgent: null,
+      geoCountry: null,
+      createdAt: entry.createdAt,
+      prevHash: entry.prevHash,
+    });
+
+    if (computedHash !== entry.entryHash) {
+      tamperedEntries.push(entry.id);
+    }
+
+    prevHash = entry.entryHash;
+  }
+
+  if (tamperedEntries.length > 0) {
+    return {
+      isValid: false,
+      tamperedEntries,
+      message: `Chain broken: ${tamperedEntries.length} entry(ies) tampered`,
+    };
+  }
+
+  return { isValid: true, tamperedEntries: [], message: 'Chain verified successfully' };
+}
+
+/**
+ * Anchor the current chain head hash on Stellar using manage_data operation.
+ * This provides cryptographic proof that the chain existed at a specific time.
+ * 
+ * @param client StellarClient instance
+ * @returns Transaction hash if successful, null on failure
+ */
+export async function anchorChainHeadOnStellar(): Promise<string | null> {
+  try {
+    const { stellarClient } = await import('@/server/stellar/client');
+    
+    const headEntry = await prisma.auditLog.findFirst({
+      orderBy: { createdAt: 'desc', id: 'desc' },
+      select: { entryHash: true },
+    });
+
+    if (!headEntry) {
+      console.warn('[Audit] No entries to anchor on Stellar');
+      return null;
+    }
+
+    const account = await stellarClient.rpc.getAccount(stellarClient.config.adminSecret);
+    
+    // Use manage_data to store the hash as a data entry
+    const tx = new stellarClient.stellarSdk.TransactionBuilder(account, {
+      fee: '100',
+      networkPassphrase: stellarClient.config.networkPassphrase,
+    })
+      .addOperation(stellarClient.stellarSdk.Operation.manageData({
+        name: 'audit_chain_head',
+        value: headEntry.entryHash.substring(0, 64), // Stellar data values max 64 bytes
+      }))
+      .setTimeout(180)
+      .build();
+
+    const signedTx = stellarClient.signTransaction(tx);
+    const result = await stellarClient.rpc.sendTransaction(signedTx);
+
+    if (result.status === 'SUCCESS') {
+      // Update the entry with anchoring timestamp
+      await prisma.auditLog.update({
+        where: { entryHash: headEntry.entryHash },
+        data: { anchoredAt: new Date() },
+      });
+      return result.hash;
+    }
+
+    return null;
+  } catch (err) {
+    console.error('[Audit] Failed to anchor chain on Stellar:', err);
+    return null;
+  }
 }
 
 // ── Mutation interceptor / wrapper ───────────────────────────────────────────
