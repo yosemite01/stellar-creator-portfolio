@@ -137,8 +137,9 @@ export async function POST(req: NextRequest) {
   // (and the OpenAI/HuggingFace embedding call it makes) must never be
   // able to roll back the profile write, and must never add its latency
   // to this response.
-  if (updatedCreatorProfile) {
-    const p = updatedCreatorProfile;
+  // TS can't see the assignment inside the transaction callback, so re-widen.
+  const p = updatedCreatorProfile as Prisma.CreatorProfileGetPayload<object> | null;
+  if (p) {
     onProfileChanged({
       id: p.id,
       displayName: p.displayName,

@@ -190,7 +190,7 @@ export async function POST(req: NextRequest) {
 
     // Check individual field sizes
     if ((typeof sdp === 'string' && sdp.length > 16 * 1024) || 
-        (typeof candidate === 'string' && candidate.length > 16 * 1024)) {
+        (candidate !== undefined && JSON.stringify(candidate).length > 16 * 1024)) {
       return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
     }
 

@@ -1329,3 +1329,16 @@ model KycKeyRotationHistory {
 
   @@index([rotatedAt])
 }
+
+/// CSP violation reports, stored only when CSP_ENFORCE=true (app/api/csp-report).
+model CSPViolation {
+  id        String   @id @default(cuid())
+  directive String
+  blocked   String
+  document  String
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([directive])
+}
