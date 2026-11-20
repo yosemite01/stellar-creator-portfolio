@@ -162,10 +162,12 @@ function assembleTransaction(
   simulation: RpcSimulateSuccess,
   networkPassphrase: string,
 ): string {
+  // `simulation` is the raw JSON-RPC result (XDR strings), which is what the
+  // SDK accepts as RawSimulateTransactionResponse; our local type is narrower.
   const tx = new StellarSdk.Transaction(xdr, networkPassphrase);
   // The SDK's assembleTransaction returns a TransactionBuilder; calling
   // .build() on it gives us a Transaction.
-  const assembled = StellarSdk.rpc.assembleTransaction(tx, simulation as StellarSdk.rpc.Api.SimulateTransactionResponse).build();
+  const assembled = StellarSdk.rpc.assembleTransaction(tx, simulation as unknown as StellarSdk.rpc.Api.RawSimulateTransactionResponse).build();
   return assembled.toXDR();
 }
 
