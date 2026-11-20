@@ -11,7 +11,13 @@
  *  - Single source of truth: Authorization logic in one place
  */
 
-import type { User } from '@/server/api/trpc'
+/** Any caller identity: a tRPC context user or a NextAuth session user. */
+export interface User {
+  id: string
+  email?: string | null
+  name?: string | null
+  role?: string
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,8 +74,8 @@ export function requireAuth(ctx: AuthContext): AuthenticatedUser {
 
   return {
     id: ctx.user.id,
-    email: ctx.user.email,
-    name: ctx.user.name,
+    email: ctx.user.email ?? null,
+    name: ctx.user.name ?? null,
     role,
   }
 }

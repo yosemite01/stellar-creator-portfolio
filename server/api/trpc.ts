@@ -29,7 +29,7 @@ import { getJwtSecret } from './jwt-secret';
 
 // ─── Context Creation ─────────────────────────────────────────────────────────
 
-export interface User {
+interface User {
   id: string;
   email: string | null;
   name: string | null;
