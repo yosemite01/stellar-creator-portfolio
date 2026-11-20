@@ -70,7 +70,7 @@ export async function verifyKycOnChain(
   if (kycSubmissionIdHash.length !== 32) {
     throw new Error('kycSubmissionIdHash must be exactly 32 bytes');
   }
-  const { commitment } = await kycOpeningForSubmission(kycSubmissionIdHash, level);
+  const { commitment } = await kycOpeningForSubmission(kycSubmissionIdHash);
 
   const adminSecret = await getSecret('STELLAR_ADMIN_SECRET');
   const signer = new LocalSigner(adminSecret);

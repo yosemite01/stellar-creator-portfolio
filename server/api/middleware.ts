@@ -1,5 +1,5 @@
-import { rateLimitMiddleware } from './rate-limit'
-import { requireRole, requireAuth, requireOwnership, NotAuthenticatedError, ForbiddenError } from '../services/authorization'
+import { checkRate } from './rate-limit'
+import { requireRole, requireAuth, requireOwnership, requireOwnerOrAdmin, NotAuthenticatedError, ForbiddenError } from '../services/authorization'
 import type { Request, Response, NextFunction } from 'express'
 
 // Express-style middleware. Applies stricter limits for unauthenticated users.

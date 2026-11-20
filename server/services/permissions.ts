@@ -106,6 +106,7 @@ export async function canApprovePayout(userId: string): Promise<boolean> {
  */
 export async function requireApprovePayoutPermission(): Promise<void> {
   await requireFinanceRole();
+  const { userId } = await getAdminSession();
   await requireStepUpAuthentication(userId, 'PAYOUT_APPROVAL');
 }
 

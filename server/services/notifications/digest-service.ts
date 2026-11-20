@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 /**
  * Notification digests (daily/weekly).
  *
@@ -120,10 +121,11 @@ export async function queueDigestEmails(
           subject: digestSubject(digest.frequency, digest.notifications.length),
           category: 'digest',
           status: 'QUEUED',
+          // Dates serialise to ISO strings; the shape is plain JSON.
           payload: {
             frequency: digest.frequency,
             notifications: digest.notifications,
-          },
+          } as unknown as Prisma.InputJsonValue,
         },
       }),
       prisma.notificationPreference.update({

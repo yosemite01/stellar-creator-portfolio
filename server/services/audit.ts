@@ -465,24 +465,32 @@ export async function anchorChainHeadOnStellar(): Promise<string | null> {
       return null;
     }
 
-    const account = await stellarClient.rpc.getAccount(stellarClient.config.adminSecret);
-    
+    const adminSecret = stellarClient.config.adminSecret;
+    if (!adminSecret) {
+      console.warn('[Audit] No Stellar admin secret configured; skipping anchor');
+      return null;
+    }
+    const { Keypair, Operation, TransactionBuilder } = await import('@stellar/stellar-sdk');
+    const keypair = Keypair.fromSecret(adminSecret);
+    const account = await stellarClient.rpc.getAccount(keypair.publicKey());
+
     // Use manage_data to store the hash as a data entry
-    const tx = new stellarClient.stellarSdk.TransactionBuilder(account, {
+    const tx = new TransactionBuilder(account, {
       fee: '100',
       networkPassphrase: stellarClient.config.networkPassphrase,
     })
-      .addOperation(stellarClient.stellarSdk.Operation.manageData({
+      .addOperation(Operation.manageData({
         name: 'audit_chain_head',
         value: headEntry.entryHash.substring(0, 64), // Stellar data values max 64 bytes
       }))
       .setTimeout(180)
       .build();
 
-    const signedTx = stellarClient.signTransaction(tx);
-    const result = await stellarClient.rpc.sendTransaction(signedTx);
+    tx.sign(keypair);
+    const result = await stellarClient.rpc.sendTransaction(tx);
 
-    if (result.status === 'SUCCESS') {
+    // Accepted by the RPC (PENDING) or already submitted (DUPLICATE).
+    if (result.status === 'PENDING' || result.status === 'DUPLICATE') {
       // Update the entry with anchoring timestamp
       await prisma.auditLog.update({
         where: { entryHash: headEntry.entryHash },

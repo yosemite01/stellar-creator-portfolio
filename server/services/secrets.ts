@@ -3,7 +3,7 @@
  * Routes all secret access through KMS provider with caching and rotation hooks.
  */
 
-import { getSecret, invalidateSecret, SecretName as KmsSecretName } from './kms';
+import { getSecret, invalidateSecret as invalidateKmsSecret, SecretName as KmsSecretName } from './kms';
 import { prisma } from '@/lib/prisma';
 
 // Extend KMS SecretName with additional secrets used throughout codebase
@@ -19,7 +19,10 @@ export type SecretName = KmsSecretName |
   'REDIS_URL' |
   'SENTRY_DSN' |
   'GOOGLE_CLIENT_ID' |
-  'GOOGLE_CLIENT_SECRET';
+  'GOOGLE_CLIENT_SECRET' |
+  'S3_ACCESS_KEY_ID' |
+  'S3_SECRET_ACCESS_KEY' |
+  'DATABASE_URL';
 
 /**
  * Retrieve a secret from the KMS provider.
@@ -56,13 +59,13 @@ export async function isSecretConfigured(name: SecretName): Promise<boolean> {
  */
 export function invalidateSecret(name: SecretName): void {
   const kmsName = mapToKmsName(name) as KmsSecretName;
-  invalidateSecret(kmsName);
+  invalidateKmsSecret(kmsName);
 }
 
 /**
  * Map extended secret names to KMS provider names.
  */
-function mapToKmsName(name: SecretName): SecretName {
+function mapToKmsName(name: SecretName): string {
   const mapping: Record<string, string> = {
     'RESEND_API_KEY': 'WEBHOOK_SECRET', // Reuse webhook secret for email
     'AWS_ACCESS_KEY_ID': 'STELLAR_ADMIN_SECRET', // Reuse Stellar admin key

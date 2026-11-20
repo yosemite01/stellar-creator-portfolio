@@ -81,7 +81,7 @@ export function requireAuth(ctx: AuthContext): AuthenticatedUser {
 export function requireRole(
   userOrCtx: AuthenticatedUser | AuthContext,
   allowedRoles: Role[],
-): void {
+): AuthenticatedUser {
   const user = 'id' in userOrCtx ? userOrCtx : requireAuth(userOrCtx)
 
   if (!allowedRoles.includes(user.role)) {
@@ -89,6 +89,7 @@ export function requireRole(
       `Action requires one of: ${allowedRoles.join(', ')}. Your role: ${user.role}`,
     )
   }
+  return user
 }
 
 /**
@@ -160,14 +161,12 @@ export function filterByUserOrAdmin<T extends { userId?: string | null }>(
 
 // ── tRPC Middleware Factory ───────────────────────────────────────────────────
 
-import type { MiddlewareFunction } from '@trpc/server'
-
 /**
  * Create a tRPC middleware that enforces role requirements.
  * Usage: .use(requireRoleMiddleware(['ADMIN', 'CLIENT']))
  */
-export function requireRoleMiddleware(allowedRoles: Role[]): MiddlewareFunction {
-  return async ({ ctx, next }) => {
+export function requireRoleMiddleware(allowedRoles: Role[]) {
+  return async <T>({ ctx, next }: { ctx: AuthContext; next: () => Promise<T> }): Promise<T> => {
     try {
       requireRole(ctx, allowedRoles)
     } catch (error) {

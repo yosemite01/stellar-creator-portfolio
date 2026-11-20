@@ -8,9 +8,7 @@
 
 import { anchorChainHeadOnStellar } from '@/server/services/audit';
 import { initStellarClient } from '@/server/stellar/client';
-import { getLogger } from '@/server/services/logger';
-
-const logger = getLogger('audit-anchoring');
+import { logger } from '@/lib/logger';
 const ANCHOR_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
@@ -32,7 +30,7 @@ async function runAnchoringCycle(): Promise<void> {
       logger.warn('No entries to anchor (empty audit log)');
     }
   } catch (err) {
-    logger.error('Failed to anchor audit chain:', err);
+    logger.error('Failed to anchor audit chain', { err: String(err) });
   }
 }
 
