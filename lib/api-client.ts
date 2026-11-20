@@ -292,3 +292,31 @@ export async function fetchBounties(params?: {
   const query = qs.toString() ? `?${qs}` : '';
   return dedupedFetch(`${API_BASE}/bounties${query}`);
 }
+
+export async function submitReview(
+  data: ReviewSubmission,
+): Promise<{ reviewId: string }> {
+  return apiFetch(`${API_BASE}/reviews`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function submitEscrowTransaction(
+  data: EscrowTransactionRequest,
+): Promise<EscrowTransactionResponse> {
+  return apiFetch(`${API_BASE}/escrow/transaction`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function releaseEscrow(
+  escrowId: string,
+  authorizerAddress: string,
+): Promise<EscrowTransactionResponse> {
+  return apiFetch(`${API_BASE}/escrow/${escrowId}/release`, {
+    method: 'POST',
+    body: JSON.stringify({ authorizerAddress }),
+  });
+}

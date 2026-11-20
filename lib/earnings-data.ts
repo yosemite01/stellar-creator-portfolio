@@ -104,13 +104,12 @@ export async function getEarningsReport(
   const rates = getFxRates();
   const displayRate = rates[displayCurrency] ?? 1;
 
-  // Aggregate released payments grouped by month and currency.
-  const grouped = await prisma.payment.groupBy({
-    by: ['currency'],
-    where: { userId, status: 'RELEASED' },
+  // Released escrows paid to this creator. Escrow amounts are USDC.
+  const released = await prisma.escrow.aggregate({
+    where: { creatorId: userId, status: 'released' },
     _sum: { amount: true },
-    _count: { _all: true },
   });
+  const grouped = [{ currency: 'USDC', _sum: { amount: released._sum.amount } }];
 
   const monthlyMap = new Map<string, MonthlyCurrencyTotal>();
   let totalThisYear = 0;
@@ -145,8 +144,8 @@ export async function getEarningsReport(
   }
 
   // Pending escrow (not yet released) in USD.
-  const pending = await prisma.payment.aggregate({
-    where: { userId, status: 'PENDING' },
+  const pending = await prisma.escrow.aggregate({
+    where: { creatorId: userId, status: 'active' },
     _sum: { amount: true },
   });
   const pendingEscrow = parseFloat(Number(pending._sum.amount ?? 0).toFixed(2));
@@ -191,4 +190,36 @@ export function computeSummary(txs: EarningTransaction[]): EarningsSummary {
     pendingEscrow: parseFloat(pendingEscrow.toFixed(2)),
     currency: 'USD',
   };
+}
+
+/**
+ * A creator's escrows as dashboard transactions: released escrows count as
+ * completed earnings, active ones as pending, refunded ones as failed.
+ */
+export async function getEarningTransactions(
+  userId: string,
+  prisma: PrismaClient,
+): Promise<EarningTransaction[]> {
+  const escrows = await prisma.escrow.findMany({
+    where: { creatorId: userId },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+  });
+
+  return escrows.map((e) => {
+    const status: EarningTransaction['status'] =
+      e.status === 'released' ? 'completed' : e.status === 'refunded' ? 'failed' : 'pending';
+    return {
+      id: e.id,
+      bountyId: e.id,
+      bountyTitle: `Escrow ${e.id.slice(0, 8)}`,
+      clientName: e.clientId,
+      amount: e.amount,
+      currency: 'USDC',
+      usdEquivalent: toUSD(e.amount, 'USDC'),
+      date: (e.releasedAt ?? e.createdAt).toISOString(),
+      status,
+      txHash: '',
+    };
+  });
 }

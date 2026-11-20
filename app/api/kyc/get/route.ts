@@ -41,8 +41,6 @@ export async function GET(req: NextRequest) {
       keyVersion: true,
       verifiedOnChain: true,
       txHash: true,
-      uploadedAt: true,
-      adminReviewedAt: true,
     },
   });
 

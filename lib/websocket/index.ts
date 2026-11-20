@@ -32,6 +32,10 @@ export class RealtimeWebSocket {
     this.connect()
   }
 
+  public isOpen(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN
+  }
+
   private buildUrl(): string {
     if (!this.authToken) return this.url
     try {
@@ -84,5 +88,68 @@ export class RealtimeWebSocket {
   public close() {
     this.reconnect = false
     this.ws?.close()
+  }
+}
+
+export interface WebSocketClientOptions {
+  url: string
+  reconnectAttempts?: number
+  /** Kept for API compatibility; reconnects use exponential backoff. */
+  reconnectDelay?: number
+  onMessage?: (message: unknown) => void
+  onError?: (error: Error) => void
+  onConnectionChange?: (event: { status: 'connected' | 'disconnected' | 'error'; message?: string }) => void
+}
+
+export interface WebSocketClient {
+  connect(): void
+  disconnect(): void
+  isConnected(): boolean
+  send(data: unknown): void
+}
+
+/**
+ * Lazily-connecting client used by `hooks/useWebSocket`. Messages are parsed
+ * as JSON; non-JSON frames are passed through as strings.
+ */
+export function createWebSocketClient(options: WebSocketClientOptions): WebSocketClient {
+  let socket: RealtimeWebSocket | null = null
+
+  return {
+    connect() {
+      if (socket) return
+      socket = new RealtimeWebSocket(options.url, {
+        maxRetries: options.reconnectAttempts,
+        onStatusChange: (status) => {
+          if (status === 'open') options.onConnectionChange?.({ status: 'connected' })
+          else if (status === 'closed') options.onConnectionChange?.({ status: 'disconnected' })
+          else if (status === 'error') {
+            options.onConnectionChange?.({ status: 'error' })
+            options.onError?.(new Error('WebSocket error'))
+          }
+        },
+      })
+      socket.subscribe((event) => {
+        let data: unknown = event.data
+        if (typeof data === 'string') {
+          try {
+            data = JSON.parse(data)
+          } catch {
+            // leave as a string
+          }
+        }
+        options.onMessage?.(data)
+      })
+    },
+    disconnect() {
+      socket?.close()
+      socket = null
+    },
+    isConnected() {
+      return socket?.isOpen() ?? false
+    },
+    send(data) {
+      socket?.send(data)
+    },
   }
 }
