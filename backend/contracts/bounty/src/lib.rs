@@ -1402,7 +1402,7 @@ mod tests {
     fn link_escrow_requires_escrow_contract() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (Address::generate(&env),)));
         let creator = Address::generate(&env);
         let id = contract.create_bounty(
             &creator,
@@ -1420,9 +1420,8 @@ mod tests {
         use soroban_sdk::testutils::Ledger;
         let env = Env::default();
         env.mock_all_auths();
-        let contract = BountyContractClient::new(&env, &env.register(BountyContract, ()));
         let admin = Address::generate(&env);
-        contract.set_admin(&admin);
+        let contract = BountyContractClient::new(&env, &env.register(BountyContract, (admin.clone(),)));
         let registered = Address::generate(&env);
         contract.set_escrow_contract(&admin, &registered);
         let creator = Address::generate(&env);
@@ -1444,11 +1443,4 @@ mod tests {
 }
 
 // Issue #1719: shared upgrade-timelock conformance tests.
-stellar_upgradeable::upgrade_timelock_tests!(
-    upgrade_conformance,
-    BountyContract,
-    BountyContractClient,
-    |env, id, admin| {
-        BountyContractClient::new(&env, &id).initialize(&admin);
-    }
-);
+stellar_upgradeable::upgrade_timelock_tests!(upgrade_conformance, BountyContract, BountyContractClient, constructor_admin);

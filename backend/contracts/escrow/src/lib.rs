@@ -2942,8 +2942,12 @@ mod tests {
     fn deposit_rejects_fee_on_transfer_token() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        // Every instance has a constructor admin, so the token must be
+        // allowlisted to reach the balance-delta check (#1708, #1715).
+        let admin = Address::generate(&env);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
         let token = env.register(mock_tokens::FeeOnTransferToken, ());
+        contract.allow_token(&admin, &token);
         let payer = Address::generate(&env);
         let payee = Address::generate(&env);
         mock_tokens::FeeOnTransferTokenClient::new(&env, &token).mint(&payer, &10_000);
@@ -2957,8 +2961,12 @@ mod tests {
     fn deposit_rejects_noop_transfer_token() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        // Every instance has a constructor admin, so the token must be
+        // allowlisted to reach the balance-delta check (#1708, #1715).
+        let admin = Address::generate(&env);
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
         let token = env.register(mock_tokens::NoopToken, ());
+        contract.allow_token(&admin, &token);
         let payer = Address::generate(&env);
         let payee = Address::generate(&env);
 

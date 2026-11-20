@@ -41,15 +41,13 @@ fn world<'a>() -> World<'a> {
     let freelancer = Address::generate(&env);
     StellarAssetClient::new(&env, &token).mint(&creator, &10_000);
 
-    let escrow_addr = env.register(EscrowContract, ());
-    let bounty_addr = env.register(BountyContract, ());
+    let escrow_addr = env.register(EscrowContract, (admin.clone(),));
+    let bounty_addr = env.register(BountyContract, (admin.clone(),));
     let escrow = EscrowContractClient::new(&env, &escrow_addr);
     let bounty = BountyContractClient::new(&env, &bounty_addr);
 
-    escrow.set_admin(&admin);
     escrow.allow_token(&admin, &token);
     escrow.set_bounty_contract(&admin, &bounty_addr);
-    bounty.set_admin(&admin);
     bounty.set_escrow_contract(&admin, &escrow_addr);
 
     World { env, bounty, escrow, escrow_addr, token, creator, freelancer }
