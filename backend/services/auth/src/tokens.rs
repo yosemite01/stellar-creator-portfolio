@@ -57,7 +57,7 @@ pub fn sign_access_token(
         iat: now.timestamp(),
         id: user_id.to_string(),
         role: role.to_string(),
-        emailVerified,
+        emailVerified: email_verified,
         onboardingCompleted: onboarding_completed,
     };
     
@@ -67,6 +67,31 @@ pub fn sign_access_token(
         &claims,
         &private_key,
     )
+}
+
+/// Sign an access token with the service's shared HS256 secret.
+///
+/// Used by this service's own login/refresh handlers until they move to the
+/// RSA keys issued by the identity provider.
+pub fn sign_access_token_hs256(
+    user_id: &str,
+    family_id: Uuid,
+    secret: &str,
+    ttl: Duration,
+) -> Result<String, jsonwebtoken::errors::Error> {
+    let now = Utc::now();
+    let claims = AccessClaims {
+        sub: user_id.to_string(),
+        jti: Uuid::new_v4(),
+        family_id,
+        exp: (now + ttl).timestamp(),
+        iat: now.timestamp(),
+        id: user_id.to_string(),
+        role: "user".to_string(),
+        emailVerified: None,
+        onboardingCompleted: false,
+    };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
 }
 
 /// Verify an access token using RSA public key from JWKS
@@ -135,7 +160,7 @@ pub async fn verify_access_token_from_jwks(
     // Convert JWK to PEM format
     let public_key_pem = jwk_to_pem(key)?;
     
-    verify_access_token(token, &public_key_pem)
+    verify_access_token(token, &public_key_pem).map_err(|e| TokenError::Jwt(e.to_string()))
 }
 
 /// JWKS structure
@@ -148,7 +173,8 @@ pub struct JWKS {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct JWK {
     pub kty: String,
-    pub use: String,
+    #[serde(rename = "use")]
+    pub use_: String,
     pub kid: String,
     pub n: String,
     pub e: String,

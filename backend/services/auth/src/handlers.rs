@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::config::{Config, OAuthProvider, OAuthProviderConfig};
 use crate::db;
 use crate::error::AuthError;
-use crate::tokens::{generate_refresh_token, hash_refresh_token, sign_access_token};
+use crate::tokens::{generate_refresh_token, hash_refresh_token, sign_access_token_hs256};
 
 #[derive(Deserialize)]
 pub struct MintTokenRequest {
@@ -175,7 +175,7 @@ async fn mint_tokens_for_user(
 
     db::insert_refresh_token(pool, row_id, user_id, &refresh_hash, family_id, expires_at).await?;
 
-    let access = sign_access_token(
+    let access = sign_access_token_hs256(
         user_id,
         family_id,
         &config.jwt_secret,
@@ -229,7 +229,7 @@ pub async fn mint_tokens(
     )
     .await?;
 
-    let access = sign_access_token(
+    let access = sign_access_token_hs256(
         &body.user_id,
         family_id,
         &config.jwt_secret,
@@ -327,7 +327,7 @@ pub async fn refresh_tokens(
     let (user_id, family_id) =
         db::rotate_refresh_token(pool.get_ref(), &old_hash, new_id, &new_hash, expires_at).await?;
 
-    let access = sign_access_token(
+    let access = sign_access_token_hs256(
         &user_id,
         family_id,
         &config.jwt_secret,
