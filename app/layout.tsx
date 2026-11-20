@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 
 import { Analytics } from '@vercel/analytics/next';
+import { WebVitalsReporter } from '@/components/analytics/web-vitals-reporter';
 import { ThemeProvider } from 'next-themes';
 import { LayoutProvider } from '@/components/layout/layout-provider';
 import { DataLoaderProvider } from '@/components/providers/data-loader-provider';
@@ -97,6 +98,7 @@ export default async function RootLayout({
           </SessionProvider>
           {/* @vercel/analytics has no nonce prop; CSP must allow its script origin. */}
           <Analytics />
+          <WebVitalsReporter />
         </ThemeProvider>
       </body>
     </html>
