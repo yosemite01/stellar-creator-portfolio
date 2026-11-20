@@ -19,6 +19,9 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    # Step conditions can't read secrets directly; without a token every Snyk step is skipped.
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
     steps:
       - name: Checkout
@@ -38,6 +41,7 @@ jobs:
 
       # ── npm scan ────────────────────────────────────────────────────────────
       - name: Snyk — npm dependencies
+        if: env.SNYK_TOKEN != ''
         uses: snyk/actions/node@v1
         # continue-on-error removed: high findings will now fail the step
         env:
@@ -60,9 +64,11 @@ jobs:
 
       # There is no snyk/actions/rust action; install the Snyk CLI and run it directly.
       - name: Set up Snyk CLI
+        if: env.SNYK_TOKEN != ''
         uses: snyk/actions/setup@master
 
       - name: Snyk — Cargo dependencies
+        if: env.SNYK_TOKEN != ''
         # Snyk's Cargo support is still limited; report findings without failing the build.
         continue-on-error: true
         env:
@@ -78,6 +84,7 @@ jobs:
 
       # ── SAST ────────────────────────────────────────────────────────────────
       - name: Snyk — static code analysis (SAST)
+        if: env.SNYK_TOKEN != ''
         uses: snyk/actions/node@v1
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -94,7 +101,7 @@ jobs:
 
       - name: Snyk — monitor (track on snyk.io)
         uses: snyk/actions/node@v1
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.SNYK_TOKEN != ''
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
