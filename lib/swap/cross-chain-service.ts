@@ -10,8 +10,7 @@
  * @see https://github.com/yosemite01/stellar-creator-portfolio/issues/1725
  */
 
-import { type PrismaClient } from '@prisma/client'
-import { v4 as uuidv4 } from 'uuid'
+import { type PrismaClient, type SwapPhase, type SwapSession, type SwapStatus } from '@prisma/client'
 
 // Re-export types for convenience
 export type {
@@ -50,7 +49,7 @@ export async function createSwapSession(
   const { fromChain, toChain, fromAmount, slippageBps = 50 } = params
 
   // Generate HTLC preimage and hash
-  const secret = uuidv4()
+  const secret = crypto.randomUUID()
   const hash = await sha256(secret)
 
   // Calculate minOut with slippage tolerance
@@ -86,27 +85,7 @@ export async function createSwapSession(
       phase: 'initiated',
       htlcLocktime: Math.floor(ttlSeconds / 5), // Locktime is 1/5 of expiry
     },
-    include: {
-      // Don't include htlcSecret in responses
-      select: {
-        id: true,
-        userId: true,
-        fromChain: true,
-        toChain: true,
-        fromAmount: true,
-        toAmount: true,
-        minOut: true,
-        quoteExpiry: true,
-        routeId: true,
-        hops: true,
-        htlcHash: true,
-        status: true,
-        phase: true,
-        refundTxId: true,
-        startedAt: true,
-        createdAt: true,
-      },
-    },
+    // The row includes htlcSecret; API routes must strip it before responding.
   })
 
   return session

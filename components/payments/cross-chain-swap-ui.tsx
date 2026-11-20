@@ -38,6 +38,7 @@ export type SwapStatus =
   | 'htlc_locked'
   | 'destination_claiming'
   | 'destination_claimed'
+  | 'completed'
   | 'refund_requested'
   | 'refunded'
   | 'error'
@@ -56,6 +57,7 @@ interface SwapSession {
   status: SwapStatus
   phase?: string
   hops?: Array<{ chain: string; protocol: string; feeBps: number }>
+  refundTxId?: string
 }
 
 interface CrossChainSwapUIProps {
