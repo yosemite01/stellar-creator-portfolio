@@ -104,6 +104,8 @@ model User {
   pushDeviceTokens    PushDeviceToken[]
   threadMemberships   ThreadMember[]
   messagesSent        Message[]      @relation("message_sender")
+  sep24Transactions   Sep24Transaction[]
+  swapSessions        SwapSession[]
 
   @@index([email])
   @@index([suspendedAt])
@@ -1102,10 +1104,6 @@ model Message {
   @@index([senderId])
   @@map("messages")
 }
-  @@index([threadId, createdAt(sort: Desc)])
-  @@index([senderId])
-  @@map("messages")
-}
 
 // ── SEP-24 Transaction Tracking — Issue #1548 ──────────────────────────────
 
@@ -1202,10 +1200,6 @@ enum Sep24Status {
   too_small
   too_large
   error
-}
-  @@index([threadId, createdAt(sort: Desc)])
-  @@index([senderId])
-  @@map("messages")
 }
 
 // ── Cross-Chain Swap Sessions — Issue #1725 ────────────────────────────────
