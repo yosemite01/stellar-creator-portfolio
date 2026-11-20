@@ -13,44 +13,17 @@ import { createHmac } from 'crypto';
 import { getServerSession } from '@/lib/auth/auth';
 import {
   DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
-  allowSignalingMessage,
-  fieldWithinLimit,
-  messageTooLarge,
-  relayAllowed,
   signCallToken,
   signalingTokenSecret,
-  verifyCallToken,
+  generateTurnCredentials,
 } from '@/server/realtime/signaling-policy';
+import { requireAuth } from '@/server/services/authorization';
 
 const MAX_PEERS_PER_ROOM = parseInt(process.env.MAX_PEERS_PER_ROOM ?? '2', 10);
 
 const peerOwners = new Map<string, { userId: string; lastSeen: number }>();
 const roomMembers = new Map<string, Map<string, number>>();
 const peerRooms = new Map<string, string>();
-const messageTimestamps = new Map<string, number[]>();
-
-function claimPeerId(peerId: string, userId: string): boolean {
-  const owner = peerOwners.get(peerId);
-  if (owner === undefined) {
-    peerOwners.set(peerId, { userId, lastSeen: Date.now() });
-    return true;
-  }
-  if (owner.userId !== userId) return false;
-  owner.lastSeen = Date.now();
-  return true;
-}
-
-function claimRoomMembership(roomId: string, userId: string, peerId: string): boolean {
-  let members = roomMembers.get(roomId);
-  if (!members) {
-    members = new Map();
-    roomMembers.set(roomId, members);
-  }
-  if (!members.has(userId) && members.size >= MAX_PEERS_PER_ROOM) return false;
-  members.set(userId, Date.now());
-  peerRooms.set(peerId, roomId);
-  return true;
-}
 
 const TURN_SECRET = process.env.TURN_SECRET ?? 'insecure-dev-secret';
 const TURN_HOST = process.env.TURN_HOST ?? 'turn.example.com';
@@ -103,17 +76,13 @@ interface RTCIceCandidateInit {
 }
 
 function generateIceServers(peerId: string) {
-  const expiry = Math.floor(Date.now() / 1000) + TURN_CREDENTIAL_TTL;
-  const username = `${expiry}:${peerId}`;
-  const credential = createHmac('sha1', TURN_SECRET)
-    .update(username)
-    .digest('base64');
-
+  const credentials = generateTurnCredentials(peerId, TURN_SECRET, TURN_CREDENTIAL_TTL);
+  
   return [
     { urls: STUN_URL },
-    { urls: `turn:${TURN_HOST}:${TURN_PORT}`, username, credential },
-    { urls: `turn:${TURN_HOST}:${TURN_PORT}?transport=tcp`, username, credential },
-    { urls: `turns:${TURN_HOST}:${TURN_TLS_PORT}`, username, credential },
+    { urls: `turn:${TURN_HOST}:${TURN_PORT}`, username: credentials.username, credential: credentials.credential },
+    { urls: `turn:${TURN_HOST}:${TURN_PORT}?transport=tcp`, username: credentials.username, credential: credentials.credential },
+    { urls: `turns:${TURN_HOST}:${TURN_TLS_PORT}`, username: credentials.username, credential: credentials.credential },
   ];
 }
 
@@ -130,10 +99,7 @@ function issueCallToken(userId: string, callId: string, peerId: string) {
  */
 export async function GET(req: NextRequest) {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const userId = session.user.id;
+  const user = requireAuth({ user: session?.user });
 
   const roomId = req.nextUrl.searchParams.get('roomId');
   const sinceParam = req.nextUrl.searchParams.get('since');
@@ -141,13 +107,13 @@ export async function GET(req: NextRequest) {
   const isPoll = Boolean(roomId && peerIdParam && sinceParam !== null);
 
   if (isPoll && roomId && peerIdParam) {
-    if (!claimPeerId(peerIdParam, userId)) {
+    if (!claimPeerId(peerIdParam, user.id)) {
       return NextResponse.json(
         { error: 'peerId is already registered to another user' },
         { status: 403 },
       );
     }
-    if (!claimRoomMembership(roomId, userId, peerIdParam)) {
+    if (!claimRoomMembership(roomId, user.id, peerIdParam)) {
       return NextResponse.json({ error: 'Room is full' }, { status: 403 });
     }
 
@@ -158,20 +124,20 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       messages,
-      callToken: issueCallToken(userId, roomId, peerIdParam),
+      callToken: issueCallToken(user.id, roomId, peerIdParam),
     });
   }
 
-  const peerId = peerIdParam ?? `${userId}-${Date.now().toString(36)}`;
-  if (!claimPeerId(peerId, userId)) {
+  const peerId = peerIdParam ?? `${user.id}-${Date.now().toString(36)}`;
+  if (!claimPeerId(peerId, user.id)) {
     return NextResponse.json(
       { error: 'peerId is already registered to another user' },
       { status: 403 },
     );
   }
 
-  const callToken = roomId ? issueCallToken(userId, roomId, peerId) : undefined;
-  if (roomId && !claimRoomMembership(roomId, userId, peerId)) {
+  const callToken = roomId ? issueCallToken(user.id, roomId, peerId) : undefined;
+  if (roomId && !claimRoomMembership(roomId, user.id, peerId)) {
     return NextResponse.json({ error: 'Room is full' }, { status: 403 });
   }
 
@@ -191,14 +157,14 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const userId = session.user.id;
+  const user = requireAuth({ user: session?.user });
 
   try {
     const raw = await req.text();
-    if (messageTooLarge(Buffer.byteLength(raw, 'utf8'))) {
+    
+    // Check message size limit
+    const byteLength = Buffer.byteLength(raw, 'utf8');
+    if (byteLength > 16 * 1024) {
       return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
     }
 
@@ -222,22 +188,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!fieldWithinLimit(sdp) || !fieldWithinLimit(candidate)) {
+    // Check individual field sizes
+    if ((typeof sdp === 'string' && sdp.length > 16 * 1024) || 
+        (typeof candidate === 'string' && candidate.length > 16 * 1024)) {
       return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
     }
 
     const claims = token ? verifyCallToken(token, signalingTokenSecret()) : null;
-    if (!claims || claims.userId !== userId || claims.callId !== roomId || claims.peerId !== peerId) {
+    if (!claims || claims.userId !== user.id || claims.callId !== roomId || claims.peerId !== peerId) {
       return NextResponse.json({ error: 'Invalid call token' }, { status: 401 });
     }
 
-    if (!claimPeerId(peerId, userId)) {
+    if (!claimPeerId(peerId, user.id)) {
       return NextResponse.json(
         { error: 'peerId is already registered to another user' },
         { status: 403 },
       );
     }
-    if (!claimRoomMembership(roomId, userId, peerId)) {
+    if (!claimRoomMembership(roomId, user.id, peerId)) {
       return NextResponse.json({ error: 'Room is full' }, { status: 403 });
     }
 
@@ -245,9 +213,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Peer is not in this room' }, { status: 403 });
     }
 
-    const decision = allowSignalingMessage(messageTimestamps.get(userId) ?? []);
-    messageTimestamps.set(userId, decision.timestamps);
-    if (!decision.allowed) {
+    // Rate limiting (user-level)
+    if (!checkRateLimit(user.id)) {
       return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
     }
 
@@ -261,3 +228,53 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
 }
+
+// ── Helper Functions ──────────────────────────────────────────────────────────
+
+function claimPeerId(peerId: string, userId: string): boolean {
+  const owner = peerOwners.get(peerId);
+  if (owner === undefined) {
+    peerOwners.set(peerId, { userId, lastSeen: Date.now() });
+    return true;
+  }
+  if (owner.userId !== userId) return false;
+  owner.lastSeen = Date.now();
+  return true;
+}
+
+function claimRoomMembership(roomId: string, userId: string, peerId: string): boolean {
+  let members = roomMembers.get(roomId);
+  if (!members) {
+    members = new Map();
+    roomMembers.set(roomId, members);
+  }
+  if (!members.has(userId) && members.size >= MAX_PEERS_PER_ROOM) return false;
+  members.set(userId, Date.now());
+  peerRooms.set(peerId, roomId);
+  return true;
+}
+
+// Rate limiting - simple counter based
+const rateLimits = new Map<string, { count: number; windowStart: number }>();
+const RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
+const RATE_LIMIT_MAX = 50; // 50 messages per window
+
+function checkRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const existing = rateLimits.get(userId);
+  
+  if (!existing || now - existing.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rateLimits.set(userId, { count: 1, windowStart: now });
+    return true;
+  }
+  
+  if (existing.count >= RATE_LIMIT_MAX) {
+    return false;
+  }
+  
+  existing.count++;
+  return true;
+}
+
+// Import from signaling-policy (re-exported)
+import { relayAllowed, verifyCallToken } from '@/server/realtime/signaling-policy';
