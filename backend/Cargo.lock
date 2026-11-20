@@ -608,6 +608,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "base64-url"
+version = "3.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45b38ad425094225eb98698cb76c29af8452114bfaa286ac6ada37ade1489802"
+dependencies = [
+ "base64 0.22.1",
+]
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4677,6 +4686,7 @@ dependencies = [
  "actix-web",
  "anyhow",
  "base32",
+ "base64-url",
  "chrono",
  "dotenvy",
  "ed25519-dalek 3.0.0",
@@ -4722,6 +4732,7 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-contract-ttl",
  "stellar-upgradeable",
 ]
 
@@ -4740,6 +4751,13 @@ dependencies = [
 
 [[package]]
 name = "stellar-contract-test-utils"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "stellar-contract-ttl"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -4776,6 +4794,7 @@ dependencies = [
  "oracle",
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-contract-ttl",
  "stellar-insurance-contract",
  "stellar-upgradeable",
 ]
@@ -4794,6 +4813,7 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-contract-ttl",
  "stellar-upgradeable",
 ]
 
