@@ -32,8 +32,12 @@ RUN rustup target add wasm32v1-none && \
 
 # Pin stellar-cli to a specific version so the WASM optimizer it applies is
 # reproducible.  Update this alongside Cargo.toml MSRV bumps.
-RUN cargo install --locked stellar-cli@28.1.0 --features opt 2>/dev/null || \
-    cargo install stellar-cli@28.1.0 --features opt
+# stellar-cli 28 has no "opt" feature (wasm optimize is built in) and needs
+# dbus/udev headers plus pkg-config to compile.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends pkg-config libdbus-1-dev libudev-dev libssl-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    cargo install --locked stellar-cli@28.1.0
 
 WORKDIR /build
 

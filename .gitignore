@@ -75,11 +75,4 @@ __v0_jsx-dev-runtime.ts
 
 # Local scratch notes
 somzilla.md
-
-# Local changelog (kept out of repo)
-CHANGES.md
-
-# RSA keys for JWT signing (do not commit)
-.auth-keys/
-# RSA keys for JWT signing (do not commit)
-.auth-keys/
+CHANGES_LOCAL.md
