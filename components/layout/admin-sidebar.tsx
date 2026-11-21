@@ -11,7 +11,7 @@ import {
   DollarSign,
 } from 'lucide-react';
 import { ResponsiveSidebar, type SidebarItem } from '@/components/layout/sidebar';
-import { canAccess } from '@/lib/auth/admin-auth';
+import { canAccess } from '@/lib/auth/admin-roles';
 
 // Admin navigation items with role requirements
 interface NavItem extends SidebarItem {
