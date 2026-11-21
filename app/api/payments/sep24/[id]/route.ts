@@ -18,14 +18,15 @@ import type { Sep24Status } from '@prisma/client'
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await params
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const transaction = await getSep24Transaction(prisma, params.id)
+  const transaction = await getSep24Transaction(prisma, id)
 
   if (!transaction) {
     return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
@@ -75,8 +76,9 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await params
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -87,7 +89,7 @@ export async function POST(
 
   try {
     const transaction = await db.sep24Transaction.findUnique({
-      where: { id: params.id },
+      where: { id: id },
     })
 
     if (!transaction) {
@@ -146,7 +148,7 @@ export async function POST(
 
     // Update the transaction
     const updated = await db.sep24Transaction.update({
-      where: { id: params.id },
+      where: { id: id },
       data: {
         amountIn: anchorTx.amount_in ?? undefined,
         amountOut: anchorTx.amount_out ?? undefined,
