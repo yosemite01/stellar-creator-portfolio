@@ -298,6 +298,40 @@ should match on the code instead.
 | 23 | `InsufficientLiquidity` | Withdrawal would breach the liquidity floor |
 | 24 | `InvalidFeeConfig` | Fee bps outside 0–1 000 or negative cap |
 | 25 | `InvalidStaleness` | Staleness outside 60–86 400 s |
+| 26 | `TokenNotAllowed` | `deposit` with a token that is not on the admin allowlist (#1715) |
+| 27 | `TokenTransferMismatch` | Token moved a different amount than requested (fee-on-transfer, rebasing or no-op `transfer`) (#1715) |
+| 28 | `BountyContractNotSet` | Bounty-driven call before `set_bounty_contract` (#1714) |
+| 29 | `NotBountyContract` | Caller is not the registered bounty contract (#1714) |
+| 30 | `ManagedByBounty` | Escrow is bound to a bounty; drive it through the bounty contract (#1714) |
+| 31 | `EscrowAlreadyBound` | Escrow or bounty is already bound (#1714) |
+| 32 | `BountyMismatch` | Escrow belongs to another bounty or payer (#1714) |
+| 33 | `FeeExceedsMax` | Effective platform fee exceeds the caller-supplied `max_fee` (#1724) |
+| 34 | `NoPendingFeeUpdate` | No fee change is scheduled, or it already took effect |
+| 35 | `FeeTimelockActive` | `apply_fee_update` called before `FEE_CHANGE_DELAY_SECS` elapsed |
+| 36 | `ArbitrationNotConfigured` | Arbitration call before arbitration is configured (#1713) |
+| 37 | `ArbitrationAlreadyConfigured` | Arbitration is already configured |
+| 38 | `InsufficientStake` | Arbiter stake is below the configured minimum |
+| 39 | `ArbiterNotFound` | No arbiter registered for that address |
+| 40 | `ArbiterBusy` | Arbiter is on an open case and can't leave the pool |
+| 41 | `NotEnoughArbiters` | Pool is too small to draw a panel |
+| 42 | `CaseNotFound` | No arbitration case for that escrow |
+| 43 | `NotOnPanel` | Caller is not on this case's panel |
+| 44 | `WrongPhase` | Call not allowed in the case's current phase |
+| 45 | `AlreadyCommitted` | Arbiter already committed a vote |
+| 46 | `CommitmentNotFound` | Reveal without a prior commit |
+| 47 | `CommitmentMismatch` | Revealed vote doesn't match the commitment |
+| 48 | `AlreadyRevealed` | Arbiter already revealed |
+| 49 | `AppealNotAllowed` | Case is not appealable, was already appealed, or the appeal window closed |
+| 50 | `TooMuchEvidence` | Evidence limit for the case reached |
+| 51 | `CaseAlreadyOpen` | An arbitration case is already open for this escrow |
+| 52 | `ArbiterPoolFull` | Arbiter pool is at capacity |
+| 53 | `TooManyIds` | Batch call with more ids than allowed (#1720) |
+| 54 | `MilestoneSumMismatch` | Milestone amounts do not sum to the escrow amount (#1712) |
+| 55 | `TooManyMilestones` | More than `MAX_MILESTONES` milestones on one escrow |
+| 56 | `MilestoneAmendLocked` | Milestone plan can't be amended after a milestone was released |
+| 57 | `Insolvent` | Outflow would leave less than the tracked principal liabilities for that token (#1706) |
+| 58 | `YieldWithdrawDisabled` | `withdraw_yield` is behind a disabled feature flag (#1706) |
+| 59 | `Overflow` | Arithmetic overflow while accruing yield (#1707) |
 
 ### Bounty (`BountyError`)
 
