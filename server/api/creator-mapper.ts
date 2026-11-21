@@ -13,6 +13,8 @@ export const creatorCardSelect = {
   completedProjects: true,
   linkedinUrl: true,
   websiteUrl: true,
+  verified: true,
+  createdAt: true,
 } satisfies Prisma.CreatorProfileSelect;
 
 type CreatorCardRow = Prisma.CreatorProfileGetPayload<{ select: typeof creatorCardSelect }>;
