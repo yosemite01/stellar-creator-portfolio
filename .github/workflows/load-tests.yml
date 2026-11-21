@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: 'Target base URL (Next.js)'
+        description: 'Target base URL (Next.js); defaults to vars.STAGING_URL'
         required: false
-        default: 'http://localhost:3000'
+        default: ''
       rust_api_url:
         description: 'Rust API URL'
         required: false
@@ -30,6 +30,8 @@ permissions:
 jobs:
   load-test:
     runs-on: ubuntu-24.04  # Pinned to ensure reproducible builds (see #1270)
+    # Nothing starts the app on the runner, so only run against a real target.
+    if: github.event.inputs.base_url != '' || vars.STAGING_URL != ''
     steps:
       - uses: actions/checkout@v7
 
@@ -42,7 +44,7 @@ jobs:
         run: |
           # Scheduled runs default to the smoke suite against staging
           TEST="${{ github.event.inputs.test || 'smoke' }}"
-          BASE_URL="${{ github.event.inputs.base_url || vars.STAGING_URL || 'http://localhost:3000' }}"
+          BASE_URL="${{ github.event.inputs.base_url || vars.STAGING_URL }}"
           RUST_API_URL="${{ github.event.inputs.rust_api_url || vars.STAGING_RUST_URL || 'http://localhost:3001' }}"
           echo "test=$TEST" >> "$GITHUB_OUTPUT"
           echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
