@@ -1,34 +1,26 @@
-'use client'
+'use client';
 
-import { useCallback, useEffect, useState } from 'react'
-import { Button } from '@/components/ui/button'
+import { useCallback, useEffect, useId, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { AccessibleErrorMessage, LiveRegion } from '@/lib/accessibility';
 import {
   SUPPORTED_CHAINS,
-  getSwapQuote,
-  formatRoutePath,
   getChainInfo,
   type ChainId,
-} from '@/lib/swap/cross-chain-sdk'
+} from '@/lib/swap/cross-chain-sdk';
 import {
   ArrowRight,
   CheckCircle,
-  ChevronRight,
   Clock,
   Loader2,
   RefreshCw,
   Route,
   ShieldAlert,
-  X,
-  Zap,
-  Wallet,
   Lock,
-  Unlock,
   AlertTriangle,
-  TrendingDown,
-  TrendingUp,
   Copy,
-} from 'lucide-react'
-import { toast } from 'sonner'
+} from 'lucide-react';
+import { toast } from 'sonner';
 
 export type SwapStatus =
   | 'idle'
@@ -43,85 +35,101 @@ export type SwapStatus =
   | 'refunded'
   | 'error'
   | 'expired'
-  | 'cancelled'
+  | 'cancelled';
 
 interface SwapSession {
-  id: string
-  fromChain: string
-  toChain: string
-  fromAmount: string
-  toAmount: string
-  minOut: string
-  quoteExpiry: string
-  htlcHash?: string
-  status: SwapStatus
-  phase?: string
-  hops?: Array<{ chain: string; protocol: string; feeBps: number }>
-  refundTxId?: string
+  id: string;
+  fromChain: string;
+  toChain: string;
+  fromAmount: string;
+  toAmount: string;
+  minOut: string;
+  quoteExpiry: string;
+  htlcHash?: string;
+  status: SwapStatus;
+  phase?: string;
+  hops?: Array<{ chain: string; protocol: string; feeBps: number }>;
+  refundTxId?: string;
 }
 
 interface CrossChainSwapUIProps {
-  sessionId?: string
-  onStatusChange?: (status: SwapStatus) => void
+  sessionId?: string;
+  onStatusChange?: (status: SwapStatus) => void;
 }
 
 /**
- * Cross-chain swap UI with clear states for:
- * - Quote expiry (show countdown)
- * - Min-out enforcement
- * - Refund path
- * - Crash recovery
+ * Accessible cross-chain swap UI with clear keyboard & screen-reader states for:
+ * - Quote expiry countdown & expiry alerts
+ * - Min-out enforcement & amount validation
+ * - Refund path & crash recovery
  */
 export function CrossChainSwapUI({ sessionId, onStatusChange }: CrossChainSwapUIProps) {
-  const [status, setStatus] = useState<SwapStatus>('idle')
-  const [fromChain, setFromChain] = useState<ChainId>('stellar')
-  const [toChain, setToChain] = useState<ChainId>('polygon')
-  const [amount, setAmount] = useState('100')
-  const [quote, setQuote] = useState<SwapSession | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [expiryCountdown, setExpiryCountdown] = useState<number>(0)
+  const amountInputId = useId();
+  const amountErrorId = useId();
+
+  const [status, setStatus] = useState<SwapStatus>('idle');
+  const [fromChain, setFromChain] = useState<ChainId>('stellar');
+  const [toChain, setToChain] = useState<ChainId>('polygon');
+  const [amount, setAmount] = useState('100');
+  const [amountError, setAmountError] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [quote, setQuote] = useState<SwapSession | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [expiryCountdown, setExpiryCountdown] = useState<number>(0);
+  const [copyAnnouncement, setCopyAnnouncement] = useState('');
+
+  const resumeSwap = useCallback(
+    async (id: string) => {
+      setLoading(true);
+      setErrorMessage(null);
+      try {
+        const response = await fetch(`/api/swaps/${id}`);
+        if (response.ok) {
+          const data = await response.json();
+          setQuote(data);
+          setStatus(data.status as SwapStatus);
+          onStatusChange?.(data.status as SwapStatus);
+        } else if (response.status === 410) {
+          setStatus('expired');
+          setErrorMessage('Quote has expired. Please request a new quote.');
+          toast.error('Quote has expired. Please request a new quote.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [onStatusChange],
+  );
 
   useEffect(() => {
     if (sessionId) {
-      // Resume from session ID
-      void resumeSwap(sessionId)
+      void resumeSwap(sessionId);
     }
-  }, [sessionId])
+  }, [sessionId, resumeSwap]);
 
   useEffect(() => {
-    // Countdown expiry
     if (quote?.quoteExpiry) {
       const updateCountdown = () => {
-        const now = new Date().getTime()
-        const expiry = new Date(quote.quoteExpiry).getTime()
-        setExpiryCountdown(Math.max(0, Math.floor((expiry - now) / 1000)))
-      }
-      updateCountdown()
-      const interval = setInterval(updateCountdown, 1000)
-      return () => clearInterval(interval)
+        const now = new Date().getTime();
+        const expiry = new Date(quote.quoteExpiry).getTime();
+        setExpiryCountdown(Math.max(0, Math.floor((expiry - now) / 1000)));
+      };
+      updateCountdown();
+      const interval = setInterval(updateCountdown, 1000);
+      return () => clearInterval(interval);
     }
-  }, [quote?.quoteExpiry])
-
-  const resumeSwap = useCallback(async (id: string) => {
-    setLoading(true)
-    try {
-      const response = await fetch(`/api/swaps/${id}`)
-      if (response.ok) {
-        const data = await response.json()
-        setQuote(data)
-        setStatus(data.status as SwapStatus)
-        onStatusChange?.(data.status as SwapStatus)
-      } else if (response.status === 410) {
-        setStatus('expired')
-        toast.error('Quote has expired. Please request a new quote.')
-      }
-    } finally {
-      setLoading(false)
-    }
-  }, [onStatusChange])
+  }, [quote?.quoteExpiry]);
 
   const requestQuote = useCallback(async () => {
-    setLoading(true)
+    const parsedAmount = Number(amount);
+    if (!amount.trim() || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      setAmountError('Enter a swap amount greater than 0.');
+      return;
+    }
+
+    setAmountError(null);
+    setErrorMessage(null);
+    setLoading(true);
     try {
       const response = await fetch('/api/swaps', {
         method: 'POST',
@@ -132,30 +140,33 @@ export function CrossChainSwapUI({ sessionId, onStatusChange }: CrossChainSwapUI
           fromAmount: amount,
           slippageBps: 50,
         }),
-      })
+      });
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to request quote')
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to request quote');
       }
 
-      const data = await response.json()
-      setQuote(data)
-      setStatus('quote_received')
-      onStatusChange?.('quote_received')
+      const data = await response.json();
+      setQuote(data);
+      setStatus('quote_received');
+      onStatusChange?.('quote_received');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to request quote')
-      setStatus('error')
-      onStatusChange?.('error')
+      const msg = err instanceof Error ? err.message : 'Failed to request quote';
+      setErrorMessage(msg);
+      toast.error(msg);
+      setStatus('error');
+      onStatusChange?.('error');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [fromChain, toChain, amount, onStatusChange])
+  }, [fromChain, toChain, amount, onStatusChange]);
 
   const confirmQuote = useCallback(async () => {
-    if (!quote) return
+    if (!quote) return;
 
-    setLoading(true)
+    setLoading(true);
+    setErrorMessage(null);
     try {
       const response = await fetch(`/api/swaps/${quote.id}/confirm`, {
         method: 'POST',
@@ -164,108 +175,84 @@ export function CrossChainSwapUI({ sessionId, onStatusChange }: CrossChainSwapUI
           toAmount: quote.toAmount,
           minOut: quote.minOut,
         }),
-      })
+      });
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to confirm quote')
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to confirm quote');
       }
 
-      const data = await response.json()
-      setQuote({ ...quote, status: 'htlc_locking' as SwapStatus })
-      setStatus('htlc_locking')
-      onStatusChange?.('htlc_locking')
+      setQuote({ ...quote, status: 'htlc_locking' as SwapStatus });
+      setStatus('htlc_locking');
+      onStatusChange?.('htlc_locking');
 
-      // Simulate HTLC lock
       setTimeout(() => {
-        setQuote({ ...quote, status: 'htlc_locked' as SwapStatus })
-        setStatus('htlc_locked')
-        onStatusChange?.('htlc_locked')
-      }, 2000)
+        setQuote({ ...quote, status: 'htlc_locked' as SwapStatus });
+        setStatus('htlc_locked');
+        onStatusChange?.('htlc_locked');
+      }, 2000);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to confirm quote')
-      setStatus('error')
-      onStatusChange?.('error')
+      const msg = err instanceof Error ? err.message : 'Failed to confirm quote';
+      setErrorMessage(msg);
+      toast.error(msg);
+      setStatus('error');
+      onStatusChange?.('error');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [quote, onStatusChange])
+  }, [quote, onStatusChange]);
 
-  const requestRefund = useCallback(async () => {
-    if (!quote) return
-
-    setLoading(true)
+  const handleCopyRefundTx = useCallback(async () => {
+    if (!quote?.refundTxId) return;
     try {
-      const response = await fetch(`/api/swaps/${quote.id}/refund`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          locktimeExpired: true,
-          refundTxId: 'ref-123',
-        }),
-      })
-
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to request refund')
-      }
-
-      const data = await response.json()
-      setQuote({ ...quote, status: 'refund_requested' as SwapStatus })
-      setStatus('refund_requested')
-      onStatusChange?.('refund_requested')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to request refund')
-      setStatus('error')
-      onStatusChange?.('error')
-    } finally {
-      setLoading(false)
+      await navigator.clipboard?.writeText(quote.refundTxId);
+      setCopyAnnouncement('Refund transaction ID copied to clipboard.');
+    } catch {
+      setCopyAnnouncement('Failed to copy refund transaction ID.');
     }
-  }, [quote, onStatusChange])
+  }, [quote]);
 
-  // Status descriptions
   const getStatusInfo = useCallback((s: SwapStatus) => {
     switch (s) {
       case 'idle':
-        return { title: 'Ready to Swap', description: 'Select your chain pair and amount' }
+        return { title: 'Ready to Swap', description: 'Select your chain pair and amount' };
       case 'quote_requested':
-        return { title: 'Getting Quote', description: 'Connecting to bridges...' }
+        return { title: 'Getting Quote', description: 'Connecting to bridges...' };
       case 'quote_received':
-        return { title: 'Quote Ready', description: 'Review the terms before locking' }
+        return { title: 'Quote Ready', description: 'Review the terms before locking' };
       case 'htlc_locking':
-        return { title: 'Locking HTLC', description: 'Creating hash lock on source chain...' }
+        return { title: 'Locking HTLC', description: 'Creating hash lock on source chain...' };
       case 'htlc_locked':
-        return { title: 'HTLC Locked', description: 'Source chain locked. Waiting for destination...' }
+        return { title: 'HTLC Locked', description: 'Source chain locked. Waiting for destination...' };
       case 'destination_claiming':
-        return { title: 'Claiming', description: 'Processing on destination chain...' }
+        return { title: 'Claiming', description: 'Processing on destination chain...' };
       case 'destination_claimed':
-        return { title: 'Swap Complete', description: 'Funds received!' }
+      case 'completed':
+        return { title: 'Swap Complete', description: 'Funds received!' };
       case 'refund_requested':
-        return { title: 'Refund Initiated', description: 'Funds being returned...' }
+        return { title: 'Refund Initiated', description: 'Funds being returned...' };
       case 'refunded':
-        return { title: 'Refunded', description: 'Funds returned to your wallet' }
+        return { title: 'Refunded', description: 'Funds returned to your wallet' };
       case 'error':
-        return { title: 'Error', description: 'Something went wrong. Try again.' }
+        return { title: 'Error', description: 'Something went wrong. Try again.' };
       case 'expired':
-        return { title: 'Quote Expired', description: 'Request a new quote to continue' }
+        return { title: 'Quote Expired', description: 'Request a new quote to continue' };
       case 'cancelled':
-        return { title: 'Cancelled', description: 'Swap cancelled by user' }
+        return { title: 'Cancelled', description: 'Swap cancelled by user' };
       default:
-        return { title: 'Unknown', description: '' }
+        return { title: 'Unknown', description: '' };
     }
-  }, [])
+  }, []);
 
-  // Countdown formatter
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
-  // Render
-  const fromInfo = getChainInfo(fromChain)
-  const toInfo = getChainInfo(toChain)
-  const statusInfo = getStatusInfo(status)
+  const fromInfo = getChainInfo(fromChain);
+  const toInfo = getChainInfo(toChain);
+  const statusInfo = getStatusInfo(status);
 
   return (
     <div className="flex flex-col gap-4">
@@ -276,46 +263,78 @@ export function CrossChainSwapUI({ sessionId, onStatusChange }: CrossChainSwapUI
           <p className="text-sm text-muted-foreground">{statusInfo.title}</p>
         </div>
         {status === 'quote_received' && (
-          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm ${expiryCountdown < 60 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-            <Clock className="h-4 w-4" />
+          <div
+            aria-label={`Quote expires in ${formatTime(expiryCountdown)}`}
+            className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm ${
+              expiryCountdown < 60 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+            }`}
+          >
+            <Clock className="h-4 w-4" aria-hidden="true" />
             {formatTime(expiryCountdown)}
           </div>
         )}
       </div>
 
       {/* Status Card */}
-      <div className="rounded-xl border border-border p-4 space-y-3">
+      <div
+        role={status === 'error' || status === 'expired' ? 'alert' : 'status'}
+        aria-live={status === 'error' || status === 'expired' ? 'assertive' : 'polite'}
+        className="rounded-xl border border-border p-4 space-y-3"
+      >
         <div className="flex items-start gap-3">
-          {status === 'error' && <ShieldAlert className="h-5 w-5 text-destructive mt-0.5" />}
-          {status === 'expired' && <Clock className="h-5 w-5 text-amber-500 mt-0.5" />}
-          {status === 'refunded' && <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5" />}
-          {status === 'completed' && <CheckCircle className="h-5 w-5 text-green-500 mt-0.5" />}
+          {status === 'error' && (
+            <ShieldAlert className="h-5 w-5 text-destructive mt-0.5" aria-hidden="true" />
+          )}
+          {status === 'expired' && (
+            <Clock className="h-5 w-5 text-amber-500 mt-0.5" aria-hidden="true" />
+          )}
+          {status === 'refunded' && (
+            <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5" aria-hidden="true" />
+          )}
+          {status === 'completed' && (
+            <CheckCircle className="h-5 w-5 text-green-500 mt-0.5" aria-hidden="true" />
+          )}
           <div>
             <p className="font-medium text-sm">{statusInfo.title}</p>
-            <p className="text-xs text-muted-foreground">{statusInfo.description}</p>
+            <p className="text-xs text-muted-foreground">
+              {errorMessage ?? statusInfo.description}
+            </p>
           </div>
         </div>
 
         {status === 'quote_received' && (
           <div className="mt-2 p-3 bg-amber-50 rounded-lg text-xs text-amber-800">
-            <AlertTriangle className="h-4 w-4 inline mr-1" />
-            Quote expires in {formatTime(expiryCountdown)}. Min-out: {quote?.minOut} {toInfo.nativeSymbol}
+            <AlertTriangle className="h-4 w-4 inline mr-1" aria-hidden="true" />
+            Quote expires in {formatTime(expiryCountdown)}. Min-out: {quote?.minOut}{' '}
+            {toInfo.nativeSymbol}
           </div>
         )}
 
         {status === 'refunded' && quote && (
           <div className="mt-2 p-3 bg-green-50 rounded-lg text-xs text-green-800">
-            <CheckCircle className="h-4 w-4 inline mr-1" />
+            <CheckCircle className="h-4 w-4 inline mr-1" aria-hidden="true" />
             Refund initiated. Funds will arrive in ~5-10 minutes.
           </div>
         )}
 
         {status === 'error' && (
           <div className="mt-2 flex gap-2">
-            <Button variant="outline" onClick={requestQuote} size="sm" className="text-xs">
-              <RefreshCw className="h-3 w-3 mr-1" /> Try Again
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void requestQuote()}
+              size="sm"
+              className="text-xs"
+            >
+              <RefreshCw className="h-3 w-3 mr-1" aria-hidden="true" /> Try Again
             </Button>
-            <Button variant="outline" onClick={() => setStatus('cancelled')} size="sm" className="text-xs">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setStatus('cancelled')}
+              size="sm"
+              className="text-xs"
+            >
               Cancel
             </Button>
           </div>
@@ -325,56 +344,99 @@ export function CrossChainSwapUI({ sessionId, onStatusChange }: CrossChainSwapUI
       {/* Main Content */}
       {status === 'idle' && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-2">
-            {SUPPORTED_CHAINS.map((chain) => (
-              <button
-                key={chain.id}
-                type="button"
-                onClick={() => setFromChain(chain.id)}
-                className={`flex items-center gap-2 p-3 rounded-xl border text-left ${
-                  fromChain === chain.id ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/50'
-                }`}
-              >
-                <span className="text-lg">{chain.icon}</span>
-                <span className="text-sm font-medium">{chain.name}</span>
-              </button>
-            ))}
-          </div>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Source chain</legend>
+            <div role="radiogroup" aria-label="Source chain" className="grid grid-cols-2 gap-2">
+              {SUPPORTED_CHAINS.map((chain) => (
+                <button
+                  key={chain.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={fromChain === chain.id}
+                  onClick={() => setFromChain(chain.id)}
+                  className={`flex items-center gap-2 p-3 rounded-xl border text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    fromChain === chain.id
+                      ? 'border-primary bg-primary/10'
+                      : 'border-border hover:bg-muted/50'
+                  }`}
+                >
+                  <span className="text-lg" aria-hidden="true">
+                    {chain.icon}
+                  </span>
+                  <span className="text-sm font-medium">{chain.name}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
 
-          <div className="flex justify-center">
+          <div className="flex justify-center" aria-hidden="true">
             <ArrowRight className="h-5 w-5 text-muted-foreground" />
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            {SUPPORTED_CHAINS.filter((c) => c.id !== fromChain).map((chain) => (
-              <button
-                key={chain.id}
-                type="button"
-                onClick={() => setToChain(chain.id)}
-                className={`flex items-center gap-2 p-3 rounded-xl border text-left ${
-                  toChain === chain.id ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/50'
-                }`}
-              >
-                <span className="text-lg">{chain.icon}</span>
-                <span className="text-sm font-medium">{chain.name}</span>
-              </button>
-            ))}
-          </div>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Destination chain</legend>
+            <div role="radiogroup" aria-label="Destination chain" className="grid grid-cols-2 gap-2">
+              {SUPPORTED_CHAINS.filter((c) => c.id !== fromChain).map((chain) => (
+                <button
+                  key={chain.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={toChain === chain.id}
+                  onClick={() => setToChain(chain.id)}
+                  className={`flex items-center gap-2 p-3 rounded-xl border text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    toChain === chain.id
+                      ? 'border-primary bg-primary/10'
+                      : 'border-border hover:bg-muted/50'
+                  }`}
+                >
+                  <span className="text-lg" aria-hidden="true">
+                    {chain.icon}
+                  </span>
+                  <span className="text-sm font-medium">{chain.name}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium">Amount ({fromInfo.nativeSymbol})</label>
+            <label htmlFor={amountInputId} className="text-sm font-medium">
+              Amount ({fromInfo.nativeSymbol})
+            </label>
             <div className="flex gap-2">
               <input
+                id={amountInputId}
                 type="number"
                 min="0"
+                step="any"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-border bg-background text-sm"
+                aria-required="true"
+                aria-invalid={Boolean(amountError)}
+                aria-describedby={amountError ? amountErrorId : undefined}
+                onChange={(e) => {
+                  setAmount(e.target.value);
+                  if (amountError) setAmountError(null);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-border bg-background text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
-              <Button variant="outline" onClick={requestQuote} disabled={loading} className="whitespace-nowrap">
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Get Quote'}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void requestQuote()}
+                disabled={loading}
+                aria-busy={loading}
+                className="whitespace-nowrap"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-1" aria-hidden="true" />
+                    Loading…
+                  </>
+                ) : (
+                  'Get Quote'
+                )}
               </Button>
             </div>
+            <AccessibleErrorMessage id={amountErrorId} message={amountError} />
           </div>
         </div>
       )}
@@ -384,12 +446,16 @@ export function CrossChainSwapUI({ sessionId, onStatusChange }: CrossChainSwapUI
           <div className="rounded-xl bg-muted/40 p-4 space-y-3">
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">You send</span>
-              <span className="font-semibold">{quote.fromAmount} {fromInfo.nativeSymbol}</span>
+              <span className="font-semibold">
+                {quote.fromAmount} {fromInfo.nativeSymbol}
+              </span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">You receive</span>
               <div className="text-right">
-                <span className="font-semibold text-primary block">≈ {quote.toAmount} {toInfo.nativeSymbol}</span>
+                <span className="font-semibold text-primary block">
+                  ≈ {quote.toAmount} {toInfo.nativeSymbol}
+                </span>
                 <span className="text-xs text-destructive">Min-out: {quote.minOut}</span>
               </div>
             </div>
@@ -397,62 +463,100 @@ export function CrossChainSwapUI({ sessionId, onStatusChange }: CrossChainSwapUI
 
           <div className="rounded-xl border border-border p-4 space-y-3">
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Route className="h-4 w-4 text-primary" />
+              <Route className="h-4 w-4 text-primary" aria-hidden="true" />
               Routing Path
             </div>
             {quote.hops?.map((hop, i) => (
               <div key={i} className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>{hop.protocol} ({hop.chain})</span>
+                <span>
+                  {hop.protocol} ({hop.chain})
+                </span>
                 <span>{hop.feeBps / 100}% fee</span>
               </div>
             ))}
           </div>
 
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setStatus('cancelled')} className="flex-1">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setStatus('cancelled')}
+              className="flex-1"
+            >
               Cancel
             </Button>
-            <Button onClick={confirmQuote} disabled={loading} className="flex-1 gap-2">
-              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            <Button
+              type="button"
+              onClick={() => void confirmQuote()}
+              disabled={loading}
+              aria-busy={loading}
+              className="flex-1 gap-2"
+            >
+              {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
               Lock HTLC
             </Button>
           </div>
         </div>
       )}
 
-      {(status === 'htlc_locked' || status === 'destination_claiming' || status === 'completed') && quote && (
-        <div className="text-center py-8">
-          {status === 'htlc_locked' && <Lock className="h-12 w-12 text-primary mx-auto mb-4" />}
-          {status === 'destination_claiming' && <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />}
-          {status === 'completed' && <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-4" />}
-          
-          <p className="text-lg font-semibold">
-            {status === 'htlc_locked' ? 'HTLC Locked' : status === 'completed' ? 'Swap Complete' : 'Claiming...'}
-          </p>
-          <p className="text-sm text-muted-foreground mt-2">
-            {status === 'htlc_locked' ? 'Waiting for destination leg...' : status === 'completed' ? 'Funds received!' : 'Processing on destination chain...'}
-          </p>
-        </div>
-      )}
+      {(status === 'htlc_locked' || status === 'destination_claiming' || status === 'completed') &&
+        quote && (
+          <div role="status" aria-live="polite" className="text-center py-8">
+            {status === 'htlc_locked' && (
+              <Lock className="h-12 w-12 text-primary mx-auto mb-4" aria-hidden="true" />
+            )}
+            {status === 'destination_claiming' && (
+              <Loader2
+                className="h-12 w-12 text-primary mx-auto mb-4 animate-spin"
+                aria-hidden="true"
+              />
+            )}
+            {status === 'completed' && (
+              <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-4" aria-hidden="true" />
+            )}
+
+            <p className="text-lg font-semibold">
+              {status === 'htlc_locked'
+                ? 'HTLC Locked'
+                : status === 'completed'
+                  ? 'Swap Complete'
+                  : 'Claiming...'}
+            </p>
+            <p className="text-sm text-muted-foreground mt-2">
+              {status === 'htlc_locked'
+                ? 'Waiting for destination leg...'
+                : status === 'completed'
+                  ? 'Funds received!'
+                  : 'Processing on destination chain...'}
+            </p>
+          </div>
+        )}
 
       {(status === 'refund_requested' || status === 'refunded') && quote && (
         <div className="space-y-4">
-          <div className="text-center py-4">
-            <AlertTriangle className="h-12 w-12 text-amber-500 mx-auto mb-4" />
+          <div role="status" aria-live="polite" className="text-center py-4">
+            <AlertTriangle className="h-12 w-12 text-amber-500 mx-auto mb-4" aria-hidden="true" />
             <p className="text-lg font-semibold">Refund in Progress</p>
             <p className="text-sm text-muted-foreground mt-2">
-              {status === 'refund_requested' ? 'Returning funds to your wallet...' : 'Funds have been returned.'}
+              {status === 'refund_requested'
+                ? 'Returning funds to your wallet...'
+                : 'Funds have been returned.'}
             </p>
           </div>
-          
+
           {quote.refundTxId && (
             <div className="p-4 rounded-xl bg-muted/40 text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Refund Tx</span>
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-xs">{quote.refundTxId.slice(0, 16)}...</span>
-                  <button className="text-primary hover:underline">
-                    <Copy className="h-3 w-3" />
+                  <button
+                    type="button"
+                    aria-label="Copy refund transaction ID"
+                    onClick={() => void handleCopyRefundTx()}
+                    className="p-1 text-primary hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -460,6 +564,8 @@ export function CrossChainSwapUI({ sessionId, onStatusChange }: CrossChainSwapUI
           )}
         </div>
       )}
+
+      <LiveRegion message={copyAnnouncement} role="status" />
     </div>
-  )
+  );
 }

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
 import { requireAuth } from '@/server/services/authorization';
 import { prisma } from '@/lib/db';
+import { revalidateCreators } from '@/lib/cache/revalidate';
 
 /**
  * GET  /api/creators/profile   the caller's own availability + rate card
@@ -97,6 +98,8 @@ export async function PATCH(req: NextRequest) {
       projectRateMax: true,
     },
   });
+
+  void revalidateCreators(updated.id);
 
   return NextResponse.json(updated);
 }

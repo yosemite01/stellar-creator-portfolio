@@ -9,22 +9,22 @@ export interface TransactionLogEntry extends EscrowTransactionResponse {
 }
 
 const STATUS_ICON: Record<EscrowTransactionResponse['status'], React.ReactNode> = {
-  confirmed: <CheckCircle size={14} className="text-green-500" />,
-  pending:   <Clock size={14} className="text-yellow-500" />,
-  failed:    <XCircle size={14} className="text-red-500" />,
+  confirmed: <CheckCircle size={14} className="text-green-500" aria-hidden="true" />,
+  pending: <Clock size={14} className="text-yellow-500" aria-hidden="true" />,
+  failed: <XCircle size={14} className="text-red-500" aria-hidden="true" />,
 };
 
 const OP_LABEL: Record<EscrowOperation, string> = {
   deposit: 'Deposit',
   release: 'Release',
-  refund:  'Refund',
+  refund: 'Refund',
   dispute: 'Dispute',
 };
 
 const OP_COLOR: Record<EscrowOperation, string> = {
   deposit: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
   release: 'bg-green-500/15 text-green-700 dark:text-green-400',
-  refund:  'bg-orange-500/15 text-orange-700 dark:text-orange-400',
+  refund: 'bg-orange-500/15 text-orange-700 dark:text-orange-400',
   dispute: 'bg-red-500/15 text-red-600 dark:text-red-400',
 };
 
@@ -39,8 +39,11 @@ export function TransactionLogTable({
 }: Props) {
   if (transactions.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">
-        <AlertCircle size={32} className="opacity-40" />
+      <div
+        role="status"
+        className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2"
+      >
+        <AlertCircle size={32} className="opacity-40" aria-hidden="true" />
         <p className="text-sm">No transactions yet.</p>
       </div>
     );
@@ -49,14 +52,15 @@ export function TransactionLogTable({
   return (
     <div className="overflow-x-auto rounded-lg border border-border">
       <table className="w-full text-sm">
+        <caption className="sr-only">Escrow transaction history</caption>
         <thead>
           <tr className="border-b border-border bg-muted/40 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            <th className="px-4 py-3">Operation</th>
-            <th className="px-4 py-3">Escrow ID</th>
-            <th className="px-4 py-3">Tx Hash</th>
-            <th className="px-4 py-3">Status</th>
-            <th className="px-4 py-3">Fee</th>
-            <th className="px-4 py-3">Timestamp</th>
+            <th scope="col" className="px-4 py-3">Operation</th>
+            <th scope="col" className="px-4 py-3">Escrow ID</th>
+            <th scope="col" className="px-4 py-3">Tx Hash</th>
+            <th scope="col" className="px-4 py-3">Status</th>
+            <th scope="col" className="px-4 py-3">Fee</th>
+            <th scope="col" className="px-4 py-3">Timestamp</th>
           </tr>
         </thead>
         <tbody>
@@ -78,10 +82,11 @@ export function TransactionLogTable({
                   href={`${explorerBase}/${tx.txHash}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                  aria-label={`View transaction ${tx.txHash.slice(0, 8)} on Stellar explorer (opens in new tab)`}
+                  className="inline-flex items-center gap-1 text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
                 >
                   {tx.txHash.slice(0, 8)}…{tx.txHash.slice(-6)}
-                  <ExternalLink size={11} />
+                  <ExternalLink size={11} aria-hidden="true" />
                 </a>
               </td>
               <td className="px-4 py-3">

@@ -189,7 +189,7 @@ export class UnifiedNotificationDispatcher {
                 subject: request.title,
                 category,
                 status: 'SENT',
-                payload: { body: request.body, metadata: request.metadata ?? {} },
+                payload: { body: request.body, metadata: (request.metadata ?? {}) as any },
               },
             });
           }

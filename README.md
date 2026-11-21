@@ -15,6 +15,10 @@ A platform for creators to manage bounties, portfolio projects, and Stellar-base
 ## Documentation
 
 - [Sep-24 Transaction Tracking](docs/Sep24TransactionTracking.md) - Full documentation for SEP-24 persistence and polling
+- [IPFS Multi-Provider Redundancy & Health Monitoring](docs/IPFS_REDUNDANCY.md) - Redundant pinning, gateway racing, CID verification, and auto-repin sweeps
+- [Adaptive Media Pipeline](docs/MEDIA_PIPELINE.md) - HLS ABR transcoding, thumbnails/posters, progress tracking, and CloudFront signed URLs
+- [RSC Migration & Performance Metrics](docs/rsc-migration-metrics.md) - React Server Components architecture, cache tags, and performance benchmarks
+- [Wallet & Payment Accessibility](docs/ACCESSIBILITY_PAYMENTS.md) - WCAG 2.2 AA keyboard, focus trap, live region, and Playwright axe audit guide
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
 

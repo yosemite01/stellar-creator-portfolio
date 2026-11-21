@@ -1367,3 +1367,59 @@ enum OutboxEventStatus {
   PUBLISHED
   FAILED
 }
+
+// ── IPFS Multi-Provider Pin Redundancy & Health Monitoring (#1769) ───────────
+
+/// Tracks per-provider pin replicas and periodic retrievability health checks
+/// for each CID so dropped pins can be detected and re-pinned automatically.
+model IpfsPinReplica {
+  id                  String    @id @default(cuid())
+  cid                 String
+  provider            String
+  providerPinId       String?
+  status              String    @default("PINNED")
+  lastCheckedAt       DateTime?
+  lastHealthyAt       DateTime?
+  consecutiveFailures Int       @default(0)
+  lastLatencyMs       Int?
+  lastError           String?   @db.Text
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([cid, provider])
+  @@index([cid])
+  @@index([status])
+  @@index([lastCheckedAt])
+}
+
+// ── Adaptive Video Media Pipeline (#1770) ────────────────────────────────────
+
+/// Tracks uploaded videos transcoded to HLS ABR renditions with poster frames,
+/// thumbnails, and short-lived signed CloudFront/S3 delivery URLs.
+model MediaAsset {
+  id                String    @id @default(cuid())
+  ownerId           String
+  sourceKey         String
+  contentType       String
+  sizeBytes         Int
+  durationSeconds   Float?
+  width             Int?
+  height            Int?
+  status            String    @default("QUEUED")
+  progress          Int       @default(0)
+  backend           String    @default("ffmpeg")
+  externalJobId     String?
+  masterPlaylistKey String?
+  renditions        Json?
+  posterKey         String?
+  thumbnailKeys     Json?
+  thumbnailsVttKey  String?
+  errorMessage      String?   @db.Text
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  completedAt       DateTime?
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([externalJobId])
+}

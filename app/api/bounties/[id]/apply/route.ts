@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/db';
+import { revalidateBounties } from '@/lib/cache/revalidate';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -82,6 +83,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       },
       include: teamId ? { team: { include: { members: true } } } : undefined,
     });
+    void revalidateBounties(bountyId);
     return NextResponse.json(application, { status: 201 });
   } catch (error: unknown) {
     // Unique(bountyId, applicantId) — already applied to this bounty.

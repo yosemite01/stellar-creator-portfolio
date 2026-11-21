@@ -145,7 +145,7 @@ export async function ensureIndex(): Promise<void> {
     await prisma.$executeRaw`SELECT 1`;
     logger.info('[Search] Postgres search backend verified');
   } catch (err) {
-    logger.error('[Search] Failed to verify Postgres search backend:', err);
+    logger.error('[Search] Failed to verify Postgres search backend:', { err: String(err) });
   }
 }
 
@@ -181,9 +181,9 @@ export function onProfileChanged(
   void (async () => {
     try {
       await indexCreator(profile, { generateVector: true });
-      logger.info(`[Search] Profile change indexed`, { creatorId: profile.id });
+      logger.info('[Search] Profile change indexed', { creatorId: profile.id });
     } catch (err) {
-      logger.error(`[Search] Failed to index profile change`, { creatorId: profile.id, err: String(err) });
+      logger.error('[Search] Failed to index profile change', { creatorId: profile.id, err: String(err) });
     }
   })();
 }

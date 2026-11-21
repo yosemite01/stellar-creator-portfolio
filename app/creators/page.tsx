@@ -1,71 +1,37 @@
-'use client';
-
-import { useState, useRef, useEffect } from 'react';
+import { Suspense } from 'react';
+import type { Metadata } from 'next';
 import { Header } from '@/components/layout/header';
 import { Footer } from '@/components/layout/footer';
-import { CreatorCard } from '@/components/cards/creator-card';
-import { Button } from '@/components/ui/button';
-import { trpc } from '@/lib/trpc-client';
 import { CardSkeleton } from '@/components/skeletons/card-skeleton';
+import { fetchCreatorsList } from '@/lib/streaming/chunk-data';
+import { CreatorsListClient } from './creators-list-client';
 
-const DISCIPLINES = [
-  'All',
-  'Design',
-  'Development',
-  'Writing',
-  'Video',
-  'Music',
-  'Photography',
-  'Marketing',
-] as const;
+export const metadata: Metadata = {
+  title: 'Creator Directory | Tamgora',
+  description:
+    'Explore our community of world-class creators on Stellar. Filter by discipline to find the perfect talent for your project.',
+};
+
+async function CreatorsListSection() {
+  const creators = await fetchCreatorsList();
+  return <CreatorsListClient initialCreators={creators} />;
+}
+
+function CreatorsGridSkeleton() {
+  return (
+    <section className="py-16 sm:py-24">
+      <div className="page-container">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <CardSkeleton key={i} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 export default function CreatorsPage() {
-  const [selectedDiscipline, setSelectedDiscipline] = useState<string>('All');
-  const loadMoreRef = useRef<HTMLDivElement>(null);
-
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-    isError,
-    error,
-  } = trpc.creators.list.useInfiniteQuery(
-    {
-      take: 12,
-      discipline: selectedDiscipline === 'All' ? undefined : selectedDiscipline,
-    },
-    {
-      getNextPageParam: (lastPage) => lastPage.nextCursor,
-    }
-  );
-
-  // Intersection Observer for infinite scroll
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
-          fetchNextPage();
-        }
-      },
-      { threshold: 0.1 }
-    );
-
-    const currentRef = loadMoreRef.current;
-    if (currentRef) {
-      observer.observe(currentRef);
-    }
-
-    return () => {
-      if (currentRef) {
-        observer.unobserve(currentRef);
-      }
-    };
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
-
-  const allCreators = data?.pages.flatMap((page) => page.creators) || [];
-
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Header />
@@ -78,105 +44,16 @@ export default function CreatorsPage() {
               Creator Directory
             </h1>
             <p className="text-lg text-muted-foreground max-w-2xl">
-              Explore our community of world-class creators. Filter by discipline to find the perfect talent for your project.
+              Explore our community of world-class creators. Filter by discipline to find the
+              perfect talent for your project.
             </p>
           </div>
         </section>
 
-        {/* Filter Section */}
-        <section className="border-b border-border py-8 sticky top-16 bg-background/80 backdrop-blur-md z-40">
-          <div className="page-container">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <h2 className="text-sm font-semibold text-foreground">Filter by Discipline:</h2>
-              <div className="flex flex-wrap gap-2">
-                {DISCIPLINES.map((discipline) => (
-                  <Button
-                    key={discipline}
-                    variant={selectedDiscipline === discipline ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setSelectedDiscipline(discipline)}
-                    className={`transition-all duration-200 ease-out ${selectedDiscipline === discipline ? 'scale-105 shadow-lg shadow-primary/30' : 'hover:scale-105'
-                      }`}
-                  >
-                    {discipline}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Creators Grid */}
-        <section className="py-16 sm:py-24">
-          <div className="page-container">
-            {isError ? (
-              <div className="text-center py-12">
-                <p className="text-lg text-red-500 mb-4">
-                  Error loading creators: {error?.message}
-                </p>
-                <Button
-                  variant="outline"
-                  onClick={() => window.location.reload()}
-                >
-                  Retry
-                </Button>
-              </div>
-            ) : isLoading ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <CardSkeleton key={i} />
-                ))}
-              </div>
-            ) : allCreators.length > 0 ? (
-              <>
-                <div className="mb-8">
-                  <p className="text-sm text-muted-foreground">
-                    Showing {allCreators.length} creator{allCreators.length !== 1 ? 's' : ''}
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {allCreators.map((creator) => (
-                    <CreatorCard key={creator.id} creator={creator} />
-                  ))}
-                </div>
-
-                {/* Loading indicator for next page */}
-                {isFetchingNextPage && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <CardSkeleton key={i} />
-                    ))}
-                  </div>
-                )}
-
-                {/* Sentinel div for IntersectionObserver */}
-                {hasNextPage && (
-                  <div ref={loadMoreRef} className="h-10" />
-                )}
-              </>
-            ) : (
-              <div className="text-center py-12">
-                <p className="text-lg font-medium text-foreground mb-1">
-                  No creators here yet
-                </p>
-                <p className="text-sm text-muted-foreground mb-4">
-                  {selectedDiscipline === 'All'
-                    ? 'No creators have joined yet — check back soon.'
-                    : `Nobody in the "${selectedDiscipline}" category has joined yet — try browsing all creators instead.`}
-                </p>
-                {selectedDiscipline !== 'All' && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setSelectedDiscipline('All')}
-                  >
-                    View All Creators
-                  </Button>
-                )}
-              </div>
-            )}
-          </div>
-        </section>
+        {/* RSC Streamed Creators Section */}
+        <Suspense fallback={<CreatorsGridSkeleton />}>
+          <CreatorsListSection />
+        </Suspense>
 
         {/* CTA Section */}
         <section className="border-t border-border bg-muted/30 py-16 sm:py-24">
@@ -185,7 +62,8 @@ export default function CreatorsPage() {
               Ready to Collaborate?
             </h2>
             <p className="text-lg text-muted-foreground mb-8">
-              Found the perfect creator? Reach out directly through their social profiles or contact us for partnership inquiries.
+              Found the perfect creator? Reach out directly through their social profiles or contact
+              us for partnership inquiries.
             </p>
             <a
               href="mailto:contact@stellar.com"

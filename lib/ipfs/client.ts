@@ -1,10 +1,12 @@
-import { buildGatewayUrl, fetchViaGateways, verifyContentHash } from './gateways';
+import { buildGatewayUrl, raceGateways, verifyContentHash } from './gateways';
 
 export interface IpfsUploadResult {
   cid: string;
   sha256: string;
   size: number;
   gatewayUrl: string;
+  providers?: Array<{ provider: string; ok: boolean; latencyMs: number; error?: string }>;
+  redundancy?: { target: number; achieved: number; met: boolean; degraded: boolean };
 }
 
 export interface IpfsPinEntry {
@@ -68,13 +70,18 @@ export async function uploadToIpfs(
   return result;
 }
 
-/** Retrieve pinned content with cryptographic hash verification and gateway fallback. */
+/** Retrieve pinned content via gateway racing with CID and SHA-256 verification. */
 export async function retrieveFromIpfs(
   cid: string,
-  expectedSha256: string,
-): Promise<{ blob: Blob; verified: boolean; gateway: string }> {
-  const { blob, gateway, verified } = await fetchViaGateways(cid, expectedSha256);
-  return { blob, verified, gateway };
+  expectedSha256?: string,
+  options?: { timeoutMs?: number; verifyCid?: boolean },
+): Promise<{ blob: Blob; verified: boolean; cidVerified: boolean; gateway: string }> {
+  const { blob, gateway, verified, cidVerified } = await raceGateways(cid, {
+    verifyHash: expectedSha256,
+    verifyCid: options?.verifyCid ?? true,
+    timeoutMs: options?.timeoutMs,
+  });
+  return { blob, verified, cidVerified: Boolean(cidVerified), gateway };
 }
 
 export async function verifyRetrievedFile(blob: Blob, expectedSha256: string): Promise<boolean> {
