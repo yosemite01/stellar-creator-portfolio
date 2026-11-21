@@ -7,7 +7,6 @@
 
 import { prisma } from '@/lib/prisma';
 import { PushNotificationService } from './push-service';
-import { DigestNotificationService } from './digest-service';
 import type {
   NotificationChannel,
   NotificationType,
@@ -51,11 +50,9 @@ export interface DispatchNotificationResult {
 
 export class UnifiedNotificationDispatcher {
   private pushService: PushNotificationService;
-  private digestService: DigestNotificationService;
 
   constructor() {
     this.pushService = new PushNotificationService();
-    this.digestService = new DigestNotificationService();
   }
 
   /**
