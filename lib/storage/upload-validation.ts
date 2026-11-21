@@ -1,5 +1,11 @@
 /** Server-side validation shared by the upload route and its tests. */
 
+const DEFAULT_VIDEO_TYPES = [
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+] as const;
+
 const DEFAULT_ALLOWED_TYPES = [
   'image/jpeg',
   'image/png',
@@ -7,7 +13,12 @@ const DEFAULT_ALLOWED_TYPES = [
   'application/pdf',
   'application/zip',
   'application/x-zip-compressed',
+  ...DEFAULT_VIDEO_TYPES,
 ];
+
+export function isVideoMimeType(mimeType: string): boolean {
+  return (DEFAULT_VIDEO_TYPES as readonly string[]).includes(mimeType.toLowerCase());
+}
 
 const DEFAULT_MAX_UPLOAD_MB = 100;
 
@@ -63,6 +74,13 @@ export function sniffType(bytes: Uint8Array): string | null {
   if (at(0, [0x25, 0x50, 0x44, 0x46])) return 'application/pdf'; // %PDF
   if (at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x57, 0x45, 0x42, 0x50])) return 'image/webp'; // RIFF....WEBP
   if (at(0, [0x50, 0x4b, 0x03, 0x04]) || at(0, [0x50, 0x4b, 0x05, 0x06])) return 'application/zip'; // PK..
+  // ISO BMFF video containers (MP4 / QuickTime MOV): 'ftyp' at byte offset 4
+  if (bytes.byteLength >= 12 && at(4, [0x66, 0x74, 0x79, 0x70])) {
+    if (at(8, [0x71, 0x74, 0x20, 0x20])) return 'video/quicktime';
+    return 'video/mp4';
+  }
+  // WebM / Matroska EBML header
+  if (at(0, [0x1a, 0x45, 0xdf, 0xa3])) return 'video/webm';
   return null;
 }
 

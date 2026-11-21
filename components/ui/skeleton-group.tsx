@@ -340,3 +340,25 @@ export function BountyDetailSkeleton() {
     </div>
   );
 }
+
+/** Skeleton for earnings dashboard streaming boundary */
+export function EarningsSkeleton() {
+  return (
+    <div className="space-y-6 animate-pulse" aria-label="Loading earnings data">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="h-28 rounded-xl bg-muted" />
+        ))}
+      </div>
+      <div className="h-10 w-full bg-muted rounded-lg" />
+      <div className="rounded-xl border border-border p-6 space-y-4">
+        <div className="h-6 w-48 bg-muted rounded" />
+        <div className="space-y-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-12 w-full bg-muted rounded-lg" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

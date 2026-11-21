@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -161,7 +161,11 @@ export function Sep24Timeline({ transaction, onRetry }: Sep24TimelineProps) {
       </CardHeader>
       <CardContent className="space-y-6">
         {/* Status Summary */}
-        <div className="space-y-2">
+        <div
+          className="space-y-2"
+          role={transaction.status === 'error' ? 'alert' : 'status'}
+          aria-live={transaction.status === 'error' ? 'assertive' : 'polite'}
+        >
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-muted-foreground">Current status</p>
@@ -204,14 +208,14 @@ export function Sep24Timeline({ transaction, onRetry }: Sep24TimelineProps) {
         {/* Timeline */}
         <div className="space-y-6">
           <h4 className="text-sm font-medium text-muted-foreground">Status History</h4>
-          <div className="space-y-4">
+          <ol aria-label="Transaction status history" className="space-y-4 list-none p-0 m-0">
             {transaction.statusHistory.map((entry, index, array) => {
               const info = getStatusInfo(entry.status)
               const isLast = index === array.length - 1
               const isHovered = hoveredStatus === entry.id
 
               return (
-                <div
+                <li
                   key={entry.id}
                   className="relative pl-8"
                   onMouseEnter={() => setHoveredStatus(entry.id)}
@@ -219,6 +223,7 @@ export function Sep24Timeline({ transaction, onRetry }: Sep24TimelineProps) {
                 >
                   {/* Timeline dot */}
                   <div
+                    aria-hidden="true"
                     className={`absolute left-0 top-1.5 h-4 w-4 rounded-full border-2 transition-colors ${
                       isHovered ? 'ring-2 ring-offset-2 ring-ring' : ''
                     } ${
@@ -246,7 +251,7 @@ export function Sep24Timeline({ transaction, onRetry }: Sep24TimelineProps) {
                         <p className="text-sm text-muted-foreground">{info.description}</p>
                       </div>
                       <div className="text-xs text-muted-foreground flex items-center gap-2">
-                        <Calendar className="h-3 w-3" />
+                        <Calendar className="h-3 w-3" aria-hidden="true" />
                         {formatDate(entry.createdAt)}
                       </div>
                     </div>
@@ -264,20 +269,21 @@ export function Sep24Timeline({ transaction, onRetry }: Sep24TimelineProps) {
 
                   {/* Connector line */}
                   {!isLast && (
-                    <div className="absolute left-2 top-6 bottom-[-16px] w-px bg-border" />
+                    <div aria-hidden="true" className="absolute left-2 top-6 bottom-[-16px] w-px bg-border" />
                   )}
-                </div>
+                </li>
               )
             })}
-          </div>
+          </ol>
         </div>
 
         {/* Action Buttons */}
         <div className="flex items-center justify-between pt-4 border-t">
           {transaction.status === 'error' && (
             <button
+              type="button"
               onClick={handleRetry}
-              className="text-sm text-destructive hover:underline"
+              className="text-sm text-destructive hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
             >
               Try again
             </button>

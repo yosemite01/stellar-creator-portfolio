@@ -139,3 +139,15 @@ export async function queueDigestEmails(
 
   return { queued, skipped };
 }
+
+export class DigestNotificationService {
+  async buildDigestForUser(userId: string): Promise<UserDigest | null> {
+    return buildDigestForUser(userId);
+  }
+
+  async queueDigestEmails(
+    frequency: Exclude<DigestFrequency, 'NONE'>,
+  ): Promise<{ queued: number; skipped: number }> {
+    return queueDigestEmails(frequency);
+  }
+}
