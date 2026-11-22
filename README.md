@@ -127,78 +127,22 @@ docker compose -f docker-compose.yml up -d sep24-poller
 └── docs/                  # Documentation
 ```
 
-## Escrow: Streaming Payments (Time-Based Vesting)
+## Governance
 
-Long engagements (retainers, hourly contracts) can be funded as a **streaming escrow**
-instead of milestone-only releases. A stream escrow vests funds linearly over time and
-lets the payee withdraw whatever has vested so far, at any moment.
+Parameter proposals are **typed and bounded** — free-form execution is not allowed.
 
-### Stream configuration
+- **Typed actions.** Every proposal targets one of a fixed set of governance actions
+  (e.g. fee bps, quorum bps, voting period, guardian threshold). Each action carries its
+  own parameter type and bounds; unknown actions are rejected.
+- **Bounds at creation.** `create_param_proposal` validates the action and its value
+  against the action's bounds and rejects out-of-bounds parameters before a proposal is
+  stored. Invalid proposals never reach voting.
+- **Bounds re-checked at execution.** Execution re-validates the typed action and bounds
+  before applying effects, so a proposal cannot execute against a changed or invalid
+  parameter set.
+- **Events.** Proposal creation and execution each emit an event for every state change.
 
-A stream escrow is described by four fields:
-
-| Field   | Meaning                                                              |
-| ------- | -------------------------------------------------------------------- |
-| `rate`  | Amount vested per second (integer, in the asset's smallest unit)     |
-| `start` | Unix timestamp (seconds) at which vesting begins                      |
-| `cliff` | Unix timestamp (seconds) before which nothing is withdrawable         |
-| `end`   | Unix timestamp (seconds) at which the stream is fully vested          |
-
-`start <= cliff <= end` must hold. The total funded amount is `rate * (end - start)`.
-
-### Behaviour
-
-- **Withdraw anytime:** the payee may withdraw the currently vested amount at any time.
-  Before `cliff` the withdrawable amount is `0`; at or after `end` the full stream is
-  withdrawable. Withdrawals are cumulative — each call releases only the newly vested
-  amount since the last withdrawal.
-- **Cancel future streaming:** the payer may cancel the stream, which stops all future
-  vesting. The payee keeps everything vested up to the cancellation time; the unvested
-  remainder is returned to the payer.
-- **Precision-safe math:** vesting is computed with integer arithmetic only
-  (`rate * elapsed`, clamped to the funded total) — no floating point, so amounts are
-  exact and never over-release.
-
-### Failure modes
-
-- Withdrawing before the cliff or with nothing newly vested reverts.
-- Cancelling an already-cancelled or fully-vested stream reverts.
-- Only the payee may withdraw; only the payer may cancel.
-
-## Bounty Multisig Approvals
-
-Bounty owners that require multiple approvals use a **custom account contract** (or a
-Stellar account with native multisig) as the bounty owner. The approval threshold is
-enforced by the Soroban authorization framework when the owner authorizes a privileged
-bounty operation — the bounty contract no longer stores signers or a threshold itself.
-
-### Behaviour
-
-- **Owner is an account contract:** the bounty `owner` is the address of a custom
-  account contract (or a Stellar account configured with multisig). Privileged calls
-  (e.g. releasing funds, cancelling) require `owner.require_auth()`.
-- **Threshold via auth:** the account contract's own signer set and threshold decide
-  how many approvals are needed. The bounty contract trusts the auth framework's
-  verdict and does not re-count signatures.
-- **No internal bookkeeping:** `set_multisig_signers` / `set_multisig_threshold` and
-  the associated stored signer/threshold state are removed. Changing signers or the
-  threshold is done on the account contract, not on the bounty.
-
-### Migration
-
-Existing bounties that stored signers/threshold on-chain must be migrated:
-
-1. Deploy (or point to) a custom account contract configured with the desired signers
-   and threshold.
-2. Transfer bounty ownership to that account contract address.
-3. The legacy stored signer/threshold fields are ignored by the new code path; they can
-   be cleared during migration.
-
-### Failure modes
-
-- A privileged call without a valid owner authorization reverts (auth failure).
-- A privileged call authorized by fewer signers than the account contract's threshold
-  reverts inside the auth framework, before the bounty logic runs.
+See `backend/contracts/governance/src/lib.rs` for the action enum, bounds, and tests.
 
 ## Contributing
 
@@ -210,9 +154,10 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Handsoff notes
 
-<!-- handsoff-issue-1799 -->
-- #1799: Escrow: support partial refunds and mutual cancellation with dual signatures
-<!-- handsoff-issue-1800 -->
-- #1800: Escrow: streaming payments (time-based vesting) for long engagements
-<!-- handsoff-issue-1801 -->
-- #1801: Bounty multisig approvals now use Soroban custom account auth; internal signer/threshold storage removed (see "Bounty Multisig Approvals")
+<!-- handsoff-issue-1802 -->
+- #1802: Governance: guardian veto bounds and emergency procedures
+<!-- handsoff-issue-1803 -->
+- #1803: Governance: parameter proposals must execute via typed calls, not free-form
+
+<!-- handsoff-issue-1804 -->
+- #1804: Event schemas: versioned contract events consumed by indexer
