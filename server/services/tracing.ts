@@ -16,6 +16,13 @@
  *  • Sampling: 100% in dev, configurable in prod (default 10%)
  *  • Attribute limits: max 128 attrs/span, 1024 bytes/attr
  *  • Resource detection cached at init (1-time penalty)
+ *
+ * Cross-service unification (#1813):
+ *  • Resource attributes, propagators and sampling are aligned with the Rust
+ *    services (`backend/services/common/src/logging.rs`) so a single trace spans
+ *    Next.js and Rust. Shared env contract:
+ *      OTEL_SERVICE_NAME, OTEL_SERVICE_VERSION, OTEL_DEPLOYMENT_ENVIRONMENT,
+ *      OTEL_TRACE_SAMPLE_RATE, OTEL_EXPORTER_OTLP_ENDPOINT
  */
 
 import { NodeSDK } from '@opentelemetry/sdk-node';
@@ -35,27 +42,41 @@ import {
   type Span,
   type Tracer,
 } from '@opentelemetry/api';
-import { W3CTraceContextPropagator } from '@opentelemetry/core';
+import {
+  W3CTraceContextPropagator,
+  W3CBaggagePropagator,
+  CompositePropagator,
+} from '@opentelemetry/core';
 import { BatchSpanProcessor, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-base';
 import { logger } from '@/lib/logger';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'stellar-creator-portfolio';
-const SERVICE_VERSION = process.env.npm_package_version ?? '1.0.0';
-const ENV = process.env.NODE_ENV ?? 'development';
+const SERVICE_VERSION =
+  process.env.OTEL_SERVICE_VERSION ?? process.env.npm_package_version ?? '1.0.0';
+const ENV =
+  process.env.OTEL_DEPLOYMENT_ENVIRONMENT ?? process.env.NODE_ENV ?? 'development';
 
 /** Jaeger / Datadog OTLP endpoint (gRPC) */
 const OTLP_ENDPOINT =
   process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4317';
 
-/** Sample rate in production: 0.1 = 10% of traces */
+/** Sample rate in production: 0.1 = 10% of traces (shared with Rust services) */
 const TRACE_SAMPLE_RATE = parseFloat(
   process.env.OTEL_TRACE_SAMPLE_RATE ?? (ENV === 'production' ? '0.1' : '1.0'),
 );
 
 /** Enable OpenTelemetry (can be disabled in test environments) */
 const OTEL_ENABLED = process.env.OTEL_ENABLED !== 'false';
+
+/**
+ * Shared propagators: W3C TraceContext (traceparent/tracestate) + W3C Baggage.
+ * Must match the Rust services so context flows across the Next.js ↔ Rust boundary.
+ */
+const PROPAGATOR = new CompositePropagator({
+  propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
+});
 
 // ── Global SDK instance ──────────────────────────────────────────────────────
 
@@ -81,7 +102,7 @@ export function initializeTracing(): void {
     return;
   }
 
-  // Resource: static metadata attached to every span
+  // Resource: static metadata attached to every span (aligned with Rust services)
   const resource = defaultResource().merge(
     resourceFromAttributes({
       [ATTR_SERVICE_NAME]: SERVICE_NAME,
@@ -90,7 +111,7 @@ export function initializeTracing(): void {
     }),
   );
 
-  // Sampler: parent-based with ratio-based fallback
+  // Sampler: parent-based with ratio-based fallback (shared strategy with Rust)
   const sampler =
     ENV === 'development'
       ? new AlwaysOnSampler()
@@ -123,7 +144,7 @@ export function initializeTracing(): void {
     sampler,
     spanProcessors,
     traceExporter: otlpExporter,
-    textMapPropagator: new W3CTraceContextPropagator(),
+    textMapPropagator: PROPAGATOR,
     instrumentations: [
       getNodeAutoInstrumentations({
         // Disable noisy instrumentations
@@ -199,9 +220,8 @@ export function tracingMiddleware<T extends TracingMiddlewareContext>(
       (headers as Headers).get?.('traceparent') ??
       (headers as any).traceparent;
     if (traceparent) {
-      // Parse W3C traceparent into active context
-      const propagator = new W3CTraceContextPropagator();
-      parentContext = propagator.extract(context.active(), { traceparent }, {
+      // Parse W3C traceparent into active context using the shared propagator
+      parentContext = PROPAGATOR.extract(context.active(), { traceparent }, {
         get: (carrier, key) => (carrier as Record<string, string>)[key],
         keys: (carrier) => Object.keys(carrier),
       });
@@ -251,140 +271,4 @@ export function tracingMiddleware<T extends TracingMiddlewareContext>(
  * prisma.$use(createPrismaTracingMiddleware());
  * ```
  */
-export function createPrismaTracingMiddleware() {
-  return async (params: any, next: (params: any) => Promise<any>) => {
-    if (!tracer) {
-      // Tracing not initialized — pass through
-      return next(params);
-    }
-
-    const span = tracer.startSpan(`prisma.${params.model}.${params.action}`, {
-      attributes: {
-        'db.system': 'postgresql',
-        'db.operation': params.action,
-        'db.prisma.model': params.model ?? 'unknown',
-      },
-    });
-
-    return context.with(trace.setSpan(context.active(), span), async () => {
-      try {
-        const result = await next(params);
-        span.setStatus({ code: SpanStatusCode.OK });
-        return result;
-      } catch (err) {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: err instanceof Error ? err.message : String(err),
-        });
-        span.recordException(err as Error);
-        throw err;
-      } finally {
-        span.end();
-      }
-    });
-  };
-}
-
-// ── Manual instrumentation helpers ───────────────────────────────────────────
-
-/**
- * Wrap an async function with a custom span.
- *
- * @example
- * ```ts
- * const result = await withSpan('my-operation', async (span) => {
- *   span.setAttribute('user.id', userId);
- *   return await doWork();
- * });
- * ```
- */
-export async function withSpan<T>(
-  name: string,
-  fn: (span: Span) => Promise<T>,
-  attributes?: Record<string, string | number | boolean>,
-): Promise<T> {
-  if (!tracer) {
-    // Tracing not initialized — execute without span
-    return fn({} as Span);
-  }
-
-  const span = tracer.startSpan(name, { attributes });
-
-  return context.with(trace.setSpan(context.active(), span), async () => {
-    try {
-      const result = await fn(span);
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    } catch (err) {
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: err instanceof Error ? err.message : String(err),
-      });
-      span.recordException(err as Error);
-      throw err;
-    } finally {
-      span.end();
-    }
-  });
-}
-
-/**
- * Get the current active span from the async context.
- * Returns null if no span is active.
- */
-export function getCurrentSpan(): Span | null {
-  return trace.getSpan(context.active()) ?? null;
-}
-
-/**
- * Add an attribute to the current active span (if any).
- * Safe to call when no span is active — no-op.
- */
-export function setAttribute(
-  key: string,
-  value: string | number | boolean,
-): void {
-  const span = getCurrentSpan();
-  if (span) {
-    span.setAttribute(key, value);
-  }
-}
-
-/**
- * Add an event (log line) to the current active span.
- */
-export function addEvent(name: string, attributes?: Record<string, string>): void {
-  const span = getCurrentSpan();
-  if (span) {
-    span.addEvent(name, attributes);
-  }
-}
-
-/**
- * Record an exception on the current active span.
- */
-export function recordException(err: Error): void {
-  const span = getCurrentSpan();
-  if (span) {
-    span.recordException(err);
-  }
-}
-
-/**
- * Extract the W3C traceparent header from the current active context.
- * Returns null if no active trace.
- *
- * Use this to manually propagate trace context to external services.
- */
-export function getTraceparent(): string | null {
-  const span = getCurrentSpan();
-  if (!span) return null;
-
-  const spanContext = span.spanContext();
-  if (!spanContext.traceId) return null;
-
-  // W3C traceparent format: version-traceId-spanId-flags
-  const version = '00';
-  const flags = spanContext.traceFlags?.toString(16).padStart(2, '0') ?? '01';
-  return `${version}-${spanContext.traceId}-${spanContext.spanId}-${flags}`;
-}
+export function createPrismaTra

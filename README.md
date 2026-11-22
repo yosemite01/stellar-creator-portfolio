@@ -107,6 +107,41 @@ Or use Docker:
 docker compose -f docker-compose.yml up -d sep24-poller
 ```
 
+### Tracing (OpenTelemetry)
+
+The Next.js app and the Rust backend share a single OpenTelemetry setup so traces
+stitch together across service boundaries.
+
+**Shared resource attributes** — both services emit the same resource keys so a
+trace can be filtered consistently in the collector and dashboards:
+
+| Attribute | Next.js | Rust |
+| --- | --- | --- |
+| `service.name` | `OTEL_SERVICE_NAME` (default `stellar-creator-portfolio`) | `OTEL_SERVICE_NAME` (default `stellar-creator-backend`) |
+| `service.version` | `OTEL_SERVICE_VERSION` / build version | `OTEL_SERVICE_VERSION` / crate version |
+| `deployment.environment` | `OTEL_ENVIRONMENT` (default `development`) | `OTEL_ENVIRONMENT` (default `development`) |
+
+**Propagators** — both services use the W3C `tracecontext` + `baggage`
+propagators. Outgoing requests from Next.js inject `traceparent`/`tracestate`,
+and the Rust backend extracts them, so a single trace spans both runtimes.
+
+**Sampling** — a single `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` pair
+controls sampling for both services (default: `parentbased_traceidratio` with
+`OTEL_TRACES_SAMPLER_ARG=0.1`). Because both use parent-based sampling, the
+sampling decision made at the edge is honored by downstream services.
+
+**Collector** — point both services at the same OTLP endpoint via
+`OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4317`). The collector
+receives spans from both runtimes and forwards them to the configured backend.
+
+```env
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+OTEL_SERVICE_NAME=stellar-creator-portfolio
+OTEL_ENVIRONMENT=development
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
 ## Project Structure
 
 ```
