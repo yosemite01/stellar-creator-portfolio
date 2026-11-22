@@ -51,22 +51,33 @@ jobs:
           echo "rust_api_url=$RUST_API_URL" >> "$GITHUB_OUTPUT"
 
       - name: Run load test
+        id: k6
         env:
           BASE_URL: ${{ steps.resolve.outputs.base_url }}
           RUST_API_URL: ${{ steps.resolve.outputs.rust_api_url }}
+        # Capture the k6 exit code so the summary is always uploaded, then
+        # re-raise the failure so the job (and nightly issue) still triggers.
         run: |
+          set +e
           k6 run \
             -e BASE_URL=$BASE_URL \
             -e RUST_API_URL=$RUST_API_URL \
+            --summary-export=load-test-summary.json \
             --out json=load-test-results.json \
             load-tests/${{ steps.resolve.outputs.test }}.test.js
+          K6_EXIT=$?
+          echo "exit_code=$K6_EXIT" >> "$GITHUB_OUTPUT"
+          exit $K6_EXIT
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: load-test-results-${{ steps.resolve.outputs.test }}-${{ github.run_id }}
-          path: load-test-results.json
+          path: |
+            load-test-results.json
+            load-test-summary.json
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Notify on failure
