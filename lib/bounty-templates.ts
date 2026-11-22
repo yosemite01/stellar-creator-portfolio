@@ -1,5 +1,6 @@
 // Bounty template seed data — Issue #810
 // 20 templates across categories for the "Start from template" picker
+// Issue #1821: templates are versioned and rich text is sanitised server-side.
 
 export interface BountyTemplate {
   id: string;
@@ -9,6 +10,138 @@ export interface BountyTemplate {
   suggestedBudget: number;   // USD
   suggestedTimeline: number; // days
   requiredSkills: string[];
+}
+
+/**
+ * A single immutable revision of a template. Bounties reference a specific
+ * version so editing a template never mutates a live bounty.
+ */
+export interface BountyTemplateVersion {
+  templateId: string;
+  version: number;
+  title: string;
+  description: string;
+  suggestedBudget: number;
+  suggestedTimeline: number;
+  requiredSkills: string[];
+  /** Review state of this revision. Only `approved` versions may be used. */
+  status: 'draft' | 'pending_review' | 'approved' | 'rejected';
+  createdAt: string;
+}
+
+/** A bounty pins the exact template version it was created from. */
+export interface BountyTemplateRef {
+  templateId: string;
+  version: number;
+}
+
+const ALLOWED_TAGS = new Set([
+  'p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'a', 'code', 'pre', 'blockquote',
+]);
+
+const ALLOWED_ATTRS: Record<string, Set<string>> = {
+  a: new Set(['href', 'title']),
+};
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isSafeHref(href: string): boolean {
+  const trimmed = href.trim().toLowerCase();
+  return (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('mailto:') ||
+    trimmed.startsWith('/')
+  );
+}
+
+/**
+ * Server-side sanitiser for user-provided rich text. Strips disallowed tags,
+ * event handlers, and unsafe URLs (e.g. `javascript:`) to prevent XSS.
+ * This is intentionally dependency-free so it can run in any server context.
+ */
+export function sanitizeRichText(input: string): string {
+  if (typeof input !== 'string' || input.length === 0) return '';
+
+  // Remove comments, script/style blocks and their contents entirely.
+  let html = input
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style|iframe|object|embed|svg|math)[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<(script|style|iframe|object|embed|svg|math)[^>]*\/?>/gi, '');
+
+  // Walk tags, keeping only allow-listed ones with allow-listed attributes.
+  html = html.replace(/<\/?([a-zA-Z0-9]+)((?:\s+[^<>]*?)?)\/?>/g, (match, rawTag, rawAttrs) => {
+    const tag = String(rawTag).toLowerCase();
+    if (!ALLOWED_TAGS.has(tag)) return '';
+
+    const allowed = ALLOWED_ATTRS[tag];
+    if (!allowed) return `<${tag}>`;
+
+    const attrs: string[] = [];
+    const attrRe = /([a-zA-Z-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+    let m: RegExpExecArray | null;
+    while ((m = attrRe.exec(String(rawAttrs))) !== null) {
+      const name = m[1].toLowerCase();
+      const value = m[3] ?? m[4] ?? m[5] ?? '';
+      if (!allowed.has(name)) continue;
+      if (name === 'href' && !isSafeHref(value)) continue;
+      attrs.push(`${name}="${escapeHtml(value)}"`);
+    }
+
+    const rendered = attrs.length ? ` ${attrs.join(' ')}` : '';
+    return `<${tag}${rendered}>`;
+  });
+
+  return html;
+}
+
+/**
+ * Build a versioned, sanitised snapshot of a template. Every edit produces a
+ * new version in `pending_review`; only approved versions are usable.
+ */
+export function createTemplateVersion(
+  template: BountyTemplate,
+  previousVersion: number,
+  now: string = new Date().toISOString(),
+): BountyTemplateVersion {
+  return {
+    templateId: template.id,
+    version: previousVersion + 1,
+    title: sanitizeRichText(template.title),
+    description: sanitizeRichText(template.description),
+    suggestedBudget: template.suggestedBudget,
+    suggestedTimeline: template.suggestedTimeline,
+    requiredSkills: template.requiredSkills.map((s) => sanitizeRichText(s)),
+    status: 'pending_review',
+    createdAt: now,
+  };
+}
+
+/** Admin review gate: only approved versions may back a bounty. */
+export function approveTemplateVersion(version: BountyTemplateVersion): BountyTemplateVersion {
+  return { ...version, status: 'approved' };
+}
+
+export function rejectTemplateVersion(version: BountyTemplateVersion): BountyTemplateVersion {
+  return { ...version, status: 'rejected' };
+}
+
+/** Resolve the pinned version for a bounty, refusing unapproved revisions. */
+export function resolveBountyTemplate(
+  ref: BountyTemplateRef,
+  versions: BountyTemplateVersion[],
+): BountyTemplateVersion | null {
+  const found = versions.find(
+    (v) => v.templateId === ref.templateId && v.version === ref.version,
+  );
+  return found && found.status === 'approved' ? found : null;
 }
 
 export const BOUNTY_TEMPLATES: BountyTemplate[] = [
@@ -187,24 +320,4 @@ export const BOUNTY_TEMPLATES: BountyTemplate[] = [
     suggestedTimeline: 14,
     requiredSkills: ['Recruiting', 'LinkedIn Sourcing', 'Technical Screening'],
   },
-  {
-    id: 'tpl-legal-001',
-    category: 'Legal & Compliance',
-    title: 'Privacy Policy & Terms of Service Review',
-    description: 'Review and update existing Privacy Policy and Terms of Service to ensure GDPR/CCPA compliance. Includes a gap analysis and a revised document.',
-    suggestedBudget: 3000,
-    suggestedTimeline: 10,
-    requiredSkills: ['Legal Writing', 'GDPR', 'CCPA', 'Privacy Law'],
-  },
-  {
-    id: 'tpl-cs-001',
-    category: 'Customer Success',
-    title: 'Customer Onboarding Playbook',
-    description: 'Design a full customer onboarding playbook: welcome emails, success milestones, health-score criteria, and a 30/60/90-day check-in framework.',
-    suggestedBudget: 1600,
-    suggestedTimeline: 14,
-    requiredSkills: ['Customer Success', 'Onboarding Design', 'SaaS'],
-  },
 ];
-
-export const TEMPLATE_CATEGORIES = [...new Set(BOUNTY_TEMPLATES.map(t => t.category))];
