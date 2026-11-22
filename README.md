@@ -8,6 +8,7 @@ A platform for creators to manage bounties, portfolio projects, and Stellar-base
 - Portfolio showcase with rich-text editor
 - SEP-24 compliant deposit/withdrawal via anchors
 - Escrow with deadlock prevention
+- Streaming escrow (time-based vesting) for retainers and hourly contracts
 - KYC verification workflow
 - Real-time notifications
 - Multi-factor authentication
@@ -126,6 +127,44 @@ docker compose -f docker-compose.yml up -d sep24-poller
 └── docs/                  # Documentation
 ```
 
+## Escrow: Streaming Payments (Time-Based Vesting)
+
+Long engagements (retainers, hourly contracts) can be funded as a **streaming escrow**
+instead of milestone-only releases. A stream escrow vests funds linearly over time and
+lets the payee withdraw whatever has vested so far, at any moment.
+
+### Stream configuration
+
+A stream escrow is described by four fields:
+
+| Field   | Meaning                                                              |
+| ------- | -------------------------------------------------------------------- |
+| `rate`  | Amount vested per second (integer, in the asset's smallest unit)     |
+| `start` | Unix timestamp (seconds) at which vesting begins                      |
+| `cliff` | Unix timestamp (seconds) before which nothing is withdrawable         |
+| `end`   | Unix timestamp (seconds) at which the stream is fully vested          |
+
+`start <= cliff <= end` must hold. The total funded amount is `rate * (end - start)`.
+
+### Behaviour
+
+- **Withdraw anytime:** the payee may withdraw the currently vested amount at any time.
+  Before `cliff` the withdrawable amount is `0`; at or after `end` the full stream is
+  withdrawable. Withdrawals are cumulative — each call releases only the newly vested
+  amount since the last withdrawal.
+- **Cancel future streaming:** the payer may cancel the stream, which stops all future
+  vesting. The payee keeps everything vested up to the cancellation time; the unvested
+  remainder is returned to the payer.
+- **Precision-safe math:** vesting is computed with integer arithmetic only
+  (`rate * elapsed`, clamped to the funded total) — no floating point, so amounts are
+  exact and never over-release.
+
+### Failure modes
+
+- Withdrawing before the cliff or with nothing newly vested reverts.
+- Cancelling an already-cancelled or fully-vested stream reverts.
+- Only the payee may withdraw; only the payer may cancel.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
@@ -138,3 +177,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-1799 -->
 - #1799: Escrow: support partial refunds and mutual cancellation with dual signatures
+<!-- handsoff-issue-1800 -->
+- #1800: Escrow: streaming payments (time-based vesting) for long engagements
