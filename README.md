@@ -23,6 +23,14 @@ A platform for creators to manage bounties, portfolio projects, and Stellar-base
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
 
+## Corridor Analytics
+
+Corridor analytics (`server/services/corridor-analytics.ts`) converts amounts
+using the price at each transaction's timestamp rather than the latest price,
+so historical totals stay stable as prices move. Converted amounts are stored
+per transaction and aggregates are cached; the cache is invalidated when new
+transactions are recorded.
+
 ## Getting Started
 
 ### Prerequisites
@@ -154,9 +162,11 @@ OTEL_TRACES_SAMPLER_ARG=0.1
 │   └── ...
 ├── components/            # React components
 │   └── payments/          # Payment UI components
+├── deployments/           # Per-environment deployment configs
 ├── lib/                   # Business logic
 │   └── stellar/           # Stellar protocol implementations
 ├── prisma/                # Database schema & migrations
+├── scripts/               # Deployment & tooling scripts
 ├── server/                # Backend services
 │   └── jobs/              # Background jobs
 └── docs/                  # Documentation

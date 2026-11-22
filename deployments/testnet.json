@@ -2,5 +2,14 @@
   "network": "testnet",
   "contracts": {},
   "gitSha": null,
-  "deployedAt": null
+  "deployedAt": null,
+  "admin": {
+    "mode": "single",
+    "address": null
+  },
+  "multisig": null,
+  "config": {
+    "frontend": null,
+    "backend": null
+  }
 }
