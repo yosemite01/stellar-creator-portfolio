@@ -144,3 +144,46 @@ export async function listFiles(prefix = ''): Promise<StoredFile[]> {
 export async function deleteObject(key: string): Promise<void> {
   await getClient().send(new DeleteObjectCommand({ Bucket: getBucket(), Key: key }));
 }
+
+export interface DeletedObject {
+  key: string;
+  size: number;
+}
+
+/**
+ * Deletes every object under a prefix (GDPR erasure). Paginates through the
+ * listing so large prefixes are fully removed, and returns the keys/sizes that
+ * were deleted so callers can record a certificate of erasure. Succeeds if the
+ * prefix is already empty.
+ */
+export async function deletePrefix(prefix: string): Promise<DeletedObject[]> {
+  if (!prefix) {
+    throw new Error('deletePrefix requires a non-empty prefix');
+  }
+
+  const deleted: DeletedObject[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const response = await getClient().send(
+      new ListObjectsV2Command({
+        Bucket: getBucket(),
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
+
+    const objects = (response.Contents ?? []).filter(
+      (object): object is typeof object & { Key: string } => Boolean(object.Key),
+    );
+
+    for (const object of objects) {
+      await deleteObject(object.Key);
+      deleted.push({ key: object.Key, size: object.Size ?? 0 });
+    }
+
+    continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return deleted;
+}
