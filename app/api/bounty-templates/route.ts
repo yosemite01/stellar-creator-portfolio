@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
 import { requireAuth, requireModifyTemplatePermission } from '@/server/services/authorization';
 import { createTemplate, listTemplatesFor, updateOwnTemplate, deleteOwnTemplate } from '@/lib/services/bounty-template-service';
+import { sanitizeRichText } from '@/lib/sanitize-rich-text';
 
 /**
  * GET  /api/bounty-templates   system templates + the caller's own saved templates
@@ -11,6 +12,9 @@ import { createTemplate, listTemplatesFor, updateOwnTemplate, deleteOwnTemplate 
  * See lib/services/bounty-template-service.ts (Issue #1611). Templates are
  * always scoped to the signed-in user — there is no way to create, read,
  * update or delete a template on another user's behalf.
+ *
+ * Issue #1821: user-provided rich text (description) is sanitised server-side
+ * before it is stored, so malicious markup can never be persisted or rendered.
  */
 
 const templateSchema = z.object({
@@ -46,6 +50,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid template', details: parsed.error.flatten() }, { status: 400 });
   }
 
-  const template = await createTemplate(user.id, parsed.data);
+  const sanitized = {
+    ...parsed.data,
+    description: sanitizeRichText(parsed.data.description),
+  };
+
+  const template = await createTemplate(user.id, sanitized);
   return NextResponse.json({ template }, { status: 201 });
 }
