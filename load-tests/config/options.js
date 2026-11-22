@@ -5,7 +5,7 @@
 export const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000';
 export const RUST_API_URL = __ENV.RUST_API_URL || 'http://localhost:3001';
 
-const P95_MS = __ENV.LOAD_TEST_P95 || '800';
+const P95_MS = __ENV.LOAD_TEST_P95 || '500';
 const P99_MS = __ENV.LOAD_TEST_P99 || '1500';
 
 /** Standard thresholds applied to every scenario (#1860) */
