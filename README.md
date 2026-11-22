@@ -22,6 +22,14 @@ A platform for creators to manage bounties, portfolio projects, and Stellar-base
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
 
+## Corridor Analytics
+
+Corridor analytics (`server/services/corridor-analytics.ts`) converts amounts
+using the price at each transaction's timestamp rather than the latest price,
+so historical totals stay stable as prices move. Converted amounts are stored
+per transaction and aggregates are cached; the cache is invalidated when new
+transactions are recorded.
+
 ## Getting Started
 
 ### Prerequisites
