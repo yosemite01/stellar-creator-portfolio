@@ -11,6 +11,7 @@ use std::time::Duration;
 mod alerts;
 mod aggregation;
 mod analytics;
+mod asset_verifier;
 mod auth;
 mod cqrs_read;
 mod cqrs_write;
@@ -1241,6 +1242,48 @@ async fn api_versions() -> HttpResponse {
     }))
 }
 
+// ==================== Stellar Parity Handlers ====================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ParseAccountRequest {
+    pub account: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VerifyReservesRequest {
+    pub declared: asset_verifier::DeclaredReserves,
+    pub observed: asset_verifier::ObservedReserves,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    pub error: String,
+    pub code: String,
+}
+
+async fn parse_stellar_account(payload: web::Json<ParseAccountRequest>) -> HttpResponse {
+    match muxed::StellarAccount::parse(&payload.account) {
+        Ok(account) => {
+            let response: muxed::StellarAccountResponse = account.into();
+            HttpResponse::Ok().json(response)
+        }
+        Err(err) => HttpResponse::BadRequest().json(ErrorResponse {
+            error: err.to_string(),
+            code: "INVALID_ACCOUNT".to_string(),
+        }),
+    }
+}
+
+async fn verify_stellar_reserves(payload: web::Json<VerifyReservesRequest>) -> HttpResponse {
+    match asset_verifier::validate_proof_of_reserve(&payload.declared, &payload.observed) {
+        Ok(report) => HttpResponse::Ok().json(report),
+        Err(err) => HttpResponse::BadRequest().json(ErrorResponse {
+            error: err.to_string(),
+            code: "INVALID_RESERVES".to_string(),
+        }),
+    }
+}
+
 // ==================== CORS ====================
 
 pub fn parse_allowed_origins() -> Vec<String> {
@@ -1510,6 +1553,18 @@ async fn main() -> std::io::Result<()> {
                     .route(
                         "/payments/{id}/stream",
                         web::get().to(ml_handlers::payment_stream),
+                    )
+                    .route(
+                        "/stellar/accounts/parse",
+                        web::post().to(parse_stellar_account),
+                    )
+                    .route(
+                        "/stellar/muxed/parse",
+                        web::post().to(parse_stellar_account),
+                    )
+                    .route(
+                        "/stellar/reserves/verify",
+                        web::post().to(verify_stellar_reserves),
                     )
                     .service(
                         web::scope("")
@@ -1790,5 +1845,77 @@ mod tests {
             .get("x-api-version")
             .expect("x-api-version header must be present");
         assert_eq!(header, API_VERSION);
+    }
+
+    #[actix_web::test]
+    async fn test_parse_stellar_account_endpoints() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new().service(
+                web::scope("/api/v1")
+                    .route("/stellar/accounts/parse", web::post().to(parse_stellar_account))
+                    .route("/stellar/muxed/parse", web::post().to(parse_stellar_account)),
+            ),
+        )
+        .await;
+
+        // Valid muxed account
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/stellar/accounts/parse")
+            .set_json(ParseAccountRequest {
+                account: "MAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACTA4".to_string(),
+            })
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+        let body: muxed::StellarAccountResponse = awtest::read_body_json(resp).await;
+        assert_eq!(body.base_account, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+        assert_eq!(body.muxed_id, Some(1));
+        assert!(body.is_muxed);
+
+        // Invalid account
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/stellar/muxed/parse")
+            .set_json(ParseAccountRequest {
+                account: "INVALID_ADDR".to_string(),
+            })
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn test_verify_stellar_reserves_endpoint() {
+        use actix_web::test as awtest;
+        let app = awtest::init_service(
+            App::new().service(
+                web::scope("/api/v1")
+                    .route("/stellar/reserves/verify", web::post().to(verify_stellar_reserves)),
+            ),
+        )
+        .await;
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/stellar/reserves/verify")
+            .set_json(VerifyReservesRequest {
+                declared: asset_verifier::DeclaredReserves {
+                    asset_code: "USDC".to_string(),
+                    asset_issuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5".to_string(),
+                    issuer_account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5".to_string(),
+                    issuer_reserve: "1000".to_string(),
+                    treasury_account: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+                    treasury_reserve: "500".to_string(),
+                },
+                observed: asset_verifier::ObservedReserves {
+                    issuer_balance: "1000.0000000".to_string(),
+                    treasury_balance: "500.0000000".to_string(),
+                },
+            })
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+        let body: asset_verifier::ProofOfReserveReport = awtest::read_body_json(resp).await;
+        assert!(body.valid);
+        assert!(body.mismatches.is_empty());
     }
 }

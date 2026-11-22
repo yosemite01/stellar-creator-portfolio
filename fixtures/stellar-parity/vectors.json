@@ -1,0 +1,223 @@
+{
+  "version": "1.0.0",
+  "description": "Shared test vectors for Stellar muxed account parsing (SEP-23) and asset reserve verification across Rust API and TypeScript client.",
+  "muxed_accounts": [
+    {
+      "id": "valid-standard-g-account",
+      "description": "Standard G-address with no muxed ID",
+      "input": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      "valid": true,
+      "expected": {
+        "base_account": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "muxed_id": null,
+        "is_muxed": false,
+        "analytics_id": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+      }
+    },
+    {
+      "id": "valid-muxed-id-0",
+      "description": "Muxed account with ID 0",
+      "input": "MAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB5IG",
+      "valid": true,
+      "expected": {
+        "base_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        "muxed_id": 0,
+        "is_muxed": true,
+        "analytics_id": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF:0"
+      }
+    },
+    {
+      "id": "valid-muxed-id-1",
+      "description": "Muxed account with ID 1",
+      "input": "MAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACTA4",
+      "valid": true,
+      "expected": {
+        "base_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        "muxed_id": 1,
+        "is_muxed": true,
+        "analytics_id": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF:1"
+      }
+    },
+    {
+      "id": "valid-muxed-id-42",
+      "description": "Muxed account with ID 42",
+      "input": "MAAAAAAAAAAAAKQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALR6",
+      "valid": true,
+      "expected": {
+        "base_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        "muxed_id": 42,
+        "is_muxed": true,
+        "analytics_id": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF:42"
+      }
+    },
+    {
+      "id": "valid-muxed-u64-max",
+      "description": "Muxed account with maximum u64 ID",
+      "input": "MD777777777777YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABYWA",
+      "valid": true,
+      "expected": {
+        "base_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        "muxed_id": 18446744073709551615,
+        "is_muxed": true,
+        "analytics_id": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF:18446744073709551615"
+      }
+    },
+    {
+      "id": "valid-muxed-key1-id-100",
+      "description": "Muxed account with sequential key and ID 100",
+      "input": "MAAAAAAAAAAAAZAAAEBAGBAFAYDQQCIKBMGA2DQPCAIREEYUCULBOGAZDINRYHI6D4TJY",
+      "valid": true,
+      "expected": {
+        "base_account": "GAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7JZX",
+        "muxed_id": 100,
+        "is_muxed": true,
+        "analytics_id": "GAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7JZX:100"
+      }
+    },
+    {
+      "id": "invalid-empty-account",
+      "description": "Empty string account input",
+      "input": "",
+      "valid": false,
+      "expected_error": "EmptyAccount"
+    },
+    {
+      "id": "invalid-prefix",
+      "description": "Invalid prefix letter",
+      "input": "XAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB5IG",
+      "valid": false,
+      "expected_error": "InvalidFormat"
+    },
+    {
+      "id": "invalid-base32-chars",
+      "description": "Invalid Base32 characters (!@#$)",
+      "input": "MAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAA!@#$AAAAAAAAAAAAAAAAACTA4",
+      "valid": false,
+      "expected_error": "InvalidBase32"
+    },
+    {
+      "id": "invalid-checksum",
+      "description": "Muxed account with corrupt checksum",
+      "input": "MAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACTB4",
+      "valid": false,
+      "expected_error": "InvalidChecksum"
+    },
+    {
+      "id": "invalid-length-too-short",
+      "description": "Truncated muxed account",
+      "input": "MAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "valid": false,
+      "expected_error": "InvalidMuxedFormat"
+    }
+  ],
+  "reserves_verification": [
+    {
+      "id": "valid-matching-integers",
+      "description": "Matching reserves with whole integers",
+      "declared": {
+        "asset_code": "USDC",
+        "asset_issuer": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_account": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_reserve": "1000",
+        "treasury_account": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "treasury_reserve": "500"
+      },
+      "observed": {
+        "issuer_balance": "1000.0000000",
+        "treasury_balance": "500.0000000"
+      },
+      "valid_input": true,
+      "expected_valid": true,
+      "expected_mismatches": []
+    },
+    {
+      "id": "valid-matching-exact-stroops",
+      "description": "Matching reserves down to 1 stroop (0.0000001)",
+      "declared": {
+        "asset_code": "USDC",
+        "asset_issuer": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_account": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_reserve": "1000.0000001",
+        "treasury_account": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "treasury_reserve": "500.2500000"
+      },
+      "observed": {
+        "issuer_balance": "1000.0000001",
+        "treasury_balance": "500.25"
+      },
+      "valid_input": true,
+      "expected_valid": true,
+      "expected_mismatches": []
+    },
+    {
+      "id": "mismatch-issuer-balance",
+      "description": "Issuer reserve mismatch",
+      "declared": {
+        "asset_code": "USDC",
+        "asset_issuer": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_account": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_reserve": "1000.0000000",
+        "treasury_account": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "treasury_reserve": "500.0000000"
+      },
+      "observed": {
+        "issuer_balance": "999.0000000",
+        "treasury_balance": "500.0000000"
+      },
+      "valid_input": true,
+      "expected_valid": false,
+      "expected_mismatches": [
+        {
+          "account_role": "issuer",
+          "account_id": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          "declared": "1000.0000000",
+          "observed": "999.0000000"
+        }
+      ]
+    },
+    {
+      "id": "mismatch-treasury-balance",
+      "description": "Treasury reserve mismatch",
+      "declared": {
+        "asset_code": "USDC",
+        "asset_issuer": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_account": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_reserve": "1000.0000000",
+        "treasury_account": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "treasury_reserve": "500.2500000"
+      },
+      "observed": {
+        "issuer_balance": "1000.0000000",
+        "treasury_balance": "400.0000000"
+      },
+      "valid_input": true,
+      "expected_valid": false,
+      "expected_mismatches": [
+        {
+          "account_role": "treasury",
+          "account_id": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+          "declared": "500.2500000",
+          "observed": "400.0000000"
+        }
+      ]
+    },
+    {
+      "id": "invalid-precision-exceeds-7-decimals",
+      "description": "Amount with 8 decimals (invalid in Stellar)",
+      "declared": {
+        "asset_code": "USDC",
+        "asset_issuer": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_account": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "issuer_reserve": "1000.00000001",
+        "treasury_account": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "treasury_reserve": "500.0000000"
+      },
+      "observed": {
+        "issuer_balance": "1000.0000000",
+        "treasury_balance": "500.0000000"
+      },
+      "valid_input": false,
+      "expected_error": "InvalidReserveAmount"
+    }
+  ]
+}
