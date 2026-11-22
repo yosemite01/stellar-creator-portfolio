@@ -157,3 +157,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 - #1802: Governance: guardian veto bounds and emergency procedures
 <!-- handsoff-issue-1803 -->
 - #1803: Governance: parameter proposals must execute via typed calls, not free-form
+
+<!-- handsoff-issue-1804 -->
+- #1804: Event schemas: versioned contract events consumed by indexer
