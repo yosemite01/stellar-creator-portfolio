@@ -1,5 +1,6 @@
 import { cache } from 'react';
-import { creators, type Creator } from '@/lib/services/creators-data';
+import type { Creator } from '@/lib/services/creators-data';
+import { getCreatorByIdFromDB } from '@/server/services/creators-directory';
 
 const CHUNK_DELAY_MS = 0;
 
@@ -14,13 +15,13 @@ async function delay(ms: number) {
 
 export const fetchCreatorCore = cache(async (id: string): Promise<Creator | null> => {
   await delay(CHUNK_DELAY_MS);
-  return creators.find((c) => c.id === id) ?? null;
+  return getCreatorByIdFromDB(id);
 });
 
 export const fetchCreatorBio = cache(
   async (id: string): Promise<{ bio: string; tagline: string; skills: string[] } | null> => {
     await delay(CHUNK_DELAY_MS);
-    const creator = creators.find((c) => c.id === id);
+    const creator = await getCreatorByIdFromDB(id);
     if (!creator) return null;
     return { bio: creator.bio, tagline: creator.tagline, skills: creator.skills };
   },
@@ -28,13 +29,13 @@ export const fetchCreatorBio = cache(
 
 export const fetchCreatorProjects = cache(async (id: string) => {
   await delay(CHUNK_DELAY_MS);
-  const creator = creators.find((c) => c.id === id);
+  const creator = await getCreatorByIdFromDB(id);
   return creator?.projects ?? [];
 });
 
 export const fetchCreatorSocial = cache(async (id: string) => {
   await delay(CHUNK_DELAY_MS);
-  const creator = creators.find((c) => c.id === id);
+  const creator = await getCreatorByIdFromDB(id);
   if (!creator) return null;
   return { linkedIn: creator.linkedIn, twitter: creator.twitter, name: creator.name, title: creator.title, discipline: creator.discipline };
 });
