@@ -12,8 +12,28 @@ export const metadata: Metadata = {
     'Explore our community of world-class creators on Stellar. Filter by discipline to find the perfect talent for your project.',
 };
 
-async function CreatorsListSection() {
-  const creators = await fetchCreatorsList();
+// The directory is DB-backed and cursor-paginated; revalidate periodically so
+// newly registered creators appear without a full rebuild.
+export const revalidate = 60;
+
+interface CreatorsPageProps {
+  searchParams?: {
+    cursor?: string;
+    limit?: string;
+    role?: string;
+    search?: string;
+    sort?: string;
+  };
+}
+
+async function CreatorsListSection({ searchParams }: CreatorsPageProps) {
+  const creators = await fetchCreatorsList({
+    cursor: searchParams?.cursor,
+    limit: searchParams?.limit,
+    role: searchParams?.role,
+    search: searchParams?.search,
+    sort: searchParams?.sort,
+  });
   return <CreatorsListClient initialCreators={creators} />;
 }
 
@@ -31,7 +51,7 @@ function CreatorsGridSkeleton() {
   );
 }
 
-export default function CreatorsPage() {
+export default function CreatorsPage({ searchParams }: CreatorsPageProps) {
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Header />
@@ -52,7 +72,7 @@ export default function CreatorsPage() {
 
         {/* RSC Streamed Creators Section */}
         <Suspense fallback={<CreatorsGridSkeleton />}>
-          <CreatorsListSection />
+          <CreatorsListSection searchParams={searchParams} />
         </Suspense>
 
         {/* CTA Section */}
