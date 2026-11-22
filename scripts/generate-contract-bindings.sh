@@ -47,6 +47,9 @@ for entry in "${CONTRACTS[@]}"; do
   rm -rf "${OUT_DIR:?}/$c"
   mkdir -p "$OUT_DIR/$c"
   cp "$TMP/$c"/src/*.ts "$OUT_DIR/$c/"
+  # The app bundles these with Turbopack, which can't map './x.js' back to
+  # x.ts, so drop the .js suffix from relative imports.
+  sed -i -E "s#(from '\\./[^']+)\\.js'#\\1'#" "$OUT_DIR/$c"/*.ts
 done
 
 echo "✅ Bindings written to packages/contracts-ts/src/"
