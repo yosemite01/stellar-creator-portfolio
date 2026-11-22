@@ -133,3 +133,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
+
+## Handsoff notes
+
+<!-- handsoff-issue-1802 -->
+- #1802: Governance: guardian veto bounds and emergency procedures
