@@ -20,8 +20,11 @@
  * ```
  *
  * HTTP status:
- *   200 — process healthy (circuit CLOSED or HALF_OPEN)
- *   503 — circuit OPEN (Stellar RPC unavailable), includes `Retry-After: 30`
+ *   200 — process alive (always; liveness must not depend on optional deps)
+ *
+ * Note (#1812): the Stellar RPC circuit breaker is an *optional* dependency.
+ * An OPEN circuit is surfaced as `status: "degraded"` but no longer fails the
+ * liveness probe — dependency-aware readiness lives in GET /api/ready.
  */
 
 import { NextResponse } from 'next/server';
@@ -44,12 +47,7 @@ export async function GET() {
     timestamp: new Date().toISOString(),
   };
 
-  if (isOpen) {
-    return NextResponse.json(body, {
-      status: 503,
-      headers: { 'Retry-After': '30' },
-    });
-  }
-
+  // Liveness only asserts the process is up. Optional dependency outages are
+  // reported via `status: "degraded"` and must not restart the pod.
   return NextResponse.json(body, { status: 200 });
 }

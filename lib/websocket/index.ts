@@ -11,6 +11,17 @@ type Options = {
    * as a `token` query parameter so the server can authenticate the socket.
    */
   authToken?: string
+  /**
+   * Optional last-seen sequence number. When provided it is appended to the
+   * connection URL as a `lastSeq` query parameter so the server can resume
+   * delivery from where the client left off after a reconnect.
+   */
+  lastSeq?: number
+  /**
+   * Called with the highest sequence number observed on incoming frames so
+   * callers can persist it and pass it back as `lastSeq` on reconnect.
+   */
+  onSequence?: (seq: number) => void
 }
 
 export class RealtimeWebSocket {
@@ -22,6 +33,8 @@ export class RealtimeWebSocket {
   private maxRetries: number
   private onStatusChange?: (status: WSStatus) => void
   private authToken?: string
+  private lastSeq?: number
+  private onSequence?: (seq: number) => void
 
   constructor(url: string, options: Options = {}) {
     this.url = url
@@ -29,6 +42,8 @@ export class RealtimeWebSocket {
     this.maxRetries = options.maxRetries ?? 5
     this.onStatusChange = options.onStatusChange
     this.authToken = options.authToken
+    this.lastSeq = options.lastSeq
+    this.onSequence = options.onSequence
     this.connect()
   }
 
@@ -36,11 +51,17 @@ export class RealtimeWebSocket {
     return this.ws?.readyState === WebSocket.OPEN
   }
 
+  /** Highest sequence number seen so far, if any. */
+  public getLastSeq(): number | undefined {
+    return this.lastSeq
+  }
+
   private buildUrl(): string {
-    if (!this.authToken) return this.url
+    if (!this.authToken && this.lastSeq === undefined) return this.url
     try {
       const url = new URL(this.url)
-      url.searchParams.set('token', this.authToken)
+      if (this.authToken) url.searchParams.set('token', this.authToken)
+      if (this.lastSeq !== undefined) url.searchParams.set('lastSeq', String(this.lastSeq))
       return url.toString()
     } catch {
       return this.url
@@ -57,6 +78,7 @@ export class RealtimeWebSocket {
     }
 
     this.ws.onmessage = (event) => {
+      this.trackSequence(event)
       this.listeners.forEach((listener) => listener(event))
     }
 
@@ -71,6 +93,30 @@ export class RealtimeWebSocket {
 
     this.ws.onerror = () => {
       this.onStatusChange?.('error')
+    }
+  }
+
+  /**
+   * Extract a monotonic `seq` from a JSON frame (top-level or nested under
+   * `data`) and remember the highest value seen for resume-on-reconnect.
+   */
+  private trackSequence(event: MessageEvent) {
+    if (typeof event.data !== 'string') return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(event.data)
+    } catch {
+      return
+    }
+    if (!parsed || typeof parsed !== 'object') return
+    const record = parsed as Record<string, unknown>
+    const nested = record.data && typeof record.data === 'object' ? (record.data as Record<string, unknown>) : undefined
+    const raw = record.seq ?? record.sequence ?? nested?.seq ?? nested?.sequence
+    const seq = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN
+    if (!Number.isFinite(seq)) return
+    if (this.lastSeq === undefined || seq > this.lastSeq) {
+      this.lastSeq = seq
+      this.onSequence?.(seq)
     }
   }
 
@@ -99,6 +145,10 @@ export interface WebSocketClientOptions {
   onMessage?: (message: unknown) => void
   onError?: (error: Error) => void
   onConnectionChange?: (event: { status: 'connected' | 'disconnected' | 'error'; message?: string }) => void
+  /** Last-seen sequence number used to resume delivery after a reconnect. */
+  lastSeq?: number
+  /** Called with the highest sequence number observed on incoming frames. */
+  onSequence?: (seq: number) => void
 }
 
 export interface WebSocketClient {
@@ -106,6 +156,8 @@ export interface WebSocketClient {
   disconnect(): void
   isConnected(): boolean
   send(data: unknown): void
+  /** Highest sequence number observed so far, if any. */
+  getLastSeq(): number | undefined
 }
 
 /**
@@ -120,6 +172,8 @@ export function createWebSocketClient(options: WebSocketClientOptions): WebSocke
       if (socket) return
       socket = new RealtimeWebSocket(options.url, {
         maxRetries: options.reconnectAttempts,
+        lastSeq: options.lastSeq,
+        onSequence: options.onSequence,
         onStatusChange: (status) => {
           if (status === 'open') options.onConnectionChange?.({ status: 'connected' })
           else if (status === 'closed') options.onConnectionChange?.({ status: 'disconnected' })
@@ -150,6 +204,9 @@ export function createWebSocketClient(options: WebSocketClientOptions): WebSocke
     },
     send(data) {
       socket?.send(data)
+    },
+    getLastSeq() {
+      return socket?.getLastSeq()
     },
   }
 }
