@@ -107,6 +107,31 @@ Or use Docker:
 docker compose -f docker-compose.yml up -d sep24-poller
 ```
 
+## Deployment
+
+Deployments are driven by per-environment configs in `deployments/`
+(`futurenet.json`, `testnet.json`, `mainnet.json`). Each environment has a
+reproducible pipeline with a dry-run mode, multisig admin on mainnet, and
+generated frontend/backend config artifacts.
+
+```bash
+# Dry run (no transactions submitted) — safe on any env
+pnpm deploy:futurenet --dry-run
+pnpm deploy:testnet --dry-run
+pnpm deploy:mainnet --dry-run
+
+# Real deploy (requires funded deployer key + network passphrase)
+pnpm deploy:testnet
+pnpm deploy:mainnet
+```
+
+Generated config artifacts are written to `deployments/generated/<env>/`
+(`frontend.env`, `backend.env`) and consumed by the app at build time.
+
+Mainnet requires a multisig admin account (see `deployments/mainnet.json`
+`admin.multisig`); the deploy script refuses to run without it. Follow the
+[deployment checklist](docs/DEPLOYMENT.md) before promoting to mainnet.
+
 ## Project Structure
 
 ```
@@ -118,9 +143,11 @@ docker compose -f docker-compose.yml up -d sep24-poller
 │   └── ...
 ├── components/            # React components
 │   └── payments/          # Payment UI components
+├── deployments/           # Per-environment deployment configs
 ├── lib/                   # Business logic
 │   └── stellar/           # Stellar protocol implementations
 ├── prisma/                # Database schema & migrations
+├── scripts/               # Deployment & tooling scripts
 ├── server/                # Backend services
 │   └── jobs/              # Background jobs
 └── docs/                  # Documentation
