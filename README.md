@@ -165,6 +165,41 @@ A stream escrow is described by four fields:
 - Cancelling an already-cancelled or fully-vested stream reverts.
 - Only the payee may withdraw; only the payer may cancel.
 
+## Bounty Multisig Approvals
+
+Bounty owners that require multiple approvals use a **custom account contract** (or a
+Stellar account with native multisig) as the bounty owner. The approval threshold is
+enforced by the Soroban authorization framework when the owner authorizes a privileged
+bounty operation — the bounty contract no longer stores signers or a threshold itself.
+
+### Behaviour
+
+- **Owner is an account contract:** the bounty `owner` is the address of a custom
+  account contract (or a Stellar account configured with multisig). Privileged calls
+  (e.g. releasing funds, cancelling) require `owner.require_auth()`.
+- **Threshold via auth:** the account contract's own signer set and threshold decide
+  how many approvals are needed. The bounty contract trusts the auth framework's
+  verdict and does not re-count signatures.
+- **No internal bookkeeping:** `set_multisig_signers` / `set_multisig_threshold` and
+  the associated stored signer/threshold state are removed. Changing signers or the
+  threshold is done on the account contract, not on the bounty.
+
+### Migration
+
+Existing bounties that stored signers/threshold on-chain must be migrated:
+
+1. Deploy (or point to) a custom account contract configured with the desired signers
+   and threshold.
+2. Transfer bounty ownership to that account contract address.
+3. The legacy stored signer/threshold fields are ignored by the new code path; they can
+   be cleared during migration.
+
+### Failure modes
+
+- A privileged call without a valid owner authorization reverts (auth failure).
+- A privileged call authorized by fewer signers than the account contract's threshold
+  reverts inside the auth framework, before the bounty logic runs.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
@@ -179,3 +214,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 - #1799: Escrow: support partial refunds and mutual cancellation with dual signatures
 <!-- handsoff-issue-1800 -->
 - #1800: Escrow: streaming payments (time-based vesting) for long engagements
+<!-- handsoff-issue-1801 -->
+- #1801: Bounty multisig approvals now use Soroban custom account auth; internal signer/threshold storage removed (see "Bounty Multisig Approvals")
