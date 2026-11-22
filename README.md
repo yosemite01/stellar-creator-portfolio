@@ -126,6 +126,23 @@ docker compose -f docker-compose.yml up -d sep24-poller
 └── docs/                  # Documentation
 ```
 
+## Governance
+
+Parameter proposals are **typed and bounded** — free-form execution is not allowed.
+
+- **Typed actions.** Every proposal targets one of a fixed set of governance actions
+  (e.g. fee bps, quorum bps, voting period, guardian threshold). Each action carries its
+  own parameter type and bounds; unknown actions are rejected.
+- **Bounds at creation.** `create_param_proposal` validates the action and its value
+  against the action's bounds and rejects out-of-bounds parameters before a proposal is
+  stored. Invalid proposals never reach voting.
+- **Bounds re-checked at execution.** Execution re-validates the typed action and bounds
+  before applying effects, so a proposal cannot execute against a changed or invalid
+  parameter set.
+- **Events.** Proposal creation and execution each emit an event for every state change.
+
+See `backend/contracts/governance/src/lib.rs` for the action enum, bounds, and tests.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
@@ -138,3 +155,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-1802 -->
 - #1802: Governance: guardian veto bounds and emergency procedures
+<!-- handsoff-issue-1803 -->
+- #1803: Governance: parameter proposals must execute via typed calls, not free-form
