@@ -133,3 +133,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
+
+## Handsoff notes
+
+<!-- handsoff-issue-1799 -->
+- #1799: Escrow: support partial refunds and mutual cancellation with dual signatures
