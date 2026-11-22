@@ -8,6 +8,7 @@ A platform for creators to manage bounties, portfolio projects, and Stellar-base
 - Portfolio showcase with rich-text editor
 - SEP-24 compliant deposit/withdrawal via anchors
 - Escrow with deadlock prevention
+- Streaming escrow (time-based vesting) for retainers and hourly contracts
 - KYC verification workflow
 - Real-time notifications
 - Multi-factor authentication
