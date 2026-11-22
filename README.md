@@ -8,6 +8,7 @@ A platform for creators to manage bounties, portfolio projects, and Stellar-base
 - Portfolio showcase with rich-text editor
 - SEP-24 compliant deposit/withdrawal via anchors
 - Escrow with deadlock prevention
+- Streaming escrow (time-based vesting) for retainers and hourly contracts
 - KYC verification workflow
 - Real-time notifications
 - Multi-factor authentication
@@ -115,30 +116,40 @@ Or use Docker:
 docker compose -f docker-compose.yml up -d sep24-poller
 ```
 
-## Deployment
+### Tracing (OpenTelemetry)
 
-Deployments are driven by per-environment configs in `deployments/`
-(`futurenet.json`, `testnet.json`, `mainnet.json`). Each environment has a
-reproducible pipeline with a dry-run mode, multisig admin on mainnet, and
-generated frontend/backend config artifacts.
+The Next.js app and the Rust backend share a single OpenTelemetry setup so traces
+stitch together across service boundaries.
 
-```bash
-# Dry run (no transactions submitted) — safe on any env
-pnpm deploy:futurenet --dry-run
-pnpm deploy:testnet --dry-run
-pnpm deploy:mainnet --dry-run
+**Shared resource attributes** — both services emit the same resource keys so a
+trace can be filtered consistently in the collector and dashboards:
 
-# Real deploy (requires funded deployer key + network passphrase)
-pnpm deploy:testnet
-pnpm deploy:mainnet
+| Attribute | Next.js | Rust |
+| --- | --- | --- |
+| `service.name` | `OTEL_SERVICE_NAME` (default `stellar-creator-portfolio`) | `OTEL_SERVICE_NAME` (default `stellar-creator-backend`) |
+| `service.version` | `OTEL_SERVICE_VERSION` / build version | `OTEL_SERVICE_VERSION` / crate version |
+| `deployment.environment` | `OTEL_ENVIRONMENT` (default `development`) | `OTEL_ENVIRONMENT` (default `development`) |
+
+**Propagators** — both services use the W3C `tracecontext` + `baggage`
+propagators. Outgoing requests from Next.js inject `traceparent`/`tracestate`,
+and the Rust backend extracts them, so a single trace spans both runtimes.
+
+**Sampling** — a single `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` pair
+controls sampling for both services (default: `parentbased_traceidratio` with
+`OTEL_TRACES_SAMPLER_ARG=0.1`). Because both use parent-based sampling, the
+sampling decision made at the edge is honored by downstream services.
+
+**Collector** — point both services at the same OTLP endpoint via
+`OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4317`). The collector
+receives spans from both runtimes and forwards them to the configured backend.
+
+```env
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+OTEL_SERVICE_NAME=stellar-creator-portfolio
+OTEL_ENVIRONMENT=development
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
 ```
-
-Generated config artifacts are written to `deployments/generated/<env>/`
-(`frontend.env`, `backend.env`) and consumed by the app at build time.
-
-Mainnet requires a multisig admin account (see `deployments/mainnet.json`
-`admin.multisig`); the deploy script refuses to run without it. Follow the
-[deployment checklist](docs/DEPLOYMENT.md) before promoting to mainnet.
 
 ## Project Structure
 
@@ -161,6 +172,23 @@ Mainnet requires a multisig admin account (see `deployments/mainnet.json`
 └── docs/                  # Documentation
 ```
 
+## Governance
+
+Parameter proposals are **typed and bounded** — free-form execution is not allowed.
+
+- **Typed actions.** Every proposal targets one of a fixed set of governance actions
+  (e.g. fee bps, quorum bps, voting period, guardian threshold). Each action carries its
+  own parameter type and bounds; unknown actions are rejected.
+- **Bounds at creation.** `create_param_proposal` validates the action and its value
+  against the action's bounds and rejects out-of-bounds parameters before a proposal is
+  stored. Invalid proposals never reach voting.
+- **Bounds re-checked at execution.** Execution re-validates the typed action and bounds
+  before applying effects, so a proposal cannot execute against a changed or invalid
+  parameter set.
+- **Events.** Proposal creation and execution each emit an event for every state change.
+
+See `backend/contracts/governance/src/lib.rs` for the action enum, bounds, and tests.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
@@ -168,3 +196,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
+
+## Handsoff notes
+
+<!-- handsoff-issue-1802 -->
+- #1802: Governance: guardian veto bounds and emergency procedures
+<!-- handsoff-issue-1803 -->
+- #1803: Governance: parameter proposals must execute via typed calls, not free-form
+
+<!-- handsoff-issue-1804 -->
+- #1804: Event schemas: versioned contract events consumed by indexer

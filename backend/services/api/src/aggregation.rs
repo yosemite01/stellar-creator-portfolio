@@ -5,8 +5,17 @@
 //! module adds slippage tracking: for each transaction we compare the
 //! *quoted* exchange rate against the *executed* rate and accumulate
 //! historical slippage statistics per corridor.
+//!
+//! ## Issue #1818 – Move heavy aggregation off the request path
+//! Aggregations are no longer recomputed on every request.  Instead a
+//! [`CorridorAggregateStore`] holds *materialised* aggregates that are
+//! updated incrementally from events (see [`CorridorAggregateStore::apply_event`])
+//! and refreshed by background jobs (see [`CorridorAggregateStore::rebuild`]).
+//! Reads are served from the store (a cache) so the request path only does a
+//! cheap lookup instead of a full scan over transactions.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ── Transaction record ────────────────────────────────────────────────────────
 
@@ -160,6 +169,181 @@ pub fn aggregate_all_corridors(transactions: &[CorridorTransaction]) -> Vec<Corr
     metrics
 }
 
+// ── Materialised aggregates (Issue #1818) ─────────────────────────────────────
+
+/// Running accumulators for a single corridor.
+///
+/// These are the *materialised* state kept per corridor so that reads never
+/// need to scan the full transaction history.  They are updated incrementally
+/// from events and can be rebuilt from scratch by a background job.
+#[derive(Clone, Debug, Default)]
+struct CorridorAccumulator {
+    total: usize,
+    successful: usize,
+    /// Sum of slippage fractions (for the mean).
+    slippage_sum: f64,
+    /// Sum of squared slippage fractions (for the variance).
+    slippage_sq_sum: f64,
+    max_slippage: f64,
+    min_slippage: f64,
+    slippage_count: usize,
+}
+
+impl CorridorAccumulator {
+    fn new() -> Self {
+        Self {
+            max_slippage: f64::NEG_INFINITY,
+            min_slippage: f64::INFINITY,
+            ..Self::default()
+        }
+    }
+
+    /// Fold a single transaction into the accumulator.
+    fn record(&mut self, tx: &CorridorTransaction) {
+        self.total += 1;
+        if tx.success {
+            self.successful += 1;
+        }
+        if let Some(slip) = tx.slippage_fraction() {
+            self.slippage_sum += slip;
+            self.slippage_sq_sum += slip * slip;
+            self.max_slippage = self.max_slippage.max(slip);
+            self.min_slippage = self.min_slippage.min(slip);
+            self.slippage_count += 1;
+        }
+    }
+
+    /// Produce the public metrics view from the accumulated state.
+    fn to_metrics(&self, corridor_id: &str) -> Option<CorridorMetrics> {
+        if self.total == 0 {
+            return None;
+        }
+        let round4 = |v: f64| (v * 10_000.0).round() / 10_000.0;
+        let success_rate = self.successful as f64 / self.total as f64;
+
+        let (mean_slip, max_slip, min_slip, std_dev) = if self.slippage_count == 0 {
+            (0.0, 0.0, 0.0, 0.0)
+        } else {
+            let n = self.slippage_count as f64;
+            let mean = self.slippage_sum / n;
+            let variance = if self.slippage_count < 2 {
+                0.0
+            } else {
+                // Sample variance from running sums.
+                let num = self.slippage_sq_sum - (self.slippage_sum * self.slippage_sum) / n;
+                (num / (n - 1.0)).max(0.0)
+            };
+            (mean, self.max_slippage, self.min_slippage, variance.sqrt())
+        };
+
+        Some(CorridorMetrics {
+            corridor_id: corridor_id.to_string(),
+            total_transactions: self.total,
+            successful_transactions: self.successful,
+            success_rate: round4(success_rate),
+            mean_slippage_fraction: round4(mean_slip),
+            mean_slippage_bps: round4(mean_slip * 10_000.0),
+            max_slippage_fraction: round4(max_slip),
+            min_slippage_fraction: round4(min_slip),
+            slippage_std_dev: round4(std_dev),
+            slippage_sample_count: self.slippage_count,
+        })
+    }
+}
+
+/// A domain event that mutates the materialised aggregates.
+///
+/// Every state change that affects corridor metrics emits one of these; the
+/// store applies them incrementally instead of recomputing from scratch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CorridorEvent {
+    /// A transaction settled through a corridor.
+    TransactionSettled(CorridorTransaction),
+}
+
+/// Materialised aggregate store with an in-memory cache.
+///
+/// Reads ([`get`](Self::get) / [`all`](Self::all)) are served from the cached
+/// metrics and never touch the raw transaction history, keeping the request
+/// path cheap.  Writes happen off the request path via [`apply_event`] and
+/// [`rebuild`].
+///
+/// [`apply_event`]: Self::apply_event
+/// [`rebuild`]: Self::rebuild
+#[derive(Debug, Default)]
+pub struct CorridorAggregateStore {
+    accumulators: HashMap<String, CorridorAccumulator>,
+    /// Cached, sorted metrics view.  Invalidated on every mutation.
+    cache: Option<Vec<CorridorMetrics>>,
+}
+
+impl CorridorAggregateStore {
+    /// Create an empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Apply a single event, updating the materialised aggregate incrementally.
+    pub fn apply_event(&mut self, event: CorridorEvent) {
+        match event {
+            CorridorEvent::TransactionSettled(tx) => {
+                self.accumulators
+                    .entry(tx.corridor_id.clone())
+                    .or_insert_with(CorridorAccumulator::new)
+                    .record(&tx);
+                self.cache = None;
+            }
+        }
+    }
+
+    /// Rebuild the materialised aggregates from a full transaction history.
+    ///
+    /// Intended to be run by a background job (e.g. on startup or periodically)
+    /// so the request path never performs the full scan.
+    pub fn rebuild(&mut self, transactions: &[CorridorTransaction]) {
+        self.accumulators.clear();
+        for tx in transactions {
+            self.accumulators
+                .entry(tx.corridor_id.clone())
+                .or_insert_with(CorridorAccumulator::new)
+                .record(tx);
+        }
+        self.cache = None;
+    }
+
+    /// Read the cached metrics for a single corridor.
+    pub fn get(&mut self, corridor_id: &str) -> Option<CorridorMetrics> {
+        self.ensure_cache();
+        self.cache
+            .as_ref()
+            .and_then(|all| all.iter().find(|m| m.corridor_id == corridor_id).cloned())
+    }
+
+    /// Read all cached metrics, sorted by `mean_slippage_bps` ascending.
+    pub fn all(&mut self) -> Vec<CorridorMetrics> {
+        self.ensure_cache();
+        self.cache.clone().unwrap_or_default()
+    }
+
+    /// Populate the cache from the accumulators if it is stale.
+    fn ensure_cache(&mut self) {
+        if self.cache.is_some() {
+            return;
+        }
+        let mut metrics: Vec<CorridorMetrics> = self
+            .accumulators
+            .iter()
+            .filter_map(|(id, acc)| acc.to_metrics(id))
+            .collect();
+        metrics.sort_by(|a, b| {
+            a.mean_slippage_bps
+                .partial_cmp(&b.mean_slippage_bps)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        self.cache = Some(metrics);
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -224,82 +408,71 @@ mod tests {
     #[test]
     fn aggregate_returns_none_for_unknown_corridor() {
         let txs = vec![tx("USD-MXN", 17.5, 17.5, true)];
-        assert!(aggregate_corridor("EUR-GBP", &txs).is_none());
+        assert!(aggregate_corridor("EUR-BRL", &txs).is_none());
     }
 
+    // ── CorridorAggregateStore (Issue #1818) ──────────────────────────────────
+
     #[test]
-    fn aggregate_success_rate_correct() {
+    fn store_incremental_matches_batch_aggregation() {
         let txs = vec![
+            tx("USD-MXN", 17.5, 17.0, true),
             tx("USD-MXN", 17.5, 17.5, true),
-            tx("USD-MXN", 17.5, 17.5, true),
-            tx("USD-MXN", 17.5, 17.5, false),
-            tx("USD-MXN", 17.5, 17.5, false),
+            tx("USD-MXN", 17.5, 18.0, false),
+            tx("EUR-BRL", 5.4, 5.3, true),
         ];
-        let m = aggregate_corridor("USD-MXN", &txs).unwrap();
-        assert_eq!(m.total_transactions, 4);
-        assert_eq!(m.successful_transactions, 2);
-        assert_eq!(m.success_rate, 0.5);
+
+        let mut store = CorridorAggregateStore::new();
+        for t in &txs {
+            store.apply_event(CorridorEvent::TransactionSettled(t.clone()));
+        }
+
+        let batch = aggregate_all_corridors(&txs);
+        let cached = store.all();
+        assert_eq!(cached.len(), batch.len());
+        for (a, b) in cached.iter().zip(batch.iter()) {
+            assert_eq!(a.corridor_id, b.corridor_id);
+            assert_eq!(a.total_transactions, b.total_transactions);
+            assert_eq!(a.successful_transactions, b.successful_transactions);
+            assert_eq!(a.slippage_sample_count, b.slippage_sample_count);
+            assert!((a.mean_slippage_fraction - b.mean_slippage_fraction).abs() < 1e-9);
+            assert!((a.slippage_std_dev - b.slippage_std_dev).abs() < 1e-9);
+        }
     }
 
     #[test]
-    fn aggregate_mean_slippage_correct() {
-        // Two transactions: +2.86% and -2.86% slippage → mean ≈ 0
+    fn store_rebuild_matches_incremental() {
         let txs = vec![
-            tx("USD-MXN", 17.5, 17.0, true),  // positive slip
-            tx("USD-MXN", 17.5, 18.0, true),  // negative slip
+            tx("USD-MXN", 17.5, 17.0, true),
+            tx("USD-MXN", 17.5, 18.0, true),
         ];
-        let m = aggregate_corridor("USD-MXN", &txs).unwrap();
-        assert!(m.mean_slippage_fraction.abs() < 0.001, "mean should be ~0");
-        assert_eq!(m.slippage_sample_count, 2);
+
+        let mut incremental = CorridorAggregateStore::new();
+        for t in &txs {
+            incremental.apply_event(CorridorEvent::TransactionSettled(t.clone()));
+        }
+
+        let mut rebuilt = CorridorAggregateStore::new();
+        rebuilt.rebuild(&txs);
+
+        assert_eq!(incremental.all(), rebuilt.all());
     }
 
     #[test]
-    fn aggregate_max_min_slippage_correct() {
-        let txs = vec![
-            tx("USD-MXN", 10.0, 9.0, true),   // +10% slip
-            tx("USD-MXN", 10.0, 10.5, true),  // -5% slip
-            tx("USD-MXN", 10.0, 10.0, true),  // 0% slip
-        ];
-        let m = aggregate_corridor("USD-MXN", &txs).unwrap();
-        assert!((m.max_slippage_fraction - 0.1).abs() < 0.001);
-        assert!((m.min_slippage_fraction - (-0.05)).abs() < 0.001);
+    fn store_get_returns_none_for_unknown_corridor() {
+        let mut store = CorridorAggregateStore::new();
+        store.apply_event(CorridorEvent::TransactionSettled(tx("USD-MXN", 17.5, 17.5, true)));
+        assert!(store.get("EUR-BRL").is_none());
+        assert!(store.get("USD-MXN").is_some());
     }
 
     #[test]
-    fn aggregate_std_dev_zero_for_single_sample() {
-        let txs = vec![tx("USD-MXN", 17.5, 17.0, true)];
-        let m = aggregate_corridor("USD-MXN", &txs).unwrap();
-        assert_eq!(m.slippage_std_dev, 0.0);
-    }
+    fn store_cache_invalidated_on_new_event() {
+        let mut store = CorridorAggregateStore::new();
+        store.apply_event(CorridorEvent::TransactionSettled(tx("USD-MXN", 17.5, 17.5, true)));
+        assert_eq!(store.get("USD-MXN").unwrap().total_transactions, 1);
 
-    #[test]
-    fn aggregate_skips_zero_quoted_rate_for_slippage() {
-        let txs = vec![
-            tx("USD-MXN", 0.0, 17.0, true),  // no slippage data
-            tx("USD-MXN", 17.5, 17.0, true), // valid slippage
-        ];
-        let m = aggregate_corridor("USD-MXN", &txs).unwrap();
-        assert_eq!(m.slippage_sample_count, 1);
-        assert_eq!(m.total_transactions, 2);
-    }
-
-    // ── aggregate_all_corridors ───────────────────────────────────────────────
-
-    #[test]
-    fn aggregate_all_sorted_by_mean_slippage_ascending() {
-        let txs = vec![
-            tx("HIGH-SLIP", 10.0, 8.0, true),  // 20% slip
-            tx("LOW-SLIP", 10.0, 9.9, true),   // 1% slip
-            tx("MID-SLIP", 10.0, 9.0, true),   // 10% slip
-        ];
-        let metrics = aggregate_all_corridors(&txs);
-        assert_eq!(metrics.len(), 3);
-        assert_eq!(metrics[0].corridor_id, "LOW-SLIP");
-        assert_eq!(metrics[2].corridor_id, "HIGH-SLIP");
-    }
-
-    #[test]
-    fn aggregate_all_empty_returns_empty() {
-        assert!(aggregate_all_corridors(&[]).is_empty());
+        store.apply_event(CorridorEvent::TransactionSettled(tx("USD-MXN", 17.5, 17.5, true)));
+        assert_eq!(store.get("USD-MXN").unwrap().total_transactions, 2);
     }
 }

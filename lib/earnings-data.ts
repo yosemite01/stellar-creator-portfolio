@@ -54,6 +54,28 @@ export interface EarningsReport {
   monthly: MonthlyCurrencyTotal[];
 }
 
+/** A single ledger-derived earning line, used for tax-year exports. */
+export interface EarningLedgerEntry {
+  id: string;
+  /** ISO date the payment was released */
+  date: string;
+  currency: EarningCurrency;
+  /** Amount in the original currency */
+  amount: number;
+  /** USD value at the time of payment */
+  usdAtPayment: number;
+  txHash: string;
+}
+
+/** Tax-year export of earnings, grouped by original currency. */
+export interface TaxYearExport {
+  year: number;
+  displayCurrency: EarningCurrency;
+  entries: EarningLedgerEntry[];
+  totalsByCurrency: MonthlyCurrencyTotal[];
+  totalUSD: number;
+}
+
 // ── FX rates (USD per unit) ─────────────────────────────────────────────────
 // Cached for 5 minutes to avoid hammering the oracle on every request.
 const FX_TTL_MS = 5 * 60 * 1000;
@@ -222,4 +244,75 @@ export async function getEarningTransactions(
       txHash: '',
     };
   });
+}
+
+/**
+ * Build a tax-year export from the released escrow ledger. Only escrows
+ * released within the given calendar year (UTC) are included. Amounts are
+ * reported in their original currency with the USD value at time of payment.
+ */
+export async function getTaxYearExport(
+  userId: string,
+  year: number,
+  prisma: PrismaClient,
+  displayCurrency: EarningCurrency = 'USD',
+): Promise<TaxYearExport> {
+  const start = new Date(Date.UTC(year, 0, 1));
+  const end = new Date(Date.UTC(year + 1, 0, 1));
+
+  const escrows = await prisma.escrow.findMany({
+    where: {
+      creatorId: userId,
+      status: 'released',
+      releasedAt: { gte: start, lt: end },
+    },
+    orderBy: { releasedAt: 'asc' },
+  });
+
+  const rates = getFxRates();
+  const displayRate = rates[displayCurrency] ?? 1;
+
+  const entries: EarningLedgerEntry[] = [];
+  const totalsMap = new Map<EarningCurrency, MonthlyCurrencyTotal>();
+  let totalUSD = 0;
+
+  for (const e of escrows) {
+    const currency: EarningCurrency = 'USDC';
+    const amount = Number(e.amount ?? 0);
+    const usdAtPayment = toUSD(amount, currency);
+    const releasedAt = e.releasedAt ?? e.createdAt;
+
+    entries.push({
+      id: e.id,
+      date: releasedAt.toISOString(),
+      currency,
+      amount: parseFloat(amount.toFixed(2)),
+      usdAtPayment,
+      txHash: '',
+    });
+
+    totalUSD += usdAtPayment;
+
+    const existing = totalsMap.get(currency);
+    const displayAmount = parseFloat((usdAtPayment / displayRate).toFixed(2));
+    if (existing) {
+      existing.amount = parseFloat((existing.amount + amount).toFixed(2));
+      existing.displayAmount = parseFloat((existing.displayAmount + displayAmount).toFixed(2));
+    } else {
+      totalsMap.set(currency, {
+        month: `${year}`,
+        currency,
+        amount: parseFloat(amount.toFixed(2)),
+        displayAmount,
+      });
+    }
+  }
+
+  return {
+    year,
+    displayCurrency,
+    entries,
+    totalsByCurrency: Array.from(totalsMap.values()),
+    totalUSD: parseFloat(totalUSD.toFixed(2)),
+  };
 }
