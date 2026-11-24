@@ -171,8 +171,8 @@ describe('GET /api/payments/sep24', () => {
 
     vi.resetAllMocks();
     
-    vi.doMock('@prisma/client', () => ({
-      PrismaClient: vi.fn(() => mockPrisma),
+    vi.doMock('@/lib/prisma', () => ({
+      prisma: mockPrisma,
     }));
 
     const req = new NextRequest('http://localhost:3000/api/payments/sep24', {

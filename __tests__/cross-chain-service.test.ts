@@ -5,10 +5,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient } from '@/lib/generated/prisma/client'
 
 // Mock the Prisma client
-vi.mock('@prisma/client', () => ({
+vi.mock('@/lib/generated/prisma/client', () => ({
   PrismaClient: vi.fn(),
 }))
 

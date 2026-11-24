@@ -1,4 +1,5 @@
-import { Prisma } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '@/lib/generated/prisma/client';
 import { buildUserDataExport } from '@/lib/user-data-export';
 
 /**
@@ -23,8 +24,14 @@ const SECRET_FIELDS = new Set([
   'apiKey',
 ]);
 
-function modelHasUserLink(model: Prisma.DMMF.Model): boolean {
-  return model.fields.some((field) => {
+interface RuntimeField {
+  name: string;
+  kind: string;
+  type: string;
+}
+
+function modelHasUserLink(fields: RuntimeField[]): boolean {
+  return fields.some((field) => {
     if (field.name === 'userId') return true;
     if (field.kind === 'object' && field.type === 'User') return true;
     return false;
@@ -32,9 +39,17 @@ function modelHasUserLink(model: Prisma.DMMF.Model): boolean {
 }
 
 function userLinkedModels(): string[] {
-  return Prisma.dmmf.datamodel.models
-    .filter((model) => model.name !== 'User' && modelHasUserLink(model))
-    .map((model) => model.name)
+  // Prisma 7's `prisma-client` generator no longer exports Prisma.dmmf; read
+  // the runtime data model from a client instance instead. The pg adapter
+  // connects lazily, so no database is needed.
+  const client = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: 'postgresql://localhost/unused' }),
+  }) as unknown as {
+    _runtimeDataModel: { models: Record<string, { fields: RuntimeField[] }> };
+  };
+  return Object.entries(client._runtimeDataModel.models)
+    .filter(([name, model]) => name !== 'User' && modelHasUserLink(model.fields))
+    .map(([name]) => name)
     .sort();
 }
 
