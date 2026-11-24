@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
 import { requireAuth, requireModifyTemplatePermission } from '@/server/services/authorization';
 import { createTemplate, listTemplatesFor, updateOwnTemplate, deleteOwnTemplate } from '@/lib/services/bounty-template-service';
-import { sanitizeRichText } from '@/lib/sanitize-rich-text';
+import { sanitizeRichText } from '@/lib/bounty-templates';
 
 /**
  * GET  /api/bounty-templates   system templates + the caller's own saved templates

@@ -16,24 +16,24 @@ export const metadata: Metadata = {
 // newly registered creators appear without a full rebuild.
 export const revalidate = 60;
 
+interface CreatorsSearchParams {
+  cursor?: string;
+  limit?: string;
+  role?: string;
+  search?: string;
+  sort?: string;
+}
+
 interface CreatorsPageProps {
-  searchParams?: {
-    cursor?: string;
-    limit?: string;
-    role?: string;
-    search?: string;
-    sort?: string;
-  };
+  // Next.js 15+ passes searchParams as a Promise.
+  searchParams?: Promise<CreatorsSearchParams>;
 }
 
 async function CreatorsListSection({ searchParams }: CreatorsPageProps) {
-  const creators = await fetchCreatorsList({
-    cursor: searchParams?.cursor,
-    limit: searchParams?.limit,
-    role: searchParams?.role,
-    search: searchParams?.search,
-    sort: searchParams?.sort,
-  });
+  const params = (await searchParams) ?? {};
+  // `role` is the discipline filter; cursor/limit/search/sort are served by
+  // the paginated GET /api/creators endpoint (#1824).
+  const creators = await fetchCreatorsList(params.role);
   return <CreatorsListClient initialCreators={creators} />;
 }
 

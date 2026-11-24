@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 const querySchema = z.object({
@@ -26,24 +27,25 @@ export async function GET(request: NextRequest) {
 
   const { cursor, limit, search, role, sort } = parsed.data;
 
-  const where: Record<string, unknown> = {};
+  // Creators are `CreatorProfile` rows; `role` filters by discipline.
+  const where: Prisma.CreatorProfileWhereInput = {};
   if (search) {
     where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { handle: { contains: search, mode: 'insensitive' } },
+      { displayName: { contains: search, mode: 'insensitive' } },
+      { user: { name: { contains: search, mode: 'insensitive' } } },
     ];
   }
   if (role) {
-    where.role = role;
+    where.discipline = { equals: role, mode: 'insensitive' };
   }
 
-  const orderBy =
+  const orderBy: Prisma.CreatorProfileOrderByWithRelationInput[] =
     sort === 'name'
-      ? [{ name: 'asc' as const }, { id: 'asc' as const }]
-      : [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
+      ? [{ displayName: 'asc' }, { id: 'asc' }]
+      : [{ createdAt: 'desc' }, { id: 'desc' }];
 
   try {
-    const creators = await prisma.creator.findMany({
+    const creators = await prisma.creatorProfile.findMany({
       where,
       orderBy,
       take: limit + 1,

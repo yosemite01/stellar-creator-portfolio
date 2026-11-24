@@ -271,4 +271,140 @@ export function tracingMiddleware<T extends TracingMiddlewareContext>(
  * prisma.$use(createPrismaTracingMiddleware());
  * ```
  */
-export function createPrismaTra
+export function createPrismaTracingMiddleware() {
+  return async (params: any, next: (params: any) => Promise<any>) => {
+    if (!tracer) {
+      // Tracing not initialized — pass through
+      return next(params);
+    }
+
+    const span = tracer.startSpan(`prisma.${params.model}.${params.action}`, {
+      attributes: {
+        'db.system': 'postgresql',
+        'db.operation': params.action,
+        'db.prisma.model': params.model ?? 'unknown',
+      },
+    });
+
+    return context.with(trace.setSpan(context.active(), span), async () => {
+      try {
+        const result = await next(params);
+        span.setStatus({ code: SpanStatusCode.OK });
+        return result;
+      } catch (err) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        span.recordException(err as Error);
+        throw err;
+      } finally {
+        span.end();
+      }
+    });
+  };
+}
+
+// ── Manual instrumentation helpers ───────────────────────────────────────────
+
+/**
+ * Wrap an async function with a custom span.
+ *
+ * @example
+ * ```ts
+ * const result = await withSpan('my-operation', async (span) => {
+ *   span.setAttribute('user.id', userId);
+ *   return await doWork();
+ * });
+ * ```
+ */
+export async function withSpan<T>(
+  name: string,
+  fn: (span: Span) => Promise<T>,
+  attributes?: Record<string, string | number | boolean>,
+): Promise<T> {
+  if (!tracer) {
+    // Tracing not initialized — execute without span
+    return fn({} as Span);
+  }
+
+  const span = tracer.startSpan(name, { attributes });
+
+  return context.with(trace.setSpan(context.active(), span), async () => {
+    try {
+      const result = await fn(span);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    } catch (err) {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      span.recordException(err as Error);
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+}
+
+/**
+ * Get the current active span from the async context.
+ * Returns null if no span is active.
+ */
+export function getCurrentSpan(): Span | null {
+  return trace.getSpan(context.active()) ?? null;
+}
+
+/**
+ * Add an attribute to the current active span (if any).
+ * Safe to call when no span is active — no-op.
+ */
+export function setAttribute(
+  key: string,
+  value: string | number | boolean,
+): void {
+  const span = getCurrentSpan();
+  if (span) {
+    span.setAttribute(key, value);
+  }
+}
+
+/**
+ * Add an event (log line) to the current active span.
+ */
+export function addEvent(name: string, attributes?: Record<string, string>): void {
+  const span = getCurrentSpan();
+  if (span) {
+    span.addEvent(name, attributes);
+  }
+}
+
+/**
+ * Record an exception on the current active span.
+ */
+export function recordException(err: Error): void {
+  const span = getCurrentSpan();
+  if (span) {
+    span.recordException(err);
+  }
+}
+
+/**
+ * Extract the W3C traceparent header from the current active context.
+ * Returns null if no active trace.
+ *
+ * Use this to manually propagate trace context to external services.
+ */
+export function getTraceparent(): string | null {
+  const span = getCurrentSpan();
+  if (!span) return null;
+
+  const spanContext = span.spanContext();
+  if (!spanContext.traceId) return null;
+
+  // W3C traceparent format: version-traceId-spanId-flags
+  const version = '00';
+  const flags = spanContext.traceFlags?.toString(16).padStart(2, '0') ?? '01';
+  return `${version}-${spanContext.traceId}-${spanContext.spanId}-${flags}`;
+}
