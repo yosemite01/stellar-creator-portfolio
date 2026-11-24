@@ -16,11 +16,9 @@
  * `onProfileChanged()`, which keeps a single creator's embedding fresh as
  * they edit their profile but doesn't help with the cases above.
  *
- * Plain JS/CommonJS-free ESM, not TypeScript: this project has no
- * TS-executing devDependency (tsx/ts-node) and this script's `node
- * scripts/backfill-embeddings.mjs` invocation needs to run on plain
- * Node 20 (see .github/workflows/*.yml), which can't execute .ts files
- * directly. Its embedding-generation and index-mapping logic therefore
+ * Plain JS ESM, run through tsx (`pnpm backfill:embeddings`) because the
+ * Prisma 7 client it imports is generated as TypeScript. Its
+ * embedding-generation and index-mapping logic therefore
  * duplicates `generateEmbedding`/`ensureIndex` in
  * server/services/search.ts rather than importing them — keep the two in
  * sync by hand if either changes (env vars read, corpus text built, or the
@@ -36,14 +34,20 @@
  *   pnpm backfill:embeddings --id=<creatorProfileId>  # backfill just one profile
  */
 
-import { PrismaClient } from '@prisma/client';
+import 'dotenv/config';
+import { PrismaPg } from '@prisma/adapter-pg';
+// Prisma 7 generates a TypeScript client; run this script through tsx
+// (`pnpm backfill:embeddings`) so the .ts import below resolves.
+import { PrismaClient } from '../lib/generated/prisma/client';
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? '';
 const EMBED_ENDPOINT = process.env.EMBED_ENDPOINT ?? 'https://api.openai.com/v1/embeddings';
 const EMBED_MODEL = process.env.EMBED_MODEL ?? 'text-embedding-3-small';
 const EMBED_DIMS = EMBED_MODEL === 'text-embedding-3-large' ? 3072 : 1536;
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
 
 /** Mirrors server/services/search.ts's ensureIndex() for Postgres (#1763). */
 async function ensureIndex() {
