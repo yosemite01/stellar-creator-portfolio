@@ -1094,6 +1094,9 @@ model CorridorPayment {
   sourceCurrency   String
   destCurrency     String
   volume           BigInt
+  /// Volume converted to the reference unit at each payment's own timestamp
+  /// (#1809, server/services/corridor-analytics.ts).
+  convertedVolume  BigInt   @default(0)
   transactionCount Int
   periodBucket     DateTime
   createdAt        DateTime @default(now())
@@ -1103,6 +1106,18 @@ model CorridorPayment {
   @@index([destCurrency])
   @@index([periodBucket])
   @@index([sourceCurrency, destCurrency])
+}
+
+/// Historical asset price, one row per currency per timestamp (#1809).
+/// Used to convert corridor volume at transaction time, not today's price.
+model PriceHistory {
+  id        String   @id @default(cuid())
+  currency  String
+  price     Decimal  @db.Decimal(38, 18)
+  timestamp DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([currency, timestamp])
 }
 
 // ── Encrypted messaging (opaque ciphertext; see ADR 0007) ─────────────────
