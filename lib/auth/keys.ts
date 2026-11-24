@@ -54,7 +54,7 @@ export function getKeyId(): string {
 /**
  * Export public key in JWK format for JWKS endpoint
  */
-export function exportJWK(): crypto.JsonWebKey & { kid: string; use: string } {
+export function exportJWK(): JsonWebKey & { kid: string; use: string } {
   const jwk = loadPublicKey().export({ format: 'jwk' });
   return { ...jwk, kid: getKeyId(), use: 'sig' };
 }
