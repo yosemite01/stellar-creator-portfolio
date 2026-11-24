@@ -74,7 +74,7 @@ export function BountyApplicationForm({
       if (err instanceof z.ZodError) {
         // Map zod issues to per-field errors for aria-describedby linkage.
         const mapped: FieldErrors = {};
-        for (const issue of err.errors) {
+        for (const issue of err.issues) {
           const key = issue.path[0] as keyof ApplicationFormData;
           if (key && !mapped[key]) mapped[key] = issue.message;
         }

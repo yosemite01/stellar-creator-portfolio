@@ -530,8 +530,8 @@ export const appRouter = router({
     verifyZk: publicProcedure
       .input(
         z.object({
-          proof: z.record(z.unknown()),
-          publicInputs: z.record(z.unknown()),
+          proof: z.record(z.string(), z.unknown()),
+          publicInputs: z.record(z.string(), z.unknown()),
           nullifier: z.string(),
         })
       )
