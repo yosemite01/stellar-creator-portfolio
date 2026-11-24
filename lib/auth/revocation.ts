@@ -1,4 +1,4 @@
-import type { RevokedToken } from '@prisma/client';
+import type { RevokedToken } from '@/lib/generated/prisma/client';
 import { prisma } from '@/lib/prisma';
 
 export type { RevokedToken };

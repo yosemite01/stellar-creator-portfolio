@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma';
-import { BountyStatus } from '@prisma/client';
+import { BountyStatus } from '@/lib/generated/prisma/client';
 
 export interface BountyFilters {
   status?: BountyStatus;

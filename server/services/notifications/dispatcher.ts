@@ -6,7 +6,7 @@
  */
 
 import { prisma } from '@/lib/prisma';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/generated/prisma/client';
 import { PushNotificationService } from './push-service';
 import type {
   NotificationChannel,

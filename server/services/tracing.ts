@@ -49,6 +49,7 @@ import {
 } from '@opentelemetry/core';
 import { BatchSpanProcessor, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-base';
 import { logger } from '@/lib/logger';
+import { Prisma } from '@/lib/generated/prisma/client';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -262,14 +263,9 @@ export function tracingMiddleware<T extends TracingMiddlewareContext>(
 // ── Prisma middleware ────────────────────────────────────────────────────────
 
 /**
- * Prisma middleware that creates a child span for every database query.
- *
- * Usage in `lib/prisma.ts`:
- * ```ts
- * import { createPrismaTracingMiddleware } from '@/server/services/tracing';
- *
- * prisma.$use(createPrismaTracingMiddleware());
- * ```
+ * Middleware-style wrapper that creates a child span for every database
+ * query. Prisma 7 removed `$use`, so it is wired in through
+ * `prismaTracingExtension` (a `$extends` query extension) below.
  */
 export function createPrismaTracingMiddleware() {
   return async (params: any, next: (params: any) => Promise<any>) => {
@@ -304,6 +300,28 @@ export function createPrismaTracingMiddleware() {
     });
   };
 }
+
+/**
+ * Prisma Client query extension that wraps every operation (model queries
+ * and raw queries) in a child span via createPrismaTracingMiddleware().
+ *
+ * Usage in `lib/prisma.ts`:
+ * ```ts
+ * const prisma = new PrismaClient({ adapter }).$extends(prismaTracingExtension);
+ * ```
+ */
+const prismaTracingMiddleware = createPrismaTracingMiddleware();
+
+export const prismaTracingExtension = Prisma.defineExtension({
+  name: 'otel-tracing',
+  query: {
+    async $allOperations({ model, operation, args, query }) {
+      return prismaTracingMiddleware({ model, action: operation, args }, (params) =>
+        query(params.args),
+      );
+    },
+  },
+});
 
 // ── Manual instrumentation helpers ───────────────────────────────────────────
 

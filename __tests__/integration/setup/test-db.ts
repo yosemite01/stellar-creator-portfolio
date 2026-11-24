@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '@/lib/generated/prisma/client';
 import { Client } from 'pg';
 
 const baseDatabaseUrl =
@@ -30,15 +31,10 @@ export async function initTestSchema(): Promise<string> {
 
 export function getTestPrismaClient(): PrismaClient {
   if (!testPrisma) {
-    const url = new URL(baseDatabaseUrl);
-    url.searchParams.set('schema', schemaName);
-
+    // Prisma 7: connect through the pg driver adapter and pass the
+    // per-worker schema to the adapter (it replaces the `?schema=` param).
     testPrisma = new PrismaClient({
-      datasources: {
-        db: {
-          url: url.toString(),
-        },
-      },
+      adapter: new PrismaPg({ connectionString: baseDatabaseUrl }, { schema: schemaName }),
     });
   }
   return testPrisma;

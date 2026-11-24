@@ -10,7 +10,7 @@
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0024.md
  */
 
-import { type Prisma, type PrismaClient, type Sep24Status, type Sep24Transaction } from '@prisma/client'
+import { type Prisma, type PrismaClient, type Sep24Status, type Sep24Transaction } from '@/lib/generated/prisma/client'
 
 /** A transaction with its status history, as returned by the getters below. */
 export type Sep24TransactionWithHistory = Prisma.Sep24TransactionGetPayload<{
@@ -27,7 +27,7 @@ import {
 export type {
   Sep24Transaction,
   Sep24StatusEntry,
-} from '@prisma/client'
+} from '@/lib/generated/prisma/client'
 
 /**
  * Create a new SEP-24 transaction record in the database.

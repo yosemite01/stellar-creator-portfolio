@@ -11,7 +11,7 @@
  * Redis pub/sub on {@link MESSAGES_CHANNEL} when `REDIS_URL` is set.
  */
 
-import type { Prisma } from '@prisma/client'
+import type { Prisma } from '@/lib/generated/prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getRedisClient } from '@/lib/storage/redis'
 import { writeAuditLog } from '@/server/services/audit'

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
-import type { ApplicationStatus, BountyStatus } from '@prisma/client';
+import type { ApplicationStatus, BountyStatus } from '@/lib/generated/prisma/client';
 
 interface EntityChanges {
   created?: Record<string, unknown>[];

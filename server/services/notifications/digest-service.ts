@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/generated/prisma/client';
 /**
  * Notification digests (daily/weekly).
  *
@@ -17,7 +17,7 @@ import type { Prisma } from '@prisma/client';
  * provider is pre-existing, unrelated work.
  */
 import { prisma } from '@/lib/prisma';
-import type { DigestFrequency } from '@prisma/client';
+import type { DigestFrequency } from '@/lib/generated/prisma/client';
 
 export interface DigestNotificationItem {
   id: string;

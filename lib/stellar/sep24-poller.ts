@@ -9,7 +9,7 @@
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0024.md
  */
 
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient } from '@/lib/generated/prisma/client'
 import {
   type Sep24Transaction as Sep24ApiTransaction,
   isTerminalStatus,

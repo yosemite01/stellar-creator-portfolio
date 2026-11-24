@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/generated/prisma/client';
 import type { Creator } from '@/lib/services/creators-data';
 
 /** Columns of CreatorProfile needed to render a creator card. */

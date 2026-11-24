@@ -1,33 +1,39 @@
-import { PrismaClient } from '@prisma/client';
-import { createPrismaTracingMiddleware } from '@/server/services/tracing';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '@/lib/generated/prisma/client';
+import { prismaTracingExtension } from '@/server/services/tracing';
 
-function buildPrismaClient(): PrismaClient {
-  // When PgBouncer is in use, DATABASE_URL points to the pooler (port 6432).
-  // We pass it explicitly so Prisma uses the pooler URL at runtime.
-  // DIRECT_DATABASE_URL is used by Prisma Migrate (set in schema.prisma directUrl).
-  //
-  // The override is only applied when the variable is set: passing
-  // `url: undefined` makes the constructor throw at import time, which
-  // breaks `next build` and any test that merely imports a route module.
-  // Without it Prisma reads env("DATABASE_URL") itself and reports a
-  // missing URL on first query instead.
-  const url = process.env.DATABASE_URL;
-  const client = new PrismaClient(url ? { datasources: { db: { url } } } : undefined);
-  // Attach OpenTelemetry tracing middleware — creates a child span per DB query
-  client.$use(createPrismaTracingMiddleware());
-  return client;
+/**
+ * Build a PrismaClient connected through the pg driver adapter (Prisma 7
+ * requires a driver adapter; the schema no longer carries a URL).
+ *
+ * When PgBouncer is in use, DATABASE_URL points to the pooler (port 6432).
+ * DIRECT_DATABASE_URL is only used by Prisma Migrate (see prisma.config.ts).
+ *
+ * The adapter connects lazily, so a missing DATABASE_URL does not throw at
+ * import time (which would break `next build` and any test that merely
+ * imports a route module); it surfaces on the first query instead.
+ */
+export function createPrismaClient(
+  connectionString: string | undefined = process.env.DATABASE_URL,
+): PrismaClient {
+  const adapter = new PrismaPg({ connectionString });
+  const client = new PrismaClient({ adapter });
+  // Attach OpenTelemetry tracing — creates a child span per DB query.
+  // A query-only extension does not change the client's type surface, so
+  // the extended client is still exposed as PrismaClient.
+  return client.$extends(prismaTracingExtension) as unknown as PrismaClient;
 }
 
 let prisma: PrismaClient;
 
 if (process.env.NODE_ENV === 'production') {
-  prisma = buildPrismaClient();
+  prisma = createPrismaClient();
 } else {
   const globalWithPrisma = global as typeof global & {
     prisma: PrismaClient;
   };
   if (!globalWithPrisma.prisma) {
-    globalWithPrisma.prisma = buildPrismaClient();
+    globalWithPrisma.prisma = createPrismaClient();
   }
   prisma = globalWithPrisma.prisma;
 }

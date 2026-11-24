@@ -1,4 +1,4 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@/lib/generated/prisma/client';
 
 /**
  * GDPR data export service.
@@ -32,14 +32,37 @@ export interface DataExportResult {
   [model: string]: unknown;
 }
 
+interface RuntimeField {
+  name: string;
+  kind: string;
+  type: string;
+  relationName?: string | null;
+}
+
+/**
+ * Model/field metadata for introspection. Prisma 7's `prisma-client`
+ * generator no longer exports `Prisma.dmmf`; the same metadata ships with
+ * the client as its runtime data model (`_runtimeDataModel`).
+ */
+function getRuntimeModels(prisma: PrismaClient): { name: string; fields: RuntimeField[] }[] {
+  const dataModel = (
+    prisma as unknown as {
+      _runtimeDataModel?: { models: Record<string, { fields: RuntimeField[] }> };
+    }
+  )._runtimeDataModel;
+  if (!dataModel) return [];
+  return Object.entries(dataModel.models).map(([name, model]) => ({ name, fields: model.fields }));
+}
+
 /**
  * Returns the list of Prisma model names that have a direct relation to User
  * (either a `userId` scalar field or a relation field pointing at User).
  *
- * Introspects Prisma.dmmf so newly added models are automatically covered.
+ * Introspects the client's runtime data model so newly added models are
+ * automatically covered.
  */
-export function getUserLinkedModels(): string[] {
-  const models = Prisma.dmmf.datamodel.models;
+export function getUserLinkedModels(prisma: PrismaClient): string[] {
+  const models = getRuntimeModels(prisma);
   const linked: string[] = [];
 
   for (const model of models) {
@@ -95,7 +118,7 @@ export async function buildUserDataExport(
 
   result.user = sanitizeRecord('User', user as unknown as AnyRecord);
 
-  const models = getUserLinkedModels();
+  const models = getUserLinkedModels(prisma);
   const client = prisma as unknown as Record<string, { findMany?: (args: unknown) => Promise<unknown[]> }>;
 
   for (const modelName of models) {

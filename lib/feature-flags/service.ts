@@ -10,7 +10,7 @@
  */
 
 import { prisma } from '@/lib/prisma';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@/lib/generated/prisma/client';
 import { redisGet, redisSet, redisDel } from '@/lib/storage/redis';
 import { createHash } from 'crypto';
 

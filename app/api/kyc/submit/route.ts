@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma';
 import { encryptFieldsWithEnvelope } from '@/lib/kyc-envelope-encryption';
-import { KYCDocumentType } from '@prisma/client';
+import { KYCDocumentType } from '@/lib/generated/prisma/client';
 import { z } from 'zod';
 
 /**

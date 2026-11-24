@@ -13,7 +13,7 @@
  *  • bountyViewSearch()  — full-text search over bounty_search_view materialized view
  */
 
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@/lib/generated/prisma/client';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 

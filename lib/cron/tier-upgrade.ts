@@ -11,7 +11,7 @@
  */
 
 import { prisma } from '@/lib/prisma';
-import { VerificationTier } from '@prisma/client';
+import { VerificationTier } from '@/lib/generated/prisma/client';
 
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 

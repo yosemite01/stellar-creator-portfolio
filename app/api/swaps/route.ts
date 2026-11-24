@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { SwapSession } from '@prisma/client'
+import { SwapSession } from '@/lib/generated/prisma/client'
 import { createSwapSession, cleanupExpiredSessions } from '@/lib/swap/cross-chain-service'
 
 /**
@@ -62,8 +62,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Check for existing unexpired session with same parameters
-  const prisma = (await import('@prisma/client')).PrismaClient
-  const db = new prisma()
+  const { prisma: db } = await import('@/lib/prisma')
 
   try {
     // Clean up expired sessions first
@@ -140,8 +139,7 @@ export async function GET(request: NextRequest) {
   const offset = parseInt(searchParams.get('offset') ?? '0', 10)
   const status = searchParams.get('status')
 
-  const prisma = (await import('@prisma/client')).PrismaClient
-  const db = new prisma()
+  const { prisma: db } = await import('@/lib/prisma')
 
   try {
     const where: any = { userId: session.user.id }

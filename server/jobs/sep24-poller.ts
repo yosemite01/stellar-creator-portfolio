@@ -17,11 +17,11 @@
  *   SEP24_BATCH_SIZE - max transactions to poll per run (default: 100)
  */
 
-const { PrismaClient } = require('@prisma/client')
+const { createPrismaClient } = require('@/lib/prisma')
 const { startSep24Poller } = require('@lib/stellar/sep24-poller')
 
 async function main() {
-  const prisma = new PrismaClient()
+  const prisma = createPrismaClient()
   
   // Clean up any transactions that are stuck (pollCount > 100)
   try {
