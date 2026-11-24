@@ -1,5 +1,5 @@
 /**
- * Abuse controls for the paymaster relay (#1510).
+ * Abuse controls for the paymaster relay (#1510, #1731).
  *
  * Threat closed: the relay signs fee-bumps with the platform fee account, so
  * an open endpoint lets anyone submit arbitrary or very many transactions and
@@ -11,6 +11,12 @@
  *     `STELLAR_SPONSOR_ALLOWED_OPS` (none by default),
  *  2. a low-balance circuit breaker on the fee account,
  *  3. a per-user daily budget in stroops (`STELLAR_SPONSOR_DAILY_BUDGET`).
+ *  4. (#1731) a hard cap on operations per inner transaction
+ *     (`STELLAR_SPONSOR_MAX_OPS`, default 2) so callers cannot batch
+ *     many operations into one sponsored envelope,
+ *  5. (#1731) a per-operation fee ceiling (`STELLAR_SPONSOR_MAX_FEE_PER_OP`,
+ *     default 10 000 stroops) so callers cannot bid outrageously high fees
+ *     and bill them to the platform.
  *
  * Usage is process-local, like the other limiters in this repo; use a shared
  * store behind the same functions if the app runs on several instances.
@@ -26,6 +32,24 @@ const BALANCE_CACHE_MS = 60_000;
 /** Max stroops of fees a single user may have sponsored per UTC day (default 0.1 XLM). */
 function dailyBudget(): bigint {
   return BigInt(process.env.STELLAR_SPONSOR_DAILY_BUDGET ?? 1_000_000);
+}
+
+/**
+ * (#1731) Hard cap on the number of operations allowed in one sponsored inner
+ * transaction.  Callers cannot batch arbitrarily many operations into a single
+ * envelope; keeping this low limits blast radius per relay call.
+ */
+function maxOpsPerTx(): number {
+  return parseInt(process.env.STELLAR_SPONSOR_MAX_OPS ?? '2', 10);
+}
+
+/**
+ * (#1731) Per-operation fee ceiling in stroops.  Prevents callers from
+ * bidding outrageously high fees (e.g. during congestion) that would be
+ * silently absorbed by the platform.  Default: 10 000 stroops (0.001 XLM).
+ */
+function maxFeePerOp(): bigint {
+  return BigInt(process.env.STELLAR_SPONSOR_MAX_FEE_PER_OP ?? 10_000);
 }
 
 /** Sponsoring stops while the fee account holds less than this many stroops (default 5 XLM). */
@@ -55,6 +79,24 @@ function allowedClassicOps(): Set<string> {
 export function assertAllowedOperations(tx: Transaction): void {
   const contracts = allowedContractIds();
   const classicOps = allowedClassicOps();
+
+  // (#1731) Reject transactions that pack too many operations.
+  if (tx.operations.length > maxOpsPerTx()) {
+    throw new SponsorError(
+      `Too many operations: ${tx.operations.length} exceeds the per-transaction limit of ${maxOpsPerTx()}`,
+      403,
+    );
+  }
+
+  // (#1731) Reject transactions whose per-operation fee exceeds the ceiling.
+  const ops = BigInt(tx.operations.length || 1);
+  const feePerOp = BigInt(tx.fee) / ops;
+  if (feePerOp > maxFeePerOp()) {
+    throw new SponsorError(
+      `Per-operation fee ${feePerOp} stroops exceeds the sponsored maximum of ${maxFeePerOp()} stroops`,
+      402,
+    );
+  }
 
   for (const op of tx.operations) {
     if (op.type === 'invokeHostFunction') {

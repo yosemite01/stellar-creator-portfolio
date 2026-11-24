@@ -4,7 +4,8 @@
 // so it is kept as-is for the SDK upgrade and tracked as a separate change.
 #![allow(deprecated)]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, String, Symbol, Val, Vec};
+use stellar_contract_ttl::{self as ttl, TtlPolicy};
 
 const DEFAULT_TIMELOCK_SECONDS: u64 = 48 * 60 * 60; // 48 hours
 
@@ -88,77 +89,128 @@ pub struct VotingCheckpoint {
 
 // ── Issue #1565: voting-power checkpoints ────────────────────────────────────
 
-const LEDGER_TTL: u32 = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-
-fn ckpt_count_key(env: &Env, account: &Address) -> (Symbol, Address) {
-    (Symbol::new(env, "vp_n"), account.clone())
+/// A series of voting checkpoints: one per depositor, plus one for the total
+/// deposited power (Issue #1710), which is the quorum denominator.
+enum Series<'a> {
+    Account(&'a Address),
+    Total,
 }
 
-fn ckpt_key(env: &Env, account: &Address, index: u32) -> (Symbol, Address, u32) {
-    (Symbol::new(env, "vp_ck"), account.clone(), index)
+fn ckpt_count_key(env: &Env, series: &Series) -> Val {
+    match series {
+        Series::Account(a) => (Symbol::new(env, "vp_n"), (*a).clone()).into_val(env),
+        Series::Total => Symbol::new(env, "tvp_n").into_val(env),
+    }
 }
 
-fn ckpt_count(env: &Env, account: &Address) -> u32 {
+fn ckpt_key(env: &Env, series: &Series, index: u32) -> Val {
+    match series {
+        Series::Account(a) => (Symbol::new(env, "vp_ck"), (*a).clone(), index).into_val(env),
+        Series::Total => (Symbol::new(env, "tvp_ck"), index).into_val(env),
+    }
+}
+
+fn ckpt_count(env: &Env, series: &Series) -> u32 {
     env.storage()
         .persistent()
-        .get::<(Symbol, Address), u32>(&ckpt_count_key(env, account))
+        .get::<Val, u32>(&ckpt_count_key(env, series))
         .unwrap_or(0)
 }
 
-fn ckpt_at(env: &Env, account: &Address, index: u32) -> VotingCheckpoint {
+fn ckpt_at(env: &Env, series: &Series, index: u32) -> VotingCheckpoint {
     env.storage()
         .persistent()
-        .get::<(Symbol, Address, u32), VotingCheckpoint>(&ckpt_key(env, account, index))
+        .get::<Val, VotingCheckpoint>(&ckpt_key(env, series, index))
         .expect("Checkpoint missing")
 }
 
-/// Record `votes` as `account`'s power from the current ledger onwards.
+/// Record `votes` as the series' value from the current ledger onwards.
 /// Multiple changes within one ledger collapse into a single checkpoint.
-fn write_checkpoint(env: &Env, account: &Address, votes: i128) {
+fn write_checkpoint(env: &Env, series: &Series, votes: i128) {
     let ledger = env.ledger().sequence();
-    let n = ckpt_count(env, account);
+    let n = ckpt_count(env, series);
     let cp = VotingCheckpoint { ledger, votes };
 
-    if n > 0 && ckpt_at(env, account, n - 1).ledger == ledger {
-        let key = ckpt_key(env, account, n - 1);
+    if n > 0 && ckpt_at(env, series, n - 1).ledger == ledger {
+        let key = ckpt_key(env, series, n - 1);
         env.storage().persistent().set(&key, &cp);
-        env.storage().persistent().extend_ttl(&key, 4096, LEDGER_TTL);
+        ttl::extend(env, &key, TtlPolicy::UserEntry);
         return;
     }
 
-    let key = ckpt_key(env, account, n);
-    let count_key = ckpt_count_key(env, account);
+    let key = ckpt_key(env, series, n);
+    let count_key = ckpt_count_key(env, series);
     env.storage().persistent().set(&key, &cp);
     env.storage().persistent().set(&count_key, &(n + 1));
-    env.storage().persistent().extend_ttl(&key, 4096, LEDGER_TTL);
-    env.storage().persistent().extend_ttl(&count_key, 4096, LEDGER_TTL);
+    ttl::extend(env, &key, TtlPolicy::UserEntry);
+    ttl::extend(env, &count_key, TtlPolicy::UserEntry);
 }
 
-/// Voting power of `account` as of the end of `ledger` (binary search over
-/// checkpoints). Returns 0 if the account had no deposit by then.
-fn votes_at(env: &Env, account: &Address, ledger: u32) -> i128 {
-    let n = ckpt_count(env, account);
+/// Value of the series as of the end of `ledger` (binary search over
+/// checkpoints). Returns 0 if nothing was recorded by then.
+fn series_at(env: &Env, series: &Series, ledger: u32) -> i128 {
+    let n = ckpt_count(env, series);
     if n == 0 {
         return 0;
     }
-    let last = ckpt_at(env, account, n - 1);
+    let last = ckpt_at(env, series, n - 1);
     if last.ledger <= ledger {
         return last.votes;
     }
-    if ckpt_at(env, account, 0).ledger > ledger {
+    if ckpt_at(env, series, 0).ledger > ledger {
         return 0;
     }
     // Largest index whose checkpoint ledger is <= `ledger`.
     let (mut lo, mut hi) = (0u32, n - 1);
     while lo < hi {
-        let mid = lo + (hi - lo + 1) / 2;
-        if ckpt_at(env, account, mid).ledger <= ledger {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if ckpt_at(env, series, mid).ledger <= ledger {
             lo = mid;
         } else {
             hi = mid - 1;
         }
     }
-    ckpt_at(env, account, lo).votes
+    ckpt_at(env, series, lo).votes
+}
+
+/// Voting power of `account` as of the end of `ledger`.
+fn votes_at(env: &Env, account: &Address, ledger: u32) -> i128 {
+    series_at(env, &Series::Account(account), ledger)
+}
+
+/// Total deposited voting power as of the end of `ledger` (Issue #1710).
+fn total_at(env: &Env, ledger: u32) -> i128 {
+    series_at(env, &Series::Total, ledger)
+}
+
+fn proposal_storage_key(env: &Env, proposal_id: u64) -> (Symbol, u64) {
+    (Symbol::new(env, "proposal"), proposal_id)
+}
+
+fn snapshot_total_key(env: &Env, proposal_id: u64) -> (Symbol, u64) {
+    (Symbol::new(env, "snap_tvp"), proposal_id)
+}
+
+fn snapshot_quorum_key(env: &Env, proposal_id: u64) -> (Symbol, u64) {
+    (Symbol::new(env, "snap_q"), proposal_id)
+}
+
+/// Freeze the quorum inputs for a proposal: the total deposited power at its
+/// snapshot ledger and the quorum percentage in force right now. Neither can
+/// be changed afterwards, by the admin or anyone else (Issue #1710).
+fn write_quorum_snapshot(env: &Env, proposal_id: u64, snapshot_ledger: u32, quorum_percent: u64) -> i128 {
+    let total = total_at(env, snapshot_ledger);
+    let total_key = snapshot_total_key(env, proposal_id);
+    let quorum_key = snapshot_quorum_key(env, proposal_id);
+    env.storage().persistent().set(&total_key, &total);
+    env.storage().persistent().set(&quorum_key, &quorum_percent);
+    ttl::extend(env, &total_key, TtlPolicy::UserEntry);
+    ttl::extend(env, &quorum_key, TtlPolicy::UserEntry);
+    env.events().publish(
+        (symbol_short!("gov"), symbol_short!("snap_tvp")),
+        (proposal_id, snapshot_ledger, total, quorum_percent),
+    );
+    total
 }
 
 #[contract]
@@ -212,9 +264,7 @@ impl GovernanceContract {
 
         env.storage().persistent().set(&config_key, &config);
 
-        // Extend TTL for config storage (30 days in ledgers)
-        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&config_key, 4096, ledger_ttl);
+        ttl::extend(&env, &config_key, TtlPolicy::Config);
 
         true
     }
@@ -240,9 +290,7 @@ impl GovernanceContract {
 
         env.storage().persistent().set(&config_key, &config);
 
-        // Extend TTL for config storage (30 days in ledgers)
-        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&config_key, 4096, ledger_ttl);
+        ttl::extend(&env, &config_key, TtlPolicy::Config);
 
         true
     }
@@ -284,10 +332,8 @@ impl GovernanceContract {
             .persistent()
             .set(&proposal_counter_key, &counter);
 
-        // Extend TTL for proposal storage (30 days in ledgers)
-        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
-        env.storage().persistent().extend_ttl(&proposal_counter_key, 4096, ledger_ttl);
+        ttl::extend(&env, &proposal_key, TtlPolicy::UserEntry);
+        ttl::extend(&env, &proposal_counter_key, TtlPolicy::Config);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("created")),
@@ -301,11 +347,17 @@ impl GovernanceContract {
         let snapshot_ledger = env.ledger().sequence().saturating_sub(1);
         let snapshot_key = (Symbol::new(&env, "snapshot"), proposal_id);
         env.storage().persistent().set(&snapshot_key, &snapshot_ledger);
-        env.storage().persistent().extend_ttl(&snapshot_key, 4096, ledger_ttl);
+        ttl::extend(&env, &snapshot_key, TtlPolicy::UserEntry);
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("snapshot")),
             (proposal_id, snapshot_ledger),
         );
+
+        // Issue #1710: the quorum denominator is the total deposited power at
+        // the same snapshot ledger, and the quorum percentage is frozen too,
+        // so nothing that happens after creation can move the bar.
+        let quorum_percent = Self::get_quorum_percent(env.clone());
+        write_quorum_snapshot(&env, proposal_id, snapshot_ledger, quorum_percent);
 
         proposal_id
     }
@@ -348,10 +400,8 @@ impl GovernanceContract {
         env.storage().persistent().set(&proposal_key, &proposal);
         env.storage().persistent().set(&vote_key, &true);
 
-        // Extend TTL for vote storage (30 days in ledgers)
-        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
-        env.storage().persistent().extend_ttl(&vote_key, 4096, ledger_ttl);
+        ttl::extend(&env, &proposal_key, TtlPolicy::UserEntry);
+        ttl::extend(&env, &vote_key, TtlPolicy::UserEntry);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("voted")),
@@ -363,10 +413,40 @@ impl GovernanceContract {
 
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
-        env.storage()
+        let proposal = env
+            .storage()
             .persistent()
             .get::<(Symbol, u64), Proposal>(&proposal_key)
-            .expect("Proposal not found")
+            .expect("Proposal not found");
+        // Issue #1720: extend user-facing entries on read.
+        ttl::extend(&env, &proposal_key, TtlPolicy::UserEntry);
+        proposal
+    }
+
+    /// Keeper entrypoint (Issue #1720): extend the contract instance, the
+    /// shared config/counter entries and every per-proposal entry for
+    /// `proposal_ids` that still exists. Permissionless; it only pays rent.
+    /// Returns how many proposals were found. At most `MAX_KEEPER_BATCH` ids.
+    pub fn extend_proposal_ttl(env: Env, proposal_ids: Vec<u64>) -> u32 {
+        assert!(proposal_ids.len() <= ttl::MAX_KEEPER_BATCH, "Too many ids");
+        ttl::extend_instance(&env);
+        for name in ["governance_config", "proposal_counter", "vote_token", "quorum_pct", "tl_duration", "tvp_n"] {
+            ttl::extend_if_present(&env, &Symbol::new(&env, name), TtlPolicy::Config);
+        }
+        let mut found = 0u32;
+        for id in proposal_ids.iter() {
+            if !ttl::extend_if_present(&env, &proposal_storage_key(&env, id), TtlPolicy::UserEntry) {
+                continue;
+            }
+            found += 1;
+            for name in ["snapshot", "pparam", "timelock"] {
+                ttl::extend_if_present(&env, &(Symbol::new(&env, name), id), TtlPolicy::UserEntry);
+            }
+            ttl::extend_if_present(&env, &snapshot_total_key(&env, id), TtlPolicy::UserEntry);
+            ttl::extend_if_present(&env, &snapshot_quorum_key(&env, id), TtlPolicy::UserEntry);
+        }
+        env.events().publish((symbol_short!("gov"), symbol_short!("ttl_ext")), (found,));
+        found
     }
 
     pub fn execute_proposal(env: Env, proposal_id: u64) -> bool {
@@ -392,9 +472,7 @@ impl GovernanceContract {
 
         env.storage().persistent().set(&proposal_key, &proposal);
 
-        // Extend TTL for proposal storage (30 days in ledgers)
-        let ledger_ttl = 30 * 24 * 3600 / 5; // ~30 days (5 second blocks)
-        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
+        ttl::extend(&env, &proposal_key, TtlPolicy::UserEntry);
 
         true
     }
@@ -459,9 +537,8 @@ impl GovernanceContract {
         env.storage().persistent().set(&proposal_key, &proposal);
         env.storage().persistent().set(&vote_key, &tv);
 
-        let ledger_ttl = 30 * 24 * 3600 / 5;
-        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
-        env.storage().persistent().extend_ttl(&vote_key, 4096, ledger_ttl);
+        ttl::extend(&env, &proposal_key, TtlPolicy::UserEntry);
+        ttl::extend(&env, &vote_key, TtlPolicy::UserEntry);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("wvoted")),
@@ -491,8 +568,7 @@ impl GovernanceContract {
         let tl_key = (Symbol::new(&env, "timelock"), proposal_id);
         env.storage().persistent().set(&tl_key, &tl);
 
-        let ledger_ttl = 30 * 24 * 3600 / 5;
-        env.storage().persistent().extend_ttl(&tl_key, 4096, ledger_ttl);
+        ttl::extend(&env, &tl_key, TtlPolicy::UserEntry);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("queued")),
@@ -589,8 +665,7 @@ impl GovernanceContract {
         let param_key = (Symbol::new(&env, "pparam"), proposal_id);
         env.storage().persistent().set(&param_key, &param);
 
-        let ledger_ttl = 30 * 24 * 3600 / 5;
-        env.storage().persistent().extend_ttl(&param_key, 4096, ledger_ttl);
+        ttl::extend(&env, &param_key, TtlPolicy::UserEntry);
 
         proposal_id
     }
@@ -624,7 +699,7 @@ impl GovernanceContract {
         let key = Symbol::new(&env, "vote_token");
         assert!(!env.storage().persistent().has(&key), "Voting token already set");
         env.storage().persistent().set(&key, &token);
-        env.storage().persistent().extend_ttl(&key, 4096, LEDGER_TTL);
+        ttl::extend(&env, &key, TtlPolicy::Config);
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("vp_token")),
             (token,),
@@ -647,13 +722,17 @@ impl GovernanceContract {
 
         soroban_sdk::token::Client::new(&env, &token).transfer(
             &account,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &amount,
         );
 
         let current = votes_at(&env, &account, env.ledger().sequence());
         let updated = current.checked_add(amount).expect("Voting power overflow");
-        write_checkpoint(&env, &account, updated);
+        write_checkpoint(&env, &Series::Account(&account), updated);
+        let total = total_at(&env, env.ledger().sequence())
+            .checked_add(amount)
+            .expect("Voting power overflow");
+        write_checkpoint(&env, &Series::Total, total);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("vp_dep")),
@@ -673,7 +752,9 @@ impl GovernanceContract {
         let current = votes_at(&env, &account, env.ledger().sequence());
         assert!(current >= amount, "Insufficient voting power");
         let updated = current - amount;
-        write_checkpoint(&env, &account, updated);
+        write_checkpoint(&env, &Series::Account(&account), updated);
+        let total = total_at(&env, env.ledger().sequence()) - amount;
+        write_checkpoint(&env, &Series::Total, total);
 
         soroban_sdk::token::Client::new(&env, &token).transfer(
             &env.current_contract_address(),
@@ -718,8 +799,7 @@ impl GovernanceContract {
         assert!(quorum_percent <= 100, "Quorum must be 0-100");
         let key = Symbol::new(&env, "quorum_pct");
         env.storage().persistent().set(&key, &quorum_percent);
-        let ledger_ttl = 30 * 24 * 3600 / 5;
-        env.storage().persistent().extend_ttl(&key, 4096, ledger_ttl);
+        ttl::extend(&env, &key, TtlPolicy::Config);
         env.events().publish((symbol_short!("gov"), symbol_short!("quorum")), (quorum_percent,));
     }
 
@@ -729,28 +809,79 @@ impl GovernanceContract {
         env.storage().persistent().get::<Symbol, u64>(&key).unwrap_or(Self::DEFAULT_QUORUM_PERCENT)
     }
 
-    /// Set total voting power (governance token supply). Admin only.
-    pub fn set_total_voting_power(env: Env, admin: Address, total: u64) {
-        admin.require_auth();
-        let config = Self::get_config(env.clone());
-        assert_eq!(admin, config.admin_address, "Only admin can set voting power");
-        assert!(total > 0, "Total voting power must be positive");
-        let key = Symbol::new(&env, "total_vp");
-        env.storage().persistent().set(&key, &total);
-        let ledger_ttl = 30 * 24 * 3600 / 5;
-        env.storage().persistent().extend_ttl(&key, 4096, ledger_ttl);
+    /// Current total deposited voting power (Issue #1710).
+    ///
+    /// This used to be an admin-set number. It is now the sum of all
+    /// `deposit_votes` minus `withdraw_votes`, checkpointed per ledger.
+    /// Saturates at `u64::MAX` to keep the existing return type.
+    pub fn get_total_voting_power(env: Env) -> u64 {
+        u64::try_from(total_at(&env, env.ledger().sequence())).unwrap_or(u64::MAX)
     }
 
-    /// Get total voting power. Returns 0 if not yet configured.
-    pub fn get_total_voting_power(env: Env) -> u64 {
-        let key = Symbol::new(&env, "total_vp");
-        env.storage().persistent().get::<Symbol, u64>(&key).unwrap_or(0)
+    /// Total deposited voting power as of the end of `ledger`.
+    pub fn get_past_total_voting_power(env: Env, ledger: u32) -> i128 {
+        total_at(&env, ledger)
+    }
+
+    /// Quorum inputs frozen for `proposal_id` at creation:
+    /// `(total_voting_power_at_snapshot, quorum_percent)`.
+    pub fn get_proposal_quorum(env: Env, proposal_id: u64) -> (i128, u64) {
+        let total = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), i128>(&snapshot_total_key(&env, proposal_id))
+            .expect("Proposal has no quorum snapshot");
+        let quorum = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), u64>(&snapshot_quorum_key(&env, proposal_id))
+            .expect("Proposal has no quorum snapshot");
+        (total, quorum)
+    }
+
+    /// One-time migration for proposals created before Issue #1710.
+    ///
+    /// Permissionless: it only records values that are already determined.
+    /// The total is read at the proposal's voting snapshot ledger when it has
+    /// one (Issue #1565), otherwise at the ledger before this call; the quorum
+    /// percentage is the one in force now. It also deletes the obsolete
+    /// admin-set `total_vp` entry. Fails if the proposal is already migrated
+    /// or no longer pending.
+    pub fn migrate_proposal_quorum(env: Env, proposal_id: u64) -> (i128, u64) {
+        let proposal = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), Proposal>(&proposal_storage_key(&env, proposal_id))
+            .expect("Proposal not found");
+        let pending = String::from_str(&env, "pending");
+        assert!(proposal.status == pending, "Proposal not pending");
+        assert!(
+            !env.storage().persistent().has(&snapshot_total_key(&env, proposal_id)),
+            "Quorum snapshot already set"
+        );
+
+        let snapshot_ledger = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64), u32>(&(Symbol::new(&env, "snapshot"), proposal_id))
+            .unwrap_or_else(|| env.ledger().sequence().saturating_sub(1));
+        let quorum = Self::get_quorum_percent(env.clone());
+        let total = write_quorum_snapshot(&env, proposal_id, snapshot_ledger, quorum);
+
+        let legacy_key = Symbol::new(&env, "total_vp");
+        if env.storage().persistent().has(&legacy_key) {
+            env.storage().persistent().remove(&legacy_key);
+        }
+        (total, quorum)
     }
 
     /// Finalize a proposal after its voting deadline, enforcing quorum.
     ///
-    /// Requires `(yes_votes + no_votes) * 100 / total_supply >= quorum_percent`.
-    /// Panics if quorum is not met, voting is still open, or total supply is 0.
+    /// Requires `(yes_votes + no_votes) * 100 / total >= quorum_percent`, where
+    /// `total` and `quorum_percent` were frozen when the proposal was created
+    /// (Issue #1710). Panics if quorum is not met, voting is still open, no
+    /// power was deposited at the snapshot, or the proposal predates #1710 and
+    /// has not been through `migrate_proposal_quorum`.
     pub fn finalize_proposal(env: Env, proposal_id: u64) -> bool {
         let proposal_key = (Symbol::new(&env, "proposal"), proposal_id);
         let mut proposal = env
@@ -766,13 +897,12 @@ impl GovernanceContract {
         let pending = String::from_str(&env, "pending");
         assert!(proposal.status == pending, "Proposal not pending");
 
-        let total_supply = Self::get_total_voting_power(env.clone());
-        assert!(total_supply > 0, "Total voting power not configured");
+        let (total_supply, quorum) = Self::get_proposal_quorum(env.clone(), proposal_id);
+        assert!(total_supply > 0, "No voting power at snapshot");
 
-        let participation = (proposal.yes_votes + proposal.no_votes)
-            .saturating_mul(100)
-            / total_supply;
-        let quorum = Self::get_quorum_percent(env.clone());
+        let cast = i128::from(proposal.yes_votes).saturating_add(i128::from(proposal.no_votes));
+        let participation =
+            u64::try_from(cast.saturating_mul(100) / total_supply).unwrap_or(u64::MAX);
 
         assert!(participation >= quorum, "QuorumNotMet");
 
@@ -783,8 +913,7 @@ impl GovernanceContract {
         };
 
         env.storage().persistent().set(&proposal_key, &proposal);
-        let ledger_ttl = 30 * 24 * 3600 / 5;
-        env.storage().persistent().extend_ttl(&proposal_key, 4096, ledger_ttl);
+        ttl::extend(&env, &proposal_key, TtlPolicy::UserEntry);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("finalized")),
@@ -806,8 +935,7 @@ impl GovernanceContract {
         let guardian_key = (Symbol::new(&env, "guardian"), guardian.clone());
         env.storage().persistent().set(&guardian_key, &true);
 
-        let ledger_ttl = 30 * 24 * 3600 / 5;
-        env.storage().persistent().extend_ttl(&guardian_key, 4096, ledger_ttl);
+        ttl::extend(&env, &guardian_key, TtlPolicy::Config);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("guard_add")),
@@ -848,8 +976,7 @@ impl GovernanceContract {
         let key = Symbol::new(&env, "tl_duration");
         env.storage().persistent().set(&key, &duration_secs);
 
-        let ledger_ttl = 30 * 24 * 3600 / 5;
-        env.storage().persistent().extend_ttl(&key, 4096, ledger_ttl);
+        ttl::extend(&env, &key, TtlPolicy::Config);
     }
 
     /// Get the current timelock duration. Defaults to 48 hours.
@@ -942,9 +1069,12 @@ impl GovernanceContract {
     /// Accept a nomination (step 2 of 2). Must be signed by the nominee.
     /// Emits `(admin, accepted)`.
     pub fn accept_admin(env: Env, new_admin: Address) {
-        let stored_admin: Address = Self::get_config(env.clone()).admin_address;
-        let accepted = stellar_upgradeable::accept_admin(&env, &new_admin, &stored_admin);
-        <class 'set'>
+        let mut config = Self::get_config(env.clone());
+        let accepted = stellar_upgradeable::accept_admin(&env, &new_admin, &config.admin_address);
+        config.admin_address = accepted;
+        env.storage()
+            .persistent()
+            .set(&Symbol::new(&env, "governance_config"), &config);
     }
 
     /// Withdraw a pending admin nomination. Admin-only. Emits `(admin, cancelled)`.
@@ -960,3 +1090,13 @@ impl GovernanceContract {
 }
 
 mod tests;
+
+// Issue #1719: shared upgrade-timelock conformance tests.
+stellar_upgradeable::upgrade_timelock_tests!(
+    upgrade_conformance,
+    GovernanceContract,
+    GovernanceContractClient,
+    |env, id, admin| {
+        GovernanceContractClient::new(&env, &id).initialize(&admin);
+    }
+);

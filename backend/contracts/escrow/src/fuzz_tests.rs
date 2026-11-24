@@ -32,7 +32,7 @@ mod escrow_fuzz_tests {
         // Test that funds cannot be released twice
         let env = Env::default();
         let (token, payer, payee) = setup_token_env(&env, 1000i128);
-        let contract_id = env.register(EscrowContract, ());
+        let contract_id = env.register(EscrowContract, (Address::generate(&env),));
         let contract = EscrowContractClient::new(&env, &contract_id);
 
         let escrow_id = contract.deposit(
@@ -67,7 +67,7 @@ mod escrow_fuzz_tests {
 
         for amount in amounts {
             let (token, payer, payee) = setup_token_env(&env, amount);
-            let contract_id = env.register(EscrowContract, ());
+            let contract_id = env.register(EscrowContract, (Address::generate(&env),));
             let contract = EscrowContractClient::new(&env, &contract_id);
 
             let initial_balance = TokenClient::new(&env, &token).balance(&payer);
@@ -101,7 +101,7 @@ mod escrow_fuzz_tests {
         // Test that refunding prevents release
         let env = Env::default();
         let (token, payer, payee) = setup_token_env(&env, 1000i128);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let escrow_id = contract.deposit(
             &1u64,
@@ -127,7 +127,7 @@ mod escrow_fuzz_tests {
         // Test that only authorized parties can operate
         let env = Env::default();
         let (token, payer, payee) = setup_token_env(&env, 1000i128);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let escrow_id = contract.deposit(
             &1u64,
@@ -157,7 +157,7 @@ mod escrow_fuzz_tests {
         // Test that zero and negative amounts are rejected
         let env = Env::default();
         let (token, payer, payee) = setup_token_env(&env, 1000i128);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         // Zero amount should fail
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
@@ -191,7 +191,7 @@ mod escrow_fuzz_tests {
         // Test that timelock condition is enforced
         let env = Env::default();
         let (token, payer, payee) = setup_token_env(&env, 1000i128);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         // Set current time to 1000
         env.ledger().with_mut(|l| {
@@ -228,7 +228,7 @@ mod escrow_fuzz_tests {
         // Test that escrow IDs increment without gaps
         let env = Env::default();
         let (token, payer, payee) = setup_token_env(&env, 5000i128);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let mut ids = Vec::new(&env);
         for _ in 0..10 {
@@ -262,7 +262,7 @@ mod escrow_fuzz_tests {
         // Test multiple concurrent escrows don't interfere
         let env = Env::default();
         let (token, payer, payee) = setup_token_env(&env, 10000i128);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         let mut escrow_ids = Vec::new(&env);
         for _ in 0..5 {
@@ -301,7 +301,7 @@ mod escrow_fuzz_tests {
         // Test valid and invalid status transitions
         let env = Env::default();
         let (token, payer, payee) = setup_token_env(&env, 2000i128);
-        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+        let contract = EscrowContractClient::new(&env, &env.register(EscrowContract, (Address::generate(&env),)));
 
         // Test valid transition: Active -> Released
         let id1 = contract.deposit(

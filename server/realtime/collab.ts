@@ -22,7 +22,7 @@
  */
 import { WebSocketServer, WebSocket } from 'ws'
 import { IncomingMessage } from 'http'
-import { setupWSConnection } from 'y-websocket/bin/utils.js'
+import { setupWSConnection } from '@y/websocket-server/utils'
 import {
   collabTokenSecret,
   collabVerifyClient,
@@ -164,7 +164,7 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     terminateAndCleanup(ws)
   })
 
-  // Delegate CRDT sync to y-websocket
+  // Delegate CRDT sync to @y/websocket-server
   setupWSConnection(ws, req, { docName })
 })
 

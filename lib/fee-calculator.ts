@@ -1,21 +1,39 @@
 /**
- * Fee calculation logic — Issue #344
+ * Fee calculation logic — Issue #344, #1724
  *
- * Platform fee: 2.5% of the escrow amount, capped at 500 USDC.
- * Network fee: fixed 0.00001 XLM per Stellar operation (standard base fee).
+ * Platform fee: configured on-chain via core contract (fee_bps) and escrow
+ * contract (fee_cap), currently 2.5% with 500 USDC cap.
  *
- * These values mirror the constants in the Soroban escrow contract so the
- * frontend can show accurate fee previews before the user signs a transaction.
+ * All fee calculations use **integer truncation** (floor division) to match
+ * the Rust contract behavior exactly:
+ *   fee = (amount * fee_bps) / 10_000
+ *
+ * This matches:
+ * - `compute_fee` in `backend/contracts/core/src/fee.rs`
+ * - `platform_fee` in `backend/contracts/escrow/src/lib.rs`
+ *
+ * Shared test vectors are in `fixtures/fee-vectors.json` and run in both
+ * TypeScript and Rust.
  */
 
 /** Hard ceiling for governance-settable platform fees: 10% (1000 bps) — mirrors backend/contracts/core/src/fee.rs */
 export const MAX_FEE_BPS = 1_000;
 
-/** Platform fee rate (2.5 %). */
-export const PLATFORM_FEE_BPS = 250; // basis points
+/** Default platform fee rate (2.5 %). Mirrors DEFAULT_PLATFORM_FEE_BPS in escrow contract. */
+export const PLATFORM_FEE_BPS = 250;
 
-/** Maximum platform fee in the token's smallest unit (e.g. stroops for XLM). */
+/** Default maximum platform fee in token units (e.g. stroops for XLM). Mirrors DEFAULT_PLATFORM_FEE_CAP in escrow contract. */
 export const PLATFORM_FEE_CAP = 500;
+
+/**
+ * Fee configuration read from the escrow contract.
+ */
+export interface FeeConfig {
+  /** Platform fee in basis points (0-1000). */
+  feeBps: number;
+  /** Maximum platform fee in token units. */
+  feeCap: number;
+}
 
 /**
  * Validates fee basis points against protocol bounds.
@@ -28,29 +46,54 @@ export function assertValidFeeBps(feeBps: number): void {
     feeBps < 0 ||
     feeBps > MAX_FEE_BPS
   ) {
-    throw new Error('Fee exceeds maximum of 1000 basis points (10%)');
+    throw new Error(`Fee must be an integer between 0 and ${MAX_FEE_BPS} basis points (10%)`);
   }
 }
 
 /**
  * Compute platform fee in integer token units (stroops).
- * Mirrors `compute_fee(amount: i128, fee_bps: u32) -> i128` in `backend/contracts/core/src/fee.rs`.
- * Uses integer truncation arithmetic matching Rust contract behavior.
+ * 
+ * Mirrors `compute_fee(amount: i128, fee_bps: u32) -> i128` in
+ * `backend/contracts/core/src/fee.rs`.
+ * 
+ * Uses **integer truncation** (floor division) which matches Rust's i128
+ * division behavior: `(amount * fee_bps) / 10_000`.
  */
 export function computeFee(amount: number | bigint, feeBps: number = PLATFORM_FEE_BPS): number {
   assertValidFeeBps(feeBps);
   const amtBig = BigInt(Math.trunc(Number(amount)));
   const bpsBig = BigInt(feeBps);
-  return Number((amtBig * bpsBig) / 10_000n);
+  // Integer truncation matches Rust: (amount * fee_bps) / 10_000
+  const feeBig = (amtBig * bpsBig) / 10_000n;
+  return Number(feeBig);
 }
 
 /**
  * Compute net amount after platform fee in integer token units (stroops).
- * Mirrors `compute_net(amount: i128, fee_bps: u32) -> i128` in `backend/contracts/core/src/fee.rs`.
+ * 
+ * Mirrors `compute_net(amount: i128, fee_bps: u32) -> i128` in
+ * `backend/contracts/core/src/fee.rs`.
  */
 export function computeNet(amount: number | bigint, feeBps: number = PLATFORM_FEE_BPS): number {
   const fee = computeFee(amount, feeBps);
   return Number(amount) - fee;
+}
+
+/**
+ * Compute platform fee with cap, matching escrow contract behavior.
+ * 
+ * Mirrors `platform_fee` in `backend/contracts/escrow/src/lib.rs`:
+ *   let raw = amount * fee_bps / 10_000;
+ *   if raw > fee_cap { fee_cap } else { raw }
+ */
+export function computePlatformFeeWithCap(
+  amount: number | bigint,
+  feeBps: number,
+  feeCap: number,
+): number {
+  assertValidFeeBps(feeBps);
+  const rawFee = computeFee(amount, feeBps);
+  return Math.min(rawFee, Math.trunc(Number(feeCap)));
 }
 
 /** Stellar base network fee per operation in XLM. */
@@ -72,10 +115,18 @@ export interface FeeBreakdown {
 /**
  * Calculate the full fee breakdown for an escrow deposit.
  *
+ * Uses **integer truncation** to match the Rust contract exactly:
+ *   fee = floor((grossAmount * feeBps) / 10_000)
+ *
  * @param grossAmount - The total amount being deposited (in token units, e.g. USDC).
+ * @param feeConfig - Optional fee configuration (defaults to 2.5% with 500 cap).
  * @param operationCount - Number of Stellar operations in the transaction (default 1).
  */
-export function calculateFees(grossAmount: number, operationCount = 1): FeeBreakdown {
+export function calculateFees(
+  grossAmount: number,
+  feeConfig: FeeConfig = { feeBps: PLATFORM_FEE_BPS, feeCap: PLATFORM_FEE_CAP },
+  operationCount = 1,
+): FeeBreakdown {
   if (grossAmount <= 0) {
     return {
       grossAmount: 0,
@@ -86,8 +137,10 @@ export function calculateFees(grossAmount: number, operationCount = 1): FeeBreak
     };
   }
 
-  const rawFee = (grossAmount * PLATFORM_FEE_BPS) / 10_000;
-  const platformFee = Math.min(rawFee, PLATFORM_FEE_CAP);
+  // Integer truncation matches Rust contract:
+  // compute_fee(amount, fee_bps) -> (amount * fee_bps) / 10_000
+  const rawFee = computeFee(grossAmount, feeConfig.feeBps);
+  const platformFee = Math.min(rawFee, feeConfig.feeCap);
   const netAmount = grossAmount - platformFee;
   const networkFeeXlm = NETWORK_FEE_XLM * operationCount;
   const effectiveRate = ((platformFee / grossAmount) * 100).toFixed(2) + '%';
@@ -106,4 +159,55 @@ export function formatFeeBreakdown(breakdown: FeeBreakdown, currency = 'USDC'): 
     `Net to payee: ${breakdown.netAmount.toFixed(2)} ${currency} | ` +
     `Network fee: ${breakdown.networkFeeXlm} XLM`
   );
+}
+
+// ── Issue #1724: user-side fee caps ──────────────────────────────────────────
+
+/**
+ * Default tolerance (in bps of the quoted fee) a user accepts between quote
+ * and execution. 0 means "never pay more than quoted".
+ */
+export const DEFAULT_MAX_FEE_TOLERANCE_BPS = 0;
+
+/**
+ * Compute the `max_fee` to embed in an escrow deposit from the fee quoted to
+ * the user (e.g. `estimate_fund_escrow_fee`). The escrow contract's
+ * `deposit_with_max_fee` reverts with `FeeExceedsMax` (#26) if the fee
+ * effective at execution is higher, so a fee raised after the quote can never
+ * over-charge the user.
+ */
+export function computeMaxFee(
+  quotedFee: bigint,
+  toleranceBps: number = DEFAULT_MAX_FEE_TOLERANCE_BPS,
+): bigint {
+  if (quotedFee < 0n) throw new Error('Quoted fee must be non-negative');
+  if (!Number.isInteger(toleranceBps) || toleranceBps < 0 || toleranceBps > 10_000) {
+    throw new Error('Tolerance must be an integer between 0 and 10000 bps');
+  }
+  // Round the tolerance up so a non-zero tolerance never truncates to 0.
+  const extra = (quotedFee * BigInt(toleranceBps) + 9_999n) / 10_000n;
+  return quotedFee + extra;
+}
+
+export interface DepositWithMaxFeeArgs<C> {
+  bounty_id: bigint;
+  payer: string;
+  payee: string;
+  amount: bigint;
+  token: string;
+  release_condition: C;
+  max_fee: bigint;
+}
+
+/**
+ * Build the argument object for the escrow contract's `deposit_with_max_fee`
+ * call. Always use this instead of plain `deposit` in user-signed flows.
+ */
+export function buildDepositWithMaxFeeArgs<C>(
+  args: Omit<DepositWithMaxFeeArgs<C>, 'max_fee'>,
+  quotedFee: bigint,
+  toleranceBps: number = DEFAULT_MAX_FEE_TOLERANCE_BPS,
+): DepositWithMaxFeeArgs<C> {
+  if (args.amount <= 0n) throw new Error('Deposit amount must be positive');
+  return { ...args, max_fee: computeMaxFee(quotedFee, toleranceBps) };
 }

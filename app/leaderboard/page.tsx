@@ -34,6 +34,15 @@ export default async function LeaderboardPage() {
     earningsMap[escrow.creatorId] = (earningsMap[escrow.creatorId] || 0) + escrow.amount;
   });
 
+  // Exact earnings stay on the server: send a bucket label and a sort rank.
+  const bucketFor = (amount: number): string =>
+    amount >= 10_000 ? '10k+' : amount >= 5_000 ? '5k–10k' : amount >= 1_000 ? '1k–5k' : '<1k';
+  const rankByUser = new Map(
+    [...rawCreators]
+      .sort((a, b) => (earningsMap[b.userId] || 0) - (earningsMap[a.userId] || 0))
+      .map((c, i) => [c.userId, i + 1] as const),
+  );
+
   // Map database profiles to leaderboard items
   const creators: CreatorLeaderboardItem[] = rawCreators.map((c) => ({
     id: c.id,
@@ -44,7 +53,8 @@ export default async function LeaderboardPage() {
     skills: c.skills,
     rating: Math.round(c.rating * 100), // Scale rating (e.g. 4.5 -> 450)
     completedProjects: c.completedProjects,
-    earnings: earningsMap[c.userId] || 0,
+    earningsBucket: bucketFor(earningsMap[c.userId] || 0),
+    earningsRank: rankByUser.get(c.userId) ?? rawCreators.length,
     createdAt: c.createdAt.toISOString(),
   }));
 

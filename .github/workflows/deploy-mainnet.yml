@@ -148,6 +148,8 @@ jobs:
           STELLAR_RPC_URL: ${{ env.MAINNET_RPC_URL }}
           STELLAR_NETWORK_PASSPHRASE: ${{ env.MAINNET_PASSPHRASE }}
           STELLAR_ADMIN_SECRET: ${{ secrets.MAINNET_DEPLOYER_SECRET }}
+          # Governance multisig that becomes bounty/escrow admin at deploy (#1708).
+          STELLAR_CONTRACT_ADMIN: ${{ vars.MAINNET_CONTRACT_ADMIN }}
           WASM_DIR: artifacts
         run: node scripts/deploy.cjs --manifest deployments/mainnet.json
 
@@ -165,12 +167,10 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -201,6 +201,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [deploy-contracts, deploy-frontend]
     if: always()
+    # Step-level `if:` cannot read secrets, so expose them as job env first.
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
     steps:
       - name: Build notification payload
         id: payload
@@ -216,7 +220,7 @@ jobs:
           echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Post to Slack
-        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        if: ${{ env.SLACK_WEBHOOK_URL != '' }}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -239,7 +243,7 @@ jobs:
             }'
 
       - name: Post to Discord
-        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        if: ${{ env.DISCORD_WEBHOOK_URL != '' }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |

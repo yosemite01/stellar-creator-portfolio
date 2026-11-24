@@ -14,6 +14,11 @@ export interface CollabTokenClaims {
   exp: number;
 }
 
+/**
+ * Collab token secret helper - Deprecated, use secrets.ts
+ * 
+ * @deprecated Use getSecretValue('REALTIME_JWT_SECRET') from @/server/services/secrets instead
+ */
 export function collabTokenSecret(): string {
   const secret = process.env.REALTIME_JWT_SECRET || process.env.NEXTAUTH_SECRET;
   if (secret) return secret;

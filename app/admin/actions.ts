@@ -4,6 +4,13 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/config';
 import { prisma } from '@/lib/prisma';
 import { Role } from '@prisma/client';
+import { 
+  requireSuperadminRole, 
+  requireModeratorRole, 
+  canChangeUserRole,
+  canSuspendUser,
+  canDeleteUser
+} from '@/server/services/permissions';
 
 // ── Auth guard ────────────────────────────────────────────────────────────────
 
@@ -12,29 +19,33 @@ async function requireAdmin() {
   const role = (session?.user as { role?: string })?.role;
   const userId = (session?.user as { id?: string })?.id;
 
-  if (!session || role !== 'ADMIN' || !userId) {
+  if (!session || !userId) {
     throw new Error('Unauthorized: Admin access required');
   }
 
-  return userId;
+  return { userId, role };
 }
 
-// ── Admin actions for user management ──────────────────────────────────────────
+// ── User management actions ────────────────────────────────────────────────────
 
+/**
+ * Change a user's role.
+ * Only SUPERADMIN can promote users (no self-promotion).
+ */
 export async function changeUserRole(userId: string, newRole: Role) {
-  const adminId = await requireAdmin();
-
-  if (adminId === userId && newRole === 'ADMIN') {
-    throw new Error('Cannot self-promote to ADMIN role');
+  const { userId: adminId } = await requireAdmin();
+  
+  // Permission check: SUPERADMIN only
+  if (!await canChangeUserRole(adminId, userId)) {
+    throw new Error('Forbidden: Superadmin role required to change user roles');
   }
 
   // Check if promoting to ADMIN requires 4-eyes approval
   if (newRole === 'ADMIN') {
-    // This is where 4-eyes principle would be enforced
-    // For now, we'll just log and allow, but this should require confirmation from another admin
     console.warn(
       `Admin promotion requested: ${adminId} → ${userId} to ADMIN role`,
     );
+    // In production, this would require confirmation from another superadmin
   }
 
   const user = await prisma.user.update({
@@ -56,8 +67,17 @@ export async function changeUserRole(userId: string, newRole: Role) {
   return user;
 }
 
+/**
+ * Suspend a user.
+ * MODERATOR or SUPERADMIN can suspend (no self-suspension).
+ */
 export async function suspendUser(userId: string, reason: string) {
-  const adminId = await requireAdmin();
+  const { userId: adminId } = await requireAdmin();
+  
+  // Permission check: MODERATOR or higher
+  if (!await canSuspendUser(adminId, userId)) {
+    throw new Error('Forbidden: Moderator role required to suspend users');
+  }
 
   if (!reason || reason.trim().length === 0) {
     throw new Error('Suspension reason is required');
@@ -90,8 +110,17 @@ export async function suspendUser(userId: string, reason: string) {
   return user;
 }
 
+/**
+ * Unsuspend a user.
+ * MODERATOR or SUPERADMIN can unsuspend.
+ */
 export async function unsuspendUser(userId: string) {
-  const adminId = await requireAdmin();
+  const { userId: adminId } = await requireAdmin();
+  
+  // Permission check: MODERATOR or higher
+  if (!await canSuspendUser(adminId, userId)) {
+    throw new Error('Forbidden: Moderator role required to unsuspend users');
+  }
 
   const user = await prisma.user.update({
     where: { id: userId },
@@ -114,8 +143,17 @@ export async function unsuspendUser(userId: string) {
   return user;
 }
 
+/**
+ * Delete a user.
+ * SUPERADMIN only (no self-deletion).
+ */
 export async function deleteUser(userId: string) {
-  const adminId = await requireAdmin();
+  const { userId: adminId } = await requireAdmin();
+  
+  // Permission check: SUPERADMIN only
+  if (!await canDeleteUser(adminId, userId)) {
+    throw new Error('Forbidden: Superadmin role required to delete users');
+  }
 
   // Log before deletion (immutable audit trail)
   await prisma.auditLog.create({

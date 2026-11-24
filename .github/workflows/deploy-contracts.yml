@@ -104,7 +104,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
 
       - name: Download WASM artifacts
         uses: actions/download-artifact@v8
@@ -120,13 +120,17 @@ jobs:
       - name: Configure deployer
         env:
           TESTNET_DEPLOYER_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+          TESTNET_CONTRACT_ADMIN: ${{ vars.TESTNET_CONTRACT_ADMIN }}
         run: |
           if [ -n "$TESTNET_DEPLOYER_SECRET" ]; then
             echo "STELLAR_ADMIN_SECRET=$TESTNET_DEPLOYER_SECRET" >> "$GITHUB_ENV"
+            # Admin passed to bounty/escrow constructors (#1708).
+            echo "STELLAR_CONTRACT_ADMIN=$TESTNET_CONTRACT_ADMIN" >> "$GITHUB_ENV"
           else
             # No secret configured: use a throwaway Friendbot-funded identity.
             stellar keys generate ci-deployer --network testnet --fund
             echo "STELLAR_ADMIN_SECRET=ci-deployer" >> "$GITHUB_ENV"
+            echo "STELLAR_CONTRACT_ADMIN=${TESTNET_CONTRACT_ADMIN:-$(stellar keys address ci-deployer)}" >> "$GITHUB_ENV"
           fi
 
       - name: Deploy contracts to Testnet

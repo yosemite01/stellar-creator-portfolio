@@ -54,3 +54,10 @@ export const fetchBountiesStats = cache(async () => {
   await delay(CHUNK_DELAY_MS);
   return { categories: 8, avgBudget: 3200, completionRate: 0.87 };
 });
+
+export const fetchCreatorsList = cache(async (discipline?: string): Promise<Creator[]> => {
+  await delay(CHUNK_DELAY_MS);
+  const { creators } = await import('@/lib/services/creators-data');
+  if (!discipline || discipline === 'All') return creators;
+  return creators.filter((c) => c.discipline.toLowerCase() === discipline.toLowerCase());
+});

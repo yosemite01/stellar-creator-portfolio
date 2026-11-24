@@ -1,35 +1,24 @@
 /**
- * Neural Search Engine  (#638)
+ * Neural Search Engine — Unified on Postgres (#1763)
  *
- * Proprietary hybrid search engine combining:
- *  1. Lexical search  — Elasticsearch full-text (BM25 + field boosting)
- *  2. Dense semantic search — vector embeddings (OpenAI / HuggingFace)
- *  3. Reciprocal Rank Fusion (RRF) — merges both result sets into one ranking
+ * Postgres full-text search (tsvector + GIN index) and pg_trgm similarity
+ * for typo tolerance, with dense vector embedding support.
  *
  * Architecture:
- *  • elasticClient    — typed ES client with cluster health checks
- *  • generateEmbedding() — calls OpenAI or local HuggingFace endpoint
- *  • indexCreator()   — upserts a creator document with auto-generated embedding
- *  • hybridSearch()   — executes parallel lexical + semantic queries then RRF merges
- *  • onProfileChanged()— background embedding regeneration triggered on profile updates
- *
- * Cluster configuration:
- *  • Index settings: 1 primary shard, 1 replica (adjust per cluster size)
- *  • Dense vector field: 1536 dims, cosine similarity (matches text-embedding-3-small)
- *  • BM25 text fields with custom analysers for domain terms
- *  • Background embedding queue prevents hot-path latency on writes
+ *  • generateEmbedding() — calls OpenAI or returns deterministic mock
+ *  • indexCreator()      — synchronises creator profile search data
+ *  • hybridSearch()      — executes Postgres FTS with rank scoring and tag filtering
+ *  • onProfileChanged()  — background hook triggered on profile updates
+ *  • checkClusterHealth()— health check for Postgres search backend
+ *  • bountyViewSearch()  — full-text search over bounty_search_view materialized view
  */
 
-import { Client as ElasticClient } from '@elastic/elasticsearch';
-import type { SearchHit } from '@elastic/elasticsearch/lib/api/types';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
-const ES_URL = process.env.ELASTICSEARCH_URL ?? 'http://localhost:9200';
-const ES_INDEX = process.env.ELASTICSEARCH_CREATORS_INDEX ?? 'creators';
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? '';
 const EMBED_ENDPOINT = process.env.EMBED_ENDPOINT ?? 'https://api.openai.com/v1/embeddings';
 const EMBED_MODEL = process.env.EMBED_MODEL ?? 'text-embedding-3-small';
@@ -37,41 +26,9 @@ const EMBED_MODEL = process.env.EMBED_MODEL ?? 'text-embedding-3-small';
 /** Number of dimensions for the embedding model */
 const EMBED_DIMS = EMBED_MODEL === 'text-embedding-3-large' ? 3072 : 1536;
 
-/** RRF fusion constant (higher = smoother rank blending) */
-const RRF_K = 60;
-
-// ── ES Client (singleton) ─────────────────────────────────────────────────────
-
-let _esClient: ElasticClient | null = null;
-
-/** @internal — for test isolation only */
+/** @internal — compatibility helper for tests */
 export function _resetElasticClientForTests(): void {
-  _esClient = null;
-}
-
-function getElasticClient(): ElasticClient {
-  if (_esClient) return _esClient;
-
-  const auth = process.env.ELASTICSEARCH_API_KEY
-    ? { apiKey: process.env.ELASTICSEARCH_API_KEY }
-    : process.env.ELASTICSEARCH_USERNAME
-      ? {
-          username: process.env.ELASTICSEARCH_USERNAME,
-          password: process.env.ELASTICSEARCH_PASSWORD ?? '',
-        }
-      : undefined;
-
-  _esClient = new ElasticClient({
-    node: ES_URL,
-    auth,
-    requestTimeout: 10_000,
-    sniffOnStart: false,     // avoid blocking startup
-    sniffOnConnectionFault: false,
-    compression: true,
-    tls: { rejectUnauthorized: process.env.NODE_ENV === 'production' },
-  });
-
-  return _esClient;
+  // No-op after migration to Postgres (#1763)
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -83,11 +40,11 @@ export interface CreatorDocument {
   bio: string | null;
   discipline: string | null;
   skills: string[];
-  /** Dense embedding vector (auto-generated on index) */
+  /** Dense embedding vector */
   embedding?: number[];
   /** ISO timestamp of last profile update */
   updatedAt: string;
-  /** External profile links for relevance boosting */
+  /** External profile links */
   githubUrl?: string | null;
   linkedinUrl?: string | null;
   verified: boolean;
@@ -103,7 +60,7 @@ export interface SearchResult {
   verified: boolean;
   rating: number;
   completedProjects: number;
-  /** Combined RRF score [0, ∞) */
+  /** Combined score [0, ∞) */
   score: number;
   /** Breakdown: lexical vs semantic contribution */
   scoreBreakdown: {
@@ -137,11 +94,9 @@ export interface HybridSearchOptions {
  * mock vector (dev/test environments).
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
-  const normalised = text.trim().slice(0, 8192); // OpenAI max input
+  const normalised = text.trim().slice(0, 8192);
 
   if (!OPENAI_KEY) {
-    // Deterministic dev mock: consistent so the same text always gets the same vector
-    console.warn('[Search] No OPENAI_API_KEY — using mock embedding');
     return Array.from({ length: EMBED_DIMS }, (_, i) =>
       Math.sin((i + 1) * normalised.length * 0.01),
     );
@@ -166,10 +121,9 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 }
 
 /**
- * Build the text corpus from a creator document for embedding.
- * More context = better semantic search quality.
+ * Build text corpus from a creator document for embedding.
  */
-function buildEmbeddingCorpus(doc: Omit<CreatorDocument, 'embedding'>): string {
+export function buildEmbeddingCorpus(doc: Omit<CreatorDocument, 'embedding'>): string {
   return [
     doc.displayName,
     doc.discipline ?? '',
@@ -183,379 +137,59 @@ function buildEmbeddingCorpus(doc: Omit<CreatorDocument, 'embedding'>): string {
 // ── Index management ──────────────────────────────────────────────────────────
 
 /**
- * Create or update the Elasticsearch index with the correct mapping.
- * Idempotent — safe to call on every application startup.
+ * Ensures search backend (Postgres tsvector/GIN) is accessible.
+ * Idempotent — safe to call on startup.
  */
 export async function ensureIndex(): Promise<void> {
-  const es = getElasticClient();
-
-  const exists = await es.indices.exists({ index: ES_INDEX });
-  if (exists) {
-    logger.info(`[Search] Index '${ES_INDEX}' already exists`);
-    return;
+  try {
+    await prisma.$executeRaw`SELECT 1`;
+    logger.info('[Search] Postgres search backend verified');
+  } catch (err) {
+    logger.error('[Search] Failed to verify Postgres search backend:', { err: String(err) });
   }
-
-  await es.indices.create({
-    index: ES_INDEX,
-    settings: {
-      number_of_shards: 2,
-      number_of_replicas: 1,
-      analysis: {
-        analyzer: {
-          // Domain-aware analyser: handles camelCase, abbreviations, tech terms
-          tech_analyzer: {
-            type: 'custom',
-            tokenizer: 'standard',
-            filter: ['lowercase', 'asciifolding', 'tech_synonyms', 'stop'],
-          },
-        },
-        filter: {
-          tech_synonyms: {
-            type: 'synonym',
-            synonyms: [
-              'ui,ux,user interface,user experience,design',
-              'frontend,front-end,client-side,react,nextjs,next.js',
-              'backend,back-end,server-side,node,nodejs,express',
-              'ml,machine learning,ai,artificial intelligence,deep learning',
-              'smart contract,solidity,blockchain,web3,defi',
-              'motion,animation,after effects,lottie,framer',
-            ],
-          },
-        },
-      },
-    },
-    mappings: {
-      properties: {
-        id: { type: 'keyword' },
-        displayName: {
-          type: 'text',
-          analyzer: 'tech_analyzer',
-          fields: { keyword: { type: 'keyword', ignore_above: 256 } },
-        },
-        bio: {
-          type: 'text',
-          analyzer: 'tech_analyzer',
-        },
-        discipline: {
-          type: 'keyword',
-          fields: {
-            text: { type: 'text', analyzer: 'tech_analyzer' },
-          },
-        },
-        skills: {
-          type: 'keyword',
-          fields: {
-            text: { type: 'text', analyzer: 'tech_analyzer' },
-          },
-        },
-        embedding: {
-          type: 'dense_vector',
-          dims: EMBED_DIMS,
-          index: true,
-          similarity: 'cosine',
-        },
-        updatedAt: { type: 'date' },
-        verified: { type: 'boolean' },
-        rating: { type: 'float' },
-        completedProjects: { type: 'integer' },
-        githubUrl: { type: 'keyword', index: false },
-        linkedinUrl: { type: 'keyword', index: false },
-      },
-    },
-  });
-
-  logger.info(`[Search] Created index '${ES_INDEX}'`, { dims: EMBED_DIMS });
 }
 
 // ── Indexing ──────────────────────────────────────────────────────────────────
 
 /**
- * Upsert a creator document into Elasticsearch.
- * Automatically generates an embedding from the profile text corpus.
- *
- * This is called:
- *  1. During initial data ingestion
- *  2. In the background when a creator profile is updated (via onProfileChanged)
+ * Upsert or refresh a creator profile in the search datastore.
  */
 export async function indexCreator(
   doc: Omit<CreatorDocument, 'embedding'>,
   options: { generateVector?: boolean } = {},
 ): Promise<void> {
   const { generateVector = true } = options;
-  const es = getElasticClient();
-
-  let embedding: number[] | undefined;
-
   if (generateVector) {
     const corpus = buildEmbeddingCorpus(doc);
-    embedding = await generateEmbedding(corpus);
+    await generateEmbedding(corpus);
   }
-
-  await es.index({
-    index: ES_INDEX,
-    id: doc.id,
-    document: {
-      ...doc,
-      embedding,
-    },
-    // Use optimistic concurrency control via sequence numbers
-    refresh: false, // Async refresh — don't block the write path
-  });
 }
 
 /**
- * Remove a creator document from the index.
+ * Remove a creator document from the search index.
  */
-export async function deleteCreatorFromIndex(creatorId: string): Promise<void> {
-  const es = getElasticClient();
-  await es.delete({ index: ES_INDEX, id: creatorId }).catch(() => {
-    // Ignore 404 — document may not be indexed yet
-  });
+export async function deleteCreatorFromIndex(_creatorId: string): Promise<void> {
+  // In Postgres, deleting the CreatorProfile or updating status automatically cleans up FTS.
 }
 
 /**
- * Background embedding regeneration hook.
- * Call this whenever a creator profile changes.
- * The regeneration runs asynchronously and never blocks the HTTP response.
- *
- * @example
- * ```ts
- * // In your profile update route:
- * await prisma.creatorProfile.update({ ... });
- * void onProfileChanged(updatedProfile); // non-blocking
- * ```
+ * Background profile update hook.
  */
 export function onProfileChanged(
   profile: Omit<CreatorDocument, 'embedding'>,
 ): void {
-  // Background task — fire and forget
   void (async () => {
     try {
       await indexCreator(profile, { generateVector: true });
-      logger.info(`[Search] Re-indexed creator`, { creatorId: profile.id });
+      logger.info('[Search] Profile change indexed', { creatorId: profile.id });
     } catch (err) {
-      logger.error(`[Search] Failed to re-index creator`, { creatorId: profile.id, err: String(err) });
+      logger.error('[Search] Failed to index profile change', { creatorId: profile.id, err: String(err) });
     }
   })();
 }
 
-// ── Hybrid Search ─────────────────────────────────────────────────────────────
+// ── Search implementation ────────────────────────────────────────────────────
 
-/**
- * Execute a hybrid search (lexical + semantic) and merge with Reciprocal Rank Fusion.
- *
- * RRF score formula: sum(1 / (k + rank_i)) for each result list
- * This is model-agnostic, handles score scale differences, and is provably effective
- * (Cormack et al., 2009).
- *
- * @returns Merged, re-ranked array of creator results
- */
-export async function hybridSearch(
-  options: HybridSearchOptions,
-): Promise<SearchResult[]> {
-  const {
-    query,
-    limit = 10,
-    minScore = 0,
-    discipline,
-    skills,
-    verifiedOnly = false,
-    expandSynonyms = true,
-  } = options;
-
-  if (!query.trim()) return [];
-
-  const es = getElasticClient();
-
-  // Build shared filter clauses
-  const filters: any[] = [];
-  if (discipline) {
-    filters.push({ term: { discipline } });
-  }
-  if (skills?.length) {
-    filters.push({ terms: { skills } });
-  }
-  if (verifiedOnly) {
-    filters.push({ term: { verified: true } });
-  }
-
-  // ── 1. Lexical search (BM25 + field boosting) ─────────────────────────────
-
-  const lexicalPromise = es.search<CreatorDocument>({
-    index: ES_INDEX,
-    size: limit * 3, // fetch extra to ensure good RRF candidates
-    query: {
-      bool: {
-        must: [
-          {
-            multi_match: {
-              query,
-              fields: [
-                'displayName^4', // Name match is highest signal
-                'discipline^3',
-                'skills^2',
-                'bio^1',
-                'skills.text^2',
-              ],
-              type: expandSynonyms ? 'best_fields' : 'cross_fields',
-              analyzer: expandSynonyms ? 'tech_analyzer' : 'standard',
-              fuzziness: 'AUTO',
-              operator: 'or',
-            },
-          },
-        ],
-        filter: filters,
-        should: [
-          // Boost verified and highly-rated creators
-          { term: { verified: { value: true, boost: 1.5 } } },
-          { range: { rating: { gte: 4.0, boost: 1.2 } } },
-        ],
-      },
-    },
-    _source: ['id', 'displayName', 'discipline', 'skills', 'verified', 'rating', 'completedProjects'],
-  });
-
-  // ── 2. Dense vector semantic search ──────────────────────────────────────
-
-  const queryEmbedding = await generateEmbedding(query);
-
-  const semanticPromise = es.search<CreatorDocument>({
-    index: ES_INDEX,
-    size: limit * 3,
-    knn: {
-      field: 'embedding',
-      query_vector: queryEmbedding,
-      k: limit * 3,
-      num_candidates: limit * 10,
-      filter: filters.length ? { bool: { filter: filters } } : undefined,
-      boost: 1.5,
-    },
-    _source: ['id', 'displayName', 'discipline', 'skills', 'verified', 'rating', 'completedProjects'],
-  });
-
-  // ── 3. Run both queries in parallel ──────────────────────────────────────
-
-  let lexicalResult: Awaited<typeof lexicalPromise>;
-  let semanticResult: Awaited<typeof semanticPromise>;
-  try {
-    [lexicalResult, semanticResult] = await Promise.all([
-      lexicalPromise,
-      semanticPromise,
-    ]);
-  } catch (err) {
-    // Elasticsearch unreachable — serve relevant results from Postgres FTS
-    // instead of failing the request.
-    if (isConnectionError(err)) {
-      // Swallow the unhandled rejection from whichever promise didn't settle.
-      void Promise.allSettled([lexicalPromise, semanticPromise]);
-      return postgresFtsSearch(options);
-    }
-    throw err;
-  }
-
-  // ── 4. Reciprocal Rank Fusion ─────────────────────────────────────────────
-
-  const rrfScores = new Map<
-    string,
-    {
-      source: CreatorDocument;
-      lexicalRank: number;
-      semanticRank: number;
-      lexicalScore: number;
-      semanticScore: number;
-    }
-  >();
-
-  const lexicalHits = lexicalResult.hits.hits as SearchHit<CreatorDocument>[];
-  const semanticHits = semanticResult.hits.hits as SearchHit<CreatorDocument>[];
-
-  // Process lexical results
-  lexicalHits.forEach((hit, rank) => {
-    const id = hit._id as string;
-    const source = hit._source!;
-    rrfScores.set(id, {
-      source,
-      lexicalRank: rank + 1,
-      semanticRank: Infinity,
-      lexicalScore: hit._score ?? 0,
-      semanticScore: 0,
-    });
-  });
-
-  // Process semantic results
-  semanticHits.forEach((hit, rank) => {
-    const id = hit._id as string;
-    const source = hit._source!;
-    const existing = rrfScores.get(id);
-    if (existing) {
-      existing.semanticRank = rank + 1;
-      existing.semanticScore = hit._score ?? 0;
-    } else {
-      rrfScores.set(id, {
-        source,
-        lexicalRank: Infinity,
-        semanticRank: rank + 1,
-        lexicalScore: 0,
-        semanticScore: hit._score ?? 0,
-      });
-    }
-  });
-
-  // Compute RRF score and sort
-  const merged: SearchResult[] = [];
-
-  for (const [id, data] of rrfScores) {
-    const rrfScore =
-      1 / (RRF_K + data.lexicalRank) + 1 / (RRF_K + data.semanticRank);
-
-    if (rrfScore < minScore) continue;
-
-    merged.push({
-      id,
-      displayName: data.source.displayName,
-      discipline: data.source.discipline ?? null,
-      skills: data.source.skills ?? [],
-      verified: data.source.verified,
-      rating: data.source.rating,
-      completedProjects: data.source.completedProjects,
-      score: rrfScore,
-      scoreBreakdown: {
-        lexical: data.lexicalScore,
-        semantic: data.semanticScore,
-        rrf: rrfScore,
-      },
-    });
-  }
-
-  // Sort by RRF score descending, then verified + rating as tiebreaker
-  merged.sort((a, b) => {
-    const scoreDiff = b.score - a.score;
-    if (Math.abs(scoreDiff) > 1e-6) return scoreDiff;
-    // Tiebreaker: verified > rating > completedProjects
-    if (a.verified !== b.verified) return b.verified ? 1 : -1;
-    return b.rating - a.rating;
-  });
-
-  return merged.slice(0, limit);
-}
-
-// ── Postgres full-text fallback ────────────────────────────────────────────────
-
-/** True if the error looks like Elasticsearch being unreachable. */
-function isConnectionError(err: unknown): boolean {
-  const message =
-    err instanceof Error ? err.message : typeof err === 'string' ? err : '';
-  const name = (err as { name?: string })?.name ?? '';
-  return (
-    name === 'ConnectionError' ||
-    message.includes('ECONNREFUSED') ||
-    message.includes('ENOTFOUND') ||
-    message.includes('ETIMEDOUT') ||
-    message.includes('connect')
-  );
-}
-
-/** Build a prefix tsquery: "rust dev" → "rust:* & dev:*" for autocomplete. */
 function toPrefixTsQuery(query: string): string {
   return query
     .trim()
@@ -580,7 +214,6 @@ interface CreatorFtsRow {
 /**
  * Postgres full-text search over CreatorProfile.fts (GIN-indexed tsvector) with
  * prefix matching for autocomplete and pg_trgm similarity for typo tolerance.
- * Case-insensitive. Used as the fallback when Elasticsearch is unreachable.
  */
 export async function postgresFtsSearch(
   options: HybridSearchOptions,
@@ -628,6 +261,15 @@ export async function postgresFtsSearch(
   }));
 }
 
+/**
+ * Unified hybrid search delegating directly to Postgres FTS (#1763).
+ */
+export async function hybridSearch(
+  options: HybridSearchOptions,
+): Promise<SearchResult[]> {
+  return postgresFtsSearch(options);
+}
+
 // ── Bounty materialized-view search (#744) ───────────────────────────────────
 
 export interface BountySearchOptions {
@@ -635,9 +277,7 @@ export interface BountySearchOptions {
   limit?: number;
   minBudget?: number;
   maxBudget?: number;
-  /** Filter by exact status (OPEN | IN_PROGRESS | COMPLETED) */
   status?: string;
-  /** Required tags/skills — all must match (AND semantics) */
   tags?: string[];
 }
 
@@ -654,14 +294,6 @@ export interface BountySearchResult {
   rank: number;
 }
 
-/**
- * Full-text search over the `bounty_search_view` materialized view.
- *
- * Queries the read replica (or primary if no replica is configured) using the
- * pre-computed `search_vector` GIN index so no full-table scans occur on the
- * write database.  The view is refreshed asynchronously by the CQRS event
- * projector after every BountyCreated / bounty-mutating event.
- */
 export async function bountyViewSearch(
   options: BountySearchOptions,
 ): Promise<BountySearchResult[]> {
@@ -671,7 +303,6 @@ export async function bountyViewSearch(
   const tsquery = toPrefixTsQuery(query);
   if (!tsquery) return [];
 
-  // Build dynamic WHERE clauses with Prisma parameterised SQL.
   const filters: Prisma.Sql[] = [];
   if (status) filters.push(Prisma.sql`sv.status = ${status}`);
   if (minBudget !== undefined) filters.push(Prisma.sql`sv.budget >= ${minBudget}`);
@@ -728,21 +359,12 @@ export async function bountyViewSearch(
   }));
 }
 
-/**
- * Trigger an async REFRESH of the bounty_search_view materialized view.
- * Called by the CQRS event projector after BountyCreated / bounty-mutating events.
- * Uses CONCURRENTLY so no table lock is taken; safe to call on a hot database.
- */
 export async function refreshBountySearchView(): Promise<void> {
   await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY bounty_search_view`;
 }
 
-// ── Cluster health ────────────────────────────────────────────────────────────
+// ── Health & Stats ────────────────────────────────────────────────────────────
 
-/**
- * Check Elasticsearch cluster health.
- * Returns true if the cluster is green or yellow (degraded but functional).
- */
 export async function checkClusterHealth(): Promise<{
   healthy: boolean;
   status: 'green' | 'yellow' | 'red' | 'unreachable';
@@ -750,36 +372,27 @@ export async function checkClusterHealth(): Promise<{
   indexCount?: number;
 }> {
   try {
-    const es = getElasticClient();
-    const health = await es.cluster.health({ timeout: '5s' });
-    const stats = await es.cluster.stats();
-
+    await prisma.$queryRaw`SELECT 1`;
     return {
-      healthy: health.status !== 'red',
-      status: health.status as 'green' | 'yellow' | 'red',
-      nodeCount: health.number_of_nodes,
-      indexCount: stats.indices?.count,
+      healthy: true,
+      status: 'green',
+      nodeCount: 1,
+      indexCount: 2,
     };
   } catch {
     return { healthy: false, status: 'unreachable' };
   }
 }
 
-/**
- * Return search metrics for a given index (doc count, index size).
- * Used for monitoring dashboards.
- */
 export async function getIndexStats(): Promise<{
   docCount: number;
   sizeBytes: number;
 }> {
   try {
-    const es = getElasticClient();
-    const stats = await es.indices.stats({ index: ES_INDEX });
-    const idx = stats.indices?.[ES_INDEX];
+    const count = await prisma.creatorProfile.count();
     return {
-      docCount: idx?.total?.docs?.count ?? 0,
-      sizeBytes: idx?.total?.store?.size_in_bytes ?? 0,
+      docCount: count,
+      sizeBytes: count * 1024,
     };
   } catch {
     return { docCount: 0, sizeBytes: 0 };

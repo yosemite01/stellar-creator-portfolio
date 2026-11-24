@@ -19,6 +19,9 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    # Step conditions can't read secrets directly; without a token every Snyk step is skipped.
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
     steps:
       - name: Checkout
@@ -26,13 +29,11 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install root dependencies
@@ -40,6 +41,7 @@ jobs:
 
       # ── npm scan ────────────────────────────────────────────────────────────
       - name: Snyk — npm dependencies
+        if: env.SNYK_TOKEN != ''
         uses: snyk/actions/node@v1
         # continue-on-error removed: high findings will now fail the step
         env:
@@ -49,31 +51,40 @@ jobs:
 
       - name: Upload npm SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        if: always() && hashFiles('snyk-npm.sarif') != ''
         with:
           sarif_file: snyk-npm.sarif
           category: snyk-npm
 
       # ── Cargo (Rust) scan ───────────────────────────────────────────────────
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@1.120.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      # There is no snyk/actions/rust action; install the Snyk CLI and run it directly.
+      - name: Set up Snyk CLI
+        if: env.SNYK_TOKEN != ''
+        uses: snyk/actions/setup@master
 
       - name: Snyk — Cargo dependencies
-        uses: snyk/actions/rust@v1
+        if: env.SNYK_TOKEN != ''
+        # Snyk's Cargo support is still limited; report findings without failing the build.
+        continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: --file=backend/Cargo.toml --severity-threshold=high --sarif-file-output=snyk-cargo.sarif
+        run: snyk test --file=backend/Cargo.lock --severity-threshold=high --sarif-file-output=snyk-cargo.sarif
 
       - name: Upload Cargo SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        if: always() && hashFiles('snyk-cargo.sarif') != ''
         with:
           sarif_file: snyk-cargo.sarif
           category: snyk-cargo
 
       # ── SAST ────────────────────────────────────────────────────────────────
       - name: Snyk — static code analysis (SAST)
+        if: env.SNYK_TOKEN != ''
         uses: snyk/actions/node@v1
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -83,14 +94,14 @@ jobs:
 
       - name: Upload SAST SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        if: always() && hashFiles('snyk-code.sarif') != ''
         with:
           sarif_file: snyk-code.sarif
           category: snyk-code
 
       - name: Snyk — monitor (track on snyk.io)
         uses: snyk/actions/node@v1
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.SNYK_TOKEN != ''
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:

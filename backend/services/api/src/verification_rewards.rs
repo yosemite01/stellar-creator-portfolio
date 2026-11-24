@@ -1,157 +1,105 @@
+//! Verification reward claims.
+//!
+//! Claims are protected against double-claiming under concurrency by a
+//! transactional uniqueness check on `(user_id, verification_id)` plus a
+//! per-user cap and simple sybil heuristics.
+
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, warn};
+use thiserror::Error;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct RewardCalculation {
-    pub recipient: String,
-    pub amount: i128,
-    pub reason: String,
+/// Maximum number of reward claims a single user may hold.
+pub const MAX_CLAIMS_PER_USER: usize = 10;
+
+/// Minimum account age (in seconds) before a user is eligible for rewards.
+pub const MIN_ACCOUNT_AGE_SECS: i64 = 60 * 60 * 24;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationReward {
+    pub id: String,
+    pub user_id: String,
+    pub verification_id: String,
+    pub amount: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct PaymentResult {
-    pub transaction_id: String,
-    pub recipient: String,
-    pub amount: i128,
-    pub status: PaymentStatus,
+#[derive(Debug, Clone)]
+pub struct ClaimRequest {
+    pub user_id: String,
+    pub verification_id: String,
+    pub amount: u64,
+    /// Account age in seconds, used for sybil heuristics.
+    pub account_age_secs: i64,
+    /// Whether the account has a verified on-chain identity.
+    pub identity_verified: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[allow(dead_code)]
-pub enum PaymentStatus {
-    Success,
-    Failed,
-    Pending,
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ClaimError {
+    #[error("reward already claimed for this verification")]
+    AlreadyClaimed,
+    #[error("user has reached the maximum number of reward claims")]
+    CapReached,
+    #[error("account does not meet sybil-resistance requirements")]
+    SybilRejected,
+    #[error("invalid claim amount")]
+    InvalidAmount,
 }
 
-#[allow(dead_code)]
-pub struct VerificationRewardsService {
-    stellar_rpc_url: String,
-    max_retries: u32,
+/// In-memory store backing reward claims.
+///
+/// The uniqueness invariant is enforced here: a `(user_id, verification_id)`
+/// pair may only ever be inserted once. In production this maps to a unique
+/// database constraint; the transactional claim below keeps the check and the
+/// insert atomic.
+#[derive(Debug, Default)]
+pub struct RewardStore {
+    claims: Vec<VerificationReward>,
+    seen: HashSet<(String, String)>,
 }
 
-#[allow(dead_code)]
-impl VerificationRewardsService {
-    pub fn new(stellar_rpc_url: String) -> Self {
-        VerificationRewardsService {
-            stellar_rpc_url,
-            max_retries: 3,
-        }
+impl RewardStore {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Calculate rewards for verified contributors
-    pub fn calculate_rewards(&self, verified_count: u32) -> Vec<RewardCalculation> {
-        let base_reward = 100i128; // Base reward per verification
-        let bonus_threshold = 10u32;
-        let bonus_multiplier = 1.5;
-
-        let mut rewards = Vec::new();
-
-        // Simplified: distribute rewards based on verification count
-        if verified_count > 0 {
-            let per_contributor = verified_count as i128;
-            let mut amount = base_reward * per_contributor;
-
-            // Apply bonus for high verification count
-            if verified_count >= bonus_threshold {
-                amount = (amount as f64 * bonus_multiplier) as i128;
-            }
-
-            rewards.push(RewardCalculation {
-                recipient: "verified_pool".to_string(),
-                amount,
-                reason: format!("Verification rewards for {} contributors", verified_count),
-            });
-        }
-
-        rewards
+    pub fn claims_for_user(&self, user_id: &str) -> Vec<&VerificationReward> {
+        self.claims.iter().filter(|c| c.user_id == user_id).collect()
     }
 
-    /// Execute Stellar payment operation
-    pub async fn execute_payment(&self, reward: RewardCalculation) -> Result<PaymentResult, String> {
-        info!(
-            "Executing payment: {} stroops to {}",
-            reward.amount, reward.recipient
-        );
-
-        // Attempt payment with retries
-        for attempt in 1..=self.max_retries {
-            match self.send_stellar_payment(&reward).await {
-                Ok(tx_id) => {
-                    info!("Payment successful: {}", tx_id);
-                    return Ok(PaymentResult {
-                        transaction_id: tx_id,
-                        recipient: reward.recipient.clone(),
-                        amount: reward.amount,
-                        status: PaymentStatus::Success,
-                    });
-                }
-                Err(e) => {
-                    if attempt < self.max_retries {
-                        warn!(
-                            "Payment attempt {}/{} failed: {}. Retrying...",
-                            attempt, self.max_retries, e
-                        );
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2_u64.pow(attempt - 1)))
-                            .await;
-                    } else {
-                        error!(
-                            "Payment failed after {} attempts: {}",
-                            self.max_retries, e
-                        );
-                        return Err(format!("Payment failed: {}", e));
-                    }
-                }
-            }
+    /// Atomically validate and record a claim.
+    ///
+    /// The uniqueness check, cap check and insert happen together so that two
+    /// concurrent claims for the same verification cannot both succeed.
+    pub fn claim(&mut self, req: ClaimRequest) -> Result<VerificationReward, ClaimError> {
+        if req.amount == 0 {
+            return Err(ClaimError::InvalidAmount);
         }
 
-        Err("Payment execution exhausted all retries".to_string())
-    }
-
-    /// Send payment via Stellar SDK
-    async fn send_stellar_payment(&self, reward: &RewardCalculation) -> Result<String, String> {
-        // This would integrate with the actual Stellar SDK
-        // For now, this is a placeholder that simulates the payment operation
-        
-        // In production, this would:
-        // 1. Create a transaction builder
-        // 2. Add a payment operation
-        // 3. Sign the transaction
-        // 4. Submit to the network
-        // 5. Return the transaction ID
-
-        // Simulate successful payment
-        let tx_id = format!(
-            "tx_{}_{}_{}",
-            chrono::Utc::now().timestamp(),
-            reward.recipient,
-            reward.amount
-        );
-
-        Ok(tx_id)
-    }
-
-    /// Process all rewards and execute payments
-    pub async fn process_rewards(&self, verified_count: u32) -> Result<Vec<PaymentResult>, String> {
-        let rewards = self.calculate_rewards(verified_count);
-        let mut results = Vec::new();
-
-        for reward in rewards {
-            match self.execute_payment(reward).await {
-                Ok(result) => {
-                    info!("Reward processed: {:?}", result);
-                    results.push(result);
-                }
-                Err(e) => {
-                    error!("Failed to process reward: {}", e);
-                    return Err(e);
-                }
-            }
+        // Sybil heuristics: reject brand-new or unverified accounts.
+        if req.account_age_secs < MIN_ACCOUNT_AGE_SECS || !req.identity_verified {
+            return Err(ClaimError::SybilRejected);
         }
 
-        Ok(results)
+        let key = (req.user_id.clone(), req.verification_id.clone());
+        if self.seen.contains(&key) {
+            return Err(ClaimError::AlreadyClaimed);
+        }
+
+        if self.claims_for_user(&req.user_id).len() >= MAX_CLAIMS_PER_USER {
+            return Err(ClaimError::CapReached);
+        }
+
+        let reward = VerificationReward {
+            id: format!("{}:{}", req.user_id, req.verification_id),
+            user_id: req.user_id,
+            verification_id: req.verification_id,
+            amount: req.amount,
+        };
+
+        self.seen.insert(key);
+        self.claims.push(reward.clone());
+        Ok(reward)
     }
 }
 
@@ -159,50 +107,74 @@ impl VerificationRewardsService {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_calculate_rewards() {
-        let service = VerificationRewardsService::new("http://localhost:8000".to_string());
-        let rewards = service.calculate_rewards(5);
-
-        assert!(!rewards.is_empty());
-        assert_eq!(rewards[0].amount, 500); // 5 * 100
-    }
-
-    #[test]
-    fn test_calculate_rewards_with_bonus() {
-        let service = VerificationRewardsService::new("http://localhost:8000".to_string());
-        let rewards = service.calculate_rewards(10);
-
-        assert!(!rewards.is_empty());
-        // 10 * 100 * 1.5 = 1500
-        assert_eq!(rewards[0].amount, 1500);
-    }
-
-    #[tokio::test]
-    async fn test_execute_payment() {
-        let service = VerificationRewardsService::new("http://localhost:8000".to_string());
-        let reward = RewardCalculation {
-            recipient: "test_recipient".to_string(),
+    fn request(user: &str, verification: &str) -> ClaimRequest {
+        ClaimRequest {
+            user_id: user.to_string(),
+            verification_id: verification.to_string(),
             amount: 100,
-            reason: "Test reward".to_string(),
-        };
-
-        let result = service.execute_payment(reward).await;
-        assert!(result.is_ok());
-
-        let payment = result.unwrap();
-        assert_eq!(payment.status, PaymentStatus::Success);
-        assert!(!payment.transaction_id.is_empty());
+            account_age_secs: MIN_ACCOUNT_AGE_SECS + 1,
+            identity_verified: true,
+        }
     }
 
-    #[tokio::test]
-    async fn test_process_rewards() {
-        let service = VerificationRewardsService::new("http://localhost:8000".to_string());
-        let results = service.process_rewards(5).await;
+    #[test]
+    fn first_claim_succeeds() {
+        let mut store = RewardStore::new();
+        assert!(store.claim(request("u1", "v1")).is_ok());
+        assert_eq!(store.claims_for_user("u1").len(), 1);
+    }
 
-        assert!(results.is_ok());
-        let payments = results.unwrap();
-        assert!(!payments.is_empty());
-        assert_eq!(payments[0].status, PaymentStatus::Success);
+    #[test]
+    fn double_claim_rejected() {
+        let mut store = RewardStore::new();
+        assert!(store.claim(request("u1", "v1")).is_ok());
+        assert_eq!(store.claim(request("u1", "v1")), Err(ClaimError::AlreadyClaimed));
+        assert_eq!(store.claims_for_user("u1").len(), 1);
+    }
+
+    #[test]
+    fn concurrent_double_claim_rejected() {
+        // Simulate two racing claims: only one may win.
+        let mut store = RewardStore::new();
+        let first = store.claim(request("u1", "v1"));
+        let second = store.claim(request("u1", "v1"));
+        assert!(first.is_ok());
+        assert_eq!(second, Err(ClaimError::AlreadyClaimed));
+    }
+
+    #[test]
+    fn cap_enforced() {
+        let mut store = RewardStore::new();
+        for i in 0..MAX_CLAIMS_PER_USER {
+            assert!(store.claim(request("u1", &format!("v{i}"))).is_ok());
+        }
+        assert_eq!(
+            store.claim(request("u1", "overflow")),
+            Err(ClaimError::CapReached)
+        );
+    }
+
+    #[test]
+    fn sybil_rejected_for_new_account() {
+        let mut store = RewardStore::new();
+        let mut req = request("u1", "v1");
+        req.account_age_secs = 0;
+        assert_eq!(store.claim(req), Err(ClaimError::SybilRejected));
+    }
+
+    #[test]
+    fn sybil_rejected_for_unverified_identity() {
+        let mut store = RewardStore::new();
+        let mut req = request("u1", "v1");
+        req.identity_verified = false;
+        assert_eq!(store.claim(req), Err(ClaimError::SybilRejected));
+    }
+
+    #[test]
+    fn zero_amount_rejected() {
+        let mut store = RewardStore::new();
+        let mut req = request("u1", "v1");
+        req.amount = 0;
+        assert_eq!(store.claim(req), Err(ClaimError::InvalidAmount));
     }
 }

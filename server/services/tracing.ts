@@ -16,6 +16,13 @@
  *  • Sampling: 100% in dev, configurable in prod (default 10%)
  *  • Attribute limits: max 128 attrs/span, 1024 bytes/attr
  *  • Resource detection cached at init (1-time penalty)
+ *
+ * Cross-service unification (#1813):
+ *  • Resource attributes, propagators and sampling are aligned with the Rust
+ *    services (`backend/services/common/src/logging.rs`) so a single trace spans
+ *    Next.js and Rust. Shared env contract:
+ *      OTEL_SERVICE_NAME, OTEL_SERVICE_VERSION, OTEL_DEPLOYMENT_ENVIRONMENT,
+ *      OTEL_TRACE_SAMPLE_RATE, OTEL_EXPORTER_OTLP_ENDPOINT
  */
 
 import { NodeSDK } from '@opentelemetry/sdk-node';
@@ -35,27 +42,41 @@ import {
   type Span,
   type Tracer,
 } from '@opentelemetry/api';
-import { W3CTraceContextPropagator } from '@opentelemetry/core';
+import {
+  W3CTraceContextPropagator,
+  W3CBaggagePropagator,
+  CompositePropagator,
+} from '@opentelemetry/core';
 import { BatchSpanProcessor, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-base';
 import { logger } from '@/lib/logger';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'stellar-creator-portfolio';
-const SERVICE_VERSION = process.env.npm_package_version ?? '1.0.0';
-const ENV = process.env.NODE_ENV ?? 'development';
+const SERVICE_VERSION =
+  process.env.OTEL_SERVICE_VERSION ?? process.env.npm_package_version ?? '1.0.0';
+const ENV =
+  process.env.OTEL_DEPLOYMENT_ENVIRONMENT ?? process.env.NODE_ENV ?? 'development';
 
 /** Jaeger / Datadog OTLP endpoint (gRPC) */
 const OTLP_ENDPOINT =
   process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4317';
 
-/** Sample rate in production: 0.1 = 10% of traces */
+/** Sample rate in production: 0.1 = 10% of traces (shared with Rust services) */
 const TRACE_SAMPLE_RATE = parseFloat(
   process.env.OTEL_TRACE_SAMPLE_RATE ?? (ENV === 'production' ? '0.1' : '1.0'),
 );
 
 /** Enable OpenTelemetry (can be disabled in test environments) */
 const OTEL_ENABLED = process.env.OTEL_ENABLED !== 'false';
+
+/**
+ * Shared propagators: W3C TraceContext (traceparent/tracestate) + W3C Baggage.
+ * Must match the Rust services so context flows across the Next.js ↔ Rust boundary.
+ */
+const PROPAGATOR = new CompositePropagator({
+  propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
+});
 
 // ── Global SDK instance ──────────────────────────────────────────────────────
 
@@ -81,7 +102,7 @@ export function initializeTracing(): void {
     return;
   }
 
-  // Resource: static metadata attached to every span
+  // Resource: static metadata attached to every span (aligned with Rust services)
   const resource = defaultResource().merge(
     resourceFromAttributes({
       [ATTR_SERVICE_NAME]: SERVICE_NAME,
@@ -90,7 +111,7 @@ export function initializeTracing(): void {
     }),
   );
 
-  // Sampler: parent-based with ratio-based fallback
+  // Sampler: parent-based with ratio-based fallback (shared strategy with Rust)
   const sampler =
     ENV === 'development'
       ? new AlwaysOnSampler()
@@ -123,7 +144,7 @@ export function initializeTracing(): void {
     sampler,
     spanProcessors,
     traceExporter: otlpExporter,
-    textMapPropagator: new W3CTraceContextPropagator(),
+    textMapPropagator: PROPAGATOR,
     instrumentations: [
       getNodeAutoInstrumentations({
         // Disable noisy instrumentations
@@ -199,9 +220,8 @@ export function tracingMiddleware<T extends TracingMiddlewareContext>(
       (headers as Headers).get?.('traceparent') ??
       (headers as any).traceparent;
     if (traceparent) {
-      // Parse W3C traceparent into active context
-      const propagator = new W3CTraceContextPropagator();
-      parentContext = propagator.extract(context.active(), { traceparent }, {
+      // Parse W3C traceparent into active context using the shared propagator
+      parentContext = PROPAGATOR.extract(context.active(), { traceparent }, {
         get: (carrier, key) => (carrier as Record<string, string>)[key],
         keys: (carrier) => Object.keys(carrier),
       });

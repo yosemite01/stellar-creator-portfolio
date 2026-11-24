@@ -47,7 +47,7 @@ export async function DELETE(req: NextRequest) {
 
     // 2. DELETE — API keys and push subscriptions (no retention need)
     await tx.apiKey.deleteMany({ where: { userId: user.id } });
-    await tx.pushSubscription.deleteMany({ where: { userId: user.id } });
+    await tx.pushDeviceToken.deleteMany({ where: { userId: user.id } });
 
     // 3. DELETE — notifications addressed to the user
     await tx.notification.deleteMany({ where: { userId: user.id } });
@@ -89,8 +89,8 @@ export async function DELETE(req: NextRequest) {
 
     // 7. ANONYMISE — reviews keep text but are attributed to 'Deleted user'
     await tx.review.updateMany({
-      where: { authorId: user.id },
-      data: { authorName: 'Deleted user' },
+      where: { reviewerId: user.id },
+      data: { reviewerName: 'Deleted user' },
     });
 
     // 8. ANONYMISE — payments/escrow retained for accounting; user reference

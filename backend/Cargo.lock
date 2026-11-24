@@ -608,6 +608,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "base64-url"
+version = "3.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45b38ad425094225eb98698cb76c29af8452114bfaa286ac6ada37ade1489802"
+dependencies = [
+ "base64 0.22.1",
+]
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -837,6 +846,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1052,6 +1067,15 @@ name = "ctor-proc-macro"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2931af7e13dc045d8e9d26afccc6fa115d64e115c9c84b1166288b46f6782c2"
+
+[[package]]
+name = "ctutils"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe3e9d21d39e6f39ff46e03d5b621424f88ee23d8a1672c6bfc9ccc7f2da4f6a"
+dependencies = [
+ "cmov",
+]
 
 [[package]]
 name = "curve25519-dalek"
@@ -1307,6 +1331,7 @@ dependencies = [
  "block-buffer 0.12.1",
  "const-oid 0.10.2",
  "crypto-common 0.2.2",
+ "ctutils",
 ]
 
 [[package]]
@@ -1960,7 +1985,7 @@ version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
 dependencies = [
- "hmac",
+ "hmac 0.12.1",
 ]
 
 [[package]]
@@ -1970,6 +1995,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest 0.10.7",
+]
+
+[[package]]
+name = "hmac"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+dependencies = [
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -2472,7 +2506,7 @@ dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
  "getrandom 0.2.17",
- "hmac",
+ "hmac 0.12.1",
  "js-sys",
  "p256",
  "p384",
@@ -3657,7 +3691,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
 dependencies = [
- "hmac",
+ "hmac 0.12.1",
  "subtle",
 ]
 
@@ -4243,7 +4277,7 @@ dependencies = [
  "generic-array",
  "getrandom 0.2.17",
  "hex-literal",
- "hmac",
+ "hmac 0.12.1",
  "k256",
  "num-derive",
  "num-integer",
@@ -4507,7 +4541,7 @@ dependencies = [
  "generic-array",
  "hex",
  "hkdf",
- "hmac",
+ "hmac 0.12.1",
  "itoa",
  "log",
  "md-5",
@@ -4547,7 +4581,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hkdf",
- "hmac",
+ "hmac 0.12.1",
  "home",
  "itoa",
  "log",
@@ -4623,7 +4657,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "hex",
- "hmac",
+ "hmac 0.13.0",
  "jsonwebtoken",
  "lazy_static",
  "prometheus",
@@ -4636,6 +4670,7 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-test",
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
@@ -4647,9 +4682,11 @@ dependencies = [
 name = "stellar-auth"
 version = "0.1.0"
 dependencies = [
+ "actix-rt",
  "actix-web",
  "anyhow",
  "base32",
+ "base64-url",
  "chrono",
  "dotenvy",
  "ed25519-dalek 3.0.0",
@@ -4695,6 +4732,7 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-contract-ttl",
  "stellar-upgradeable",
 ]
 
@@ -4713,6 +4751,13 @@ dependencies = [
 
 [[package]]
 name = "stellar-contract-test-utils"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "stellar-contract-ttl"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -4746,7 +4791,11 @@ dependencies = [
 name = "stellar-escrow-contract"
 version = "0.1.0"
 dependencies = [
+ "oracle",
  "soroban-sdk",
+ "stellar-contract-test-utils",
+ "stellar-contract-ttl",
+ "stellar-insurance-contract",
  "stellar-upgradeable",
 ]
 
@@ -4764,6 +4813,7 @@ version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellar-contract-test-utils",
+ "stellar-contract-ttl",
  "stellar-upgradeable",
 ]
 
@@ -4772,7 +4822,7 @@ name = "stellar-identity-contract"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek 3.0.0",
- "rand_core 0.6.4",
+ "sha2 0.11.1",
  "soroban-sdk",
  "stellar-contract-test-utils",
  "stellar-upgradeable",
@@ -4782,11 +4832,12 @@ dependencies = [
 name = "stellar-indexer"
 version = "0.1.0"
 dependencies = [
+ "actix-rt",
  "actix-web",
  "anyhow",
  "dotenvy",
  "hex",
- "hmac",
+ "hmac 0.13.0",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
@@ -4809,6 +4860,7 @@ name = "stellar-insurance-contract"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-contract-test-utils",
  "stellar-upgradeable",
 ]
 
@@ -4890,6 +4942,7 @@ name = "stellar_insights"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "stellar-upgradeable",
 ]
 
 [[package]]
@@ -5161,6 +5214,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-test"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12bc5db7778a8e08ee255090861e0e7aac55e784300077e7ed293c7be36168b2"
+dependencies = [
+ "futures-core",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "tokio-tungstenite"
 version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5244,7 +5308,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8e43134db17199f7f721803383ac5854edd0d3d523cc34dba321d6acfbe76c3"
 dependencies = [
  "digest 0.10.7",
- "hmac",
+ "hmac 0.12.1",
  "sha1 0.10.7",
  "sha2 0.10.9",
 ]

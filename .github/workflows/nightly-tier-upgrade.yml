@@ -19,13 +19,14 @@ jobs:
   tier-upgrade:
     name: Upgrade creator verification tiers
     runs-on: ubuntu-latest
+    # Step conditions can't read secrets directly; skip the upgrade when no DB is configured.
+    env:
+      HAS_DATABASE_URL: ${{ secrets.DATABASE_URL != '' }}
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v7
         with:
@@ -38,12 +39,18 @@ jobs:
       - name: Generate Prisma client
         run: pnpm exec prisma generate
 
+      - name: Skip notice
+        if: env.HAS_DATABASE_URL != 'true'
+        run: echo "::notice::DATABASE_URL secret is not set; skipping the tier upgrade."
+
       - name: Run tier upgrade
+        if: env.HAS_DATABASE_URL == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
-          pnpm exec tsx lib/cron/tier-upgrade.ts
+          # tsx is not a project dependency; fetch it on demand.
+          pnpm dlx tsx lib/cron/tier-upgrade.ts
 
       - name: Notify on failure
         if: failure()

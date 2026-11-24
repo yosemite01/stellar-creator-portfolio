@@ -6,26 +6,19 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { paymentFlowSchema, validatePaymentFlow, type PaymentFlowData } from '@/lib/payments/payment-flow';
+import { LiveRegion } from '@/lib/accessibility';
+import {
+  paymentFlowSchema,
+  validatePaymentFlow,
+  type PaymentFlowData,
+} from '@/lib/payments/payment-flow';
 
 /**
- * SEP-24 payment form: collects and validates amount/asset/account details
- * against `paymentFlowSchema` via React Hook Form, then re-validates with
- * `validatePaymentFlow` on submit.
+ * Accessible SEP-24 payment form (#1393, #1548, #1773).
  *
- * Submission posts to `/api/payments/sep24` (Issue #1393). It previously only
- * `console.log`ed the payload behind a `// TODO: Call API endpoint`, so the
- * button reported success without anything having happened — the worst possible
- * outcome for a form that takes a recipient and an amount.
- *
- * The anchor handshake itself lives server-side: the interactive endpoints need
- * a SEP-10 JWT, and minting one in the browser would put the signing key there.
- * See `lib/stellar/sep24.ts` for the protocol client the route uses.
- *
- * After the server returns an interactive URL we open it in a popup (with a
- * fallback link when the popup is blocked) and poll the transaction status so
- * the UI reflects the anchor's state, including `pending_user_transfer_start`
- * instructions (Issue #1548).
+ * Collects and validates amount/asset/account details against `paymentFlowSchema`,
+ * associates every field error via `aria-describedby` + `role="alert"`, and
+ * announces live anchor transaction status transitions to screen readers.
  */
 export interface Sep24FlowProps {
   /** Where the validated payload is posted. Overridable for tests. */
@@ -116,22 +109,17 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
 
   const amount = watch('amount');
 
-  const openInteractive = useCallback(
-    (url: string) => {
-      const popup = window.open(url, 'sep24-interactive', 'width=480,height=720');
-      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-        // Popup blocked — keep the URL so the user can open it manually.
-        setPopupBlocked(true);
-        return;
-      }
-      popupRef.current = popup;
-      setPopupBlocked(false);
-    },
-    [],
-  );
+  const openInteractive = useCallback((url: string) => {
+    const popup = window.open(url, 'sep24-interactive', 'width=480,height=720');
+    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+      setPopupBlocked(true);
+      return;
+    }
+    popupRef.current = popup;
+    setPopupBlocked(false);
+  }, []);
 
   const onSubmit = async (data: PaymentFlowData) => {
-    // Validate before submission
     const validation = validatePaymentFlow(data);
     if (!validation.valid) {
       setSubmitError(validation.errors.join(', '));
@@ -153,9 +141,6 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
       });
 
       if (!response.ok) {
-        // Surface the server's reason. "Asset not supported by this anchor" and
-        // "KYC required" need different things from the user, and a generic
-        // failure message tells them neither.
         let detail = `Payment could not be started (${response.status})`;
         try {
           const payload = (await response.json()) as { error?: string };
@@ -179,8 +164,6 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
       onSuccess?.({ id: result.id, url: result.url });
       openInteractive(result.url);
     } catch {
-      // A network failure here means we do not know whether the anchor created
-      // the transaction, so the message deliberately does not claim it failed.
       setSubmitError('Could not reach the payment service. Check your connection.');
     } finally {
       setIsSubmitting(false);
@@ -200,7 +183,6 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
           `${statusEndpoint}?id=${encodeURIComponent(transactionId)}`,
         );
         if (!response.ok) {
-          // Transient failure — keep polling rather than dropping the user.
           if (!cancelled) timer = setTimeout(poll, POLL_INTERVAL_MS);
           return;
         }
@@ -231,18 +213,33 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
     };
   }, [transactionId, statusEndpoint]);
 
+  const liveAnnouncement = status
+    ? `Transaction status: ${describeStatus(status)}${statusDetail ? ` ${statusDetail}` : ''}`
+    : isSubmitting
+      ? 'Submitting payment request…'
+      : '';
+
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 max-w-md">
+    <form
+      onSubmit={handleSubmit(onSubmit)}
+      noValidate
+      aria-label="SEP-24 Stellar payment form"
+      className="space-y-6 max-w-md"
+    >
       <div className="space-y-2">
         <Label htmlFor="recipientAddress">Recipient Stellar Address</Label>
         <Input
           id="recipientAddress"
           placeholder="GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
           {...register('recipientAddress')}
+          aria-required="true"
           aria-invalid={!!errors.recipientAddress}
+          aria-describedby={errors.recipientAddress ? 'recipientAddress-error' : undefined}
         />
         {errors.recipientAddress && (
-          <p className="text-sm text-destructive">{errors.recipientAddress.message}</p>
+          <p id="recipientAddress-error" role="alert" className="text-sm text-destructive">
+            {errors.recipientAddress.message}
+          </p>
         )}
       </div>
 
@@ -254,10 +251,22 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
           step="0.0001"
           placeholder="0.0000"
           {...register('amount', { valueAsNumber: true })}
+          aria-required="true"
           aria-invalid={!!errors.amount}
+          aria-describedby={
+            errors.amount ? 'amount-error' : amount ? 'amount-preview' : undefined
+          }
         />
-        {errors.amount && <p className="text-sm text-destructive">{errors.amount.message}</p>}
-        {amount && <p className="text-xs text-muted-foreground">Amount: {amount} XLM</p>}
+        {errors.amount && (
+          <p id="amount-error" role="alert" className="text-sm text-destructive">
+            {errors.amount.message}
+          </p>
+        )}
+        {amount ? (
+          <p id="amount-preview" className="text-xs text-muted-foreground">
+            Amount: {amount} XLM
+          </p>
+        ) : null}
       </div>
 
       <div className="space-y-2">
@@ -266,10 +275,14 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
           id="description"
           placeholder="Payment description"
           {...register('description')}
+          aria-required="true"
           aria-invalid={!!errors.description}
+          aria-describedby={errors.description ? 'description-error' : undefined}
         />
         {errors.description && (
-          <p className="text-sm text-destructive">{errors.description.message}</p>
+          <p id="description-error" role="alert" className="text-sm text-destructive">
+            {errors.description.message}
+          </p>
         )}
       </div>
 
@@ -281,18 +294,28 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
           maxLength={28}
           {...register('memo')}
           aria-invalid={!!errors.memo}
+          aria-describedby={errors.memo ? 'memo-error' : undefined}
         />
-        {errors.memo && <p className="text-sm text-destructive">{errors.memo.message}</p>}
+        {errors.memo && (
+          <p id="memo-error" role="alert" className="text-sm text-destructive">
+            {errors.memo.message}
+          </p>
+        )}
       </div>
 
       {submitError && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" aria-live="assertive" className="text-sm text-destructive">
           {submitError}
         </p>
       )}
 
       {transactionId && (
-        <div className="space-y-2 rounded-md border p-3 text-sm">
+        <div
+          role={status === 'error' || status === 'expired' ? 'alert' : 'status'}
+          aria-live={status === 'error' || status === 'expired' ? 'assertive' : 'polite'}
+          aria-atomic="true"
+          className="space-y-2 rounded-md border p-3 text-sm"
+        >
           <p className="text-muted-foreground">Transaction: {transactionId}</p>
           {status && <p>{describeStatus(status)}</p>}
           {statusDetail && <p className="text-muted-foreground">{statusDetail}</p>}
@@ -304,19 +327,19 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
               href={moreInfoUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-primary underline"
+              className="text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
             >
               View transaction details
             </a>
           )}
           {popupBlocked && interactiveUrl && (
-            <p>
+            <p role="alert">
               Your browser blocked the payment window.{' '}
               <a
                 href={interactiveUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-primary underline"
+                className="text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
               >
                 Open the anchor page
               </a>{' '}
@@ -326,9 +349,16 @@ export const Sep24Flow: React.FC<Sep24FlowProps> = ({
         </div>
       )}
 
-      <Button type="submit" disabled={!isValid || isSubmitting} className="w-full">
+      <Button
+        type="submit"
+        disabled={!isValid || isSubmitting}
+        aria-busy={isSubmitting}
+        className="w-full"
+      >
         {isSubmitting ? 'Processing...' : 'Continue to Payment'}
       </Button>
+
+      <LiveRegion message={liveAnnouncement} role="status" />
     </form>
   );
 };

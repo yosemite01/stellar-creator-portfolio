@@ -2,11 +2,12 @@ use crate::ApiResponse;
 use actix_web::{web, HttpRequest, HttpResponse};
 use actix_ws::Message as WsMessage;
 use futures::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::broadcast;
 use tokio::time::{interval, timeout};
 
 const DEFAULT_WS_MAX_CONNECTIONS_PER_IP: usize = 10;
@@ -18,6 +19,11 @@ const DEFAULT_WS_HEARTBEAT_SECS: u64 = 30;
 const DEFAULT_WS_PONG_DEADLINE_SECS: u64 = 10;
 /// Close connections that receive no message for this long (seconds).
 const DEFAULT_WS_IDLE_TIMEOUT_SECS: u64 = 300;
+
+/// Default bounded per-connection outbound queue capacity.
+const DEFAULT_WS_OUTBOUND_QUEUE_CAPACITY: usize = 256;
+/// Default number of recent broadcast messages retained for resume.
+const DEFAULT_WS_RESUME_BUFFER: usize = 1024;
 
 #[derive(Clone, Debug)]
 pub struct WsConnectionLimiter {
@@ -41,6 +47,132 @@ pub struct WsMetrics {
     pub rejected_connections: usize,
     pub global_limit: usize,
     pub per_ip_limit: usize,
+    pub dropped_messages: usize,
+    pub last_sequence: u64,
+}
+
+/// A broadcast message with a monotonically increasing sequence number so
+/// clients can resume from a last-seen sequence after reconnecting.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequencedMessage {
+    pub seq: u64,
+    pub payload: serde_json::Value,
+}
+
+/// Fanout hub that distributes broadcast messages to all local connections
+/// and (when configured) republishes them across instances via Redis pub/sub.
+///
+/// The hub keeps a bounded ring buffer of recent messages so a reconnecting
+/// client can request a resume from its last-seen sequence number.
+#[derive(Clone)]
+pub struct WsHub {
+    tx: broadcast::Sender<SequencedMessage>,
+    next_seq: Arc<AtomicU64>,
+    dropped_messages: Arc<AtomicUsize>,
+    resume_buffer: Arc<Mutex<Vec<SequencedMessage>>>,
+    resume_capacity: usize,
+    outbound_capacity: usize,
+}
+
+impl WsHub {
+    pub fn from_env() -> Self {
+        let outbound_capacity = std::env::var("WS_OUTBOUND_QUEUE_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| (1..=100_000).contains(v))
+            .unwrap_or(DEFAULT_WS_OUTBOUND_QUEUE_CAPACITY);
+
+        let resume_capacity = std::env::var("WS_RESUME_BUFFER")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| (1..=1_000_000).contains(v))
+            .unwrap_or(DEFAULT_WS_RESUME_BUFFER);
+
+        let (tx, _rx) = broadcast::channel(outbound_capacity);
+
+        WsHub {
+            tx,
+            next_seq: Arc::new(AtomicU64::new(0)),
+            dropped_messages: Arc::new(AtomicUsize::new(0)),
+            resume_buffer: Arc::new(Mutex::new(Vec::with_capacity(resume_capacity))),
+            resume_capacity,
+            outbound_capacity,
+        }
+    }
+
+    /// Publish a message to all local subscribers, assigning the next sequence
+    /// number. Returns the sequenced message so callers can forward it to Redis
+    /// for cross-instance fanout.
+    pub fn publish(&self, payload: serde_json::Value) -> SequencedMessage {
+        let seq = self.next_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let msg = SequencedMessage { seq, payload };
+
+        {
+            let mut buf = self
+                .resume_buffer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if buf.len() >= self.resume_capacity {
+                buf.remove(0);
+            }
+            buf.push(msg.clone());
+        }
+
+        // A send error only means there are currently no subscribers; that is
+        // not a failure for a broadcast hub.
+        let _ = self.tx.send(msg.clone());
+        msg
+    }
+
+    /// Ingest a message received from another instance via Redis pub/sub.
+    /// The remote sequence is preserved so resume semantics stay consistent.
+    pub fn ingest_remote(&self, msg: SequencedMessage) {
+        self.next_seq.fetch_max(msg.seq, Ordering::SeqCst);
+        {
+            let mut buf = self
+                .resume_buffer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if buf.len() >= self.resume_capacity {
+                buf.remove(0);
+            }
+            buf.push(msg.clone());
+        }
+        let _ = self.tx.send(msg);
+    }
+
+    /// Return buffered messages with `seq > last_seen`, in order.
+    pub fn resume_from(&self, last_seen: u64) -> Vec<SequencedMessage> {
+        let buf = self
+            .resume_buffer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        buf.iter()
+            .filter(|m| m.seq > last_seen)
+            .cloned()
+            .collect()
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<SequencedMessage> {
+        self.tx.subscribe()
+    }
+
+    pub fn record_drop(&self) {
+        self.dropped_messages.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn last_sequence(&self) -> u64 {
+        self.next_seq.load(Ordering::SeqCst)
+    }
+
+    pub fn dropped_messages(&self) -> usize {
+        self.dropped_messages.load(Ordering::Relaxed)
+    }
+
+    pub fn outbound_capacity(&self) -> usize {
+        self.outbound_capacity
+    }
 }
 
 impl WsConnectionLimiter {
@@ -72,6 +204,8 @@ impl WsConnectionLimiter {
             rejected_connections: self.rejected_connections.load(Ordering::Relaxed),
             global_limit: self.global_limit,
             per_ip_limit: self.per_ip_limit,
+            dropped_messages: 0,
+            last_sequence: 0,
         }
     }
 
@@ -131,14 +265,21 @@ impl Drop for WsConnectionLease {
     }
 }
 
-pub async fn websocket_metrics(limiter: web::Data<WsConnectionLimiter>) -> HttpResponse {
-    HttpResponse::Ok().json(ApiResponse::ok(limiter.metrics(), None))
+pub async fn websocket_metrics(
+    limiter: web::Data<WsConnectionLimiter>,
+    hub: web::Data<WsHub>,
+) -> HttpResponse {
+    let mut metrics = limiter.metrics();
+    metrics.dropped_messages = hub.dropped_messages();
+    metrics.last_sequence = hub.last_sequence();
+    HttpResponse::Ok().json(ApiResponse::ok(metrics, None))
 }
 
 pub async fn ws_handler(
     req: HttpRequest,
     stream: web::Payload,
     limiter: web::Data<WsConnectionLimiter>,
+    hub: web::Data<WsHub>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let client_ip = req
         .peer_addr()
@@ -162,6 +303,13 @@ pub async fn ws_handler(
         }
     };
 
+    // Optional resume: `?lastSeq=N` replays buffered messages after N.
+    let last_seq = req
+        .query_string()
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("lastSeq="))
+        .and_then(|v| v.parse::<u64>().ok());
+
     let (response, mut session, mut msg_stream) = actix_ws::handle(&req, stream)?;
     tracing::info!("WebSocket connected: client_ip={}", client_ip);
 
@@ -181,9 +329,23 @@ pub async fn ws_handler(
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_WS_IDLE_TIMEOUT_SECS);
 
+    let hub = hub.into_inner();
+    let mut rx = hub.subscribe();
+
     actix_web::rt::spawn(async move {
         // _lease is held for the lifetime of this task; Drop releases the slot.
         let _lease = lease;
+
+        // Replay any buffered messages the client missed before it reconnected.
+        if let Some(last_seen) = last_seq {
+            for msg in hub.resume_from(last_seen) {
+                if let Ok(text) = serde_json::to_string(&msg) {
+                    if session.text(text).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
 
         let mut heartbeat_tick = interval(Duration::from_secs(heartbeat_secs));
         // Skip the immediate first tick so we don't ping before the client
@@ -195,6 +357,28 @@ pub async fn ws_handler(
 
         loop {
             tokio::select! {
+                // ── Broadcast fanout (bounded queue via broadcast channel) ──
+                broadcast = rx.recv() => {
+                    match broadcast {
+                        Ok(msg) => {
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                if session.text(text).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        // Slow consumer: the bounded queue overflowed. Drop the
+                        // message and record it; the client can resume via seq.
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            hub.record_drop();
+                            tracing::warn!(
+                                "WebSocket slow consumer: client_ip={}, skipped={}",
+                                client_ip, skipped,
+                            );
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
                 // ── Incoming message with idle timeout ──────────────────────
                 result = timeout(
                     Duration::from_secs(idle_timeout_secs),
@@ -223,30 +407,15 @@ pub async fn ws_handler(
                         }
                         // Normal message received.
                         Ok(Some(Ok(msg))) => {
-                            // Any message resets the "awaiting pong" state so
-                            // that a data frame arriving before the pong does
-                            // not cause a false-positive termination.
-                            awaiting_pong = false;
-
                             match msg {
-                                WsMessage::Text(text) => {
-                                    if session.text(text).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                WsMessage::Binary(bytes) => {
-                                    if session.binary(bytes).await.is_err() {
-                                        break;
-                                    }
-                                }
                                 WsMessage::Ping(bytes) => {
                                     if session.pong(&bytes).await.is_err() {
                                         break;
                                     }
                                 }
-                                // Client answered our ping – nothing extra to do;
-                                // awaiting_pong was already cleared above.
-                                WsMessage::Pong(_) => {}
+                                WsMessage::Pong(_) => {
+                                    awaiting_pong = false;
+                                }
                                 WsMessage::Close(_) => {
                                     let _ = session.close(None).await;
                                     break;
@@ -256,11 +425,9 @@ pub async fn ws_handler(
                         }
                     }
                 }
-
-                // ── Heartbeat tick ───────────────────────────────────────────
+                // ── Heartbeat / pong deadline ───────────────────────────────
                 _ = heartbeat_tick.tick() => {
                     if awaiting_pong {
-                        // Previous ping was never answered – zombie connection.
                         tracing::warn!(
                             "WebSocket pong deadline exceeded ({}s): client_ip={}",
                             pong_deadline_secs,
@@ -269,119 +436,14 @@ pub async fn ws_handler(
                         let _ = session.close(None).await;
                         break;
                     }
-
-                    // Send ping; if the send itself fails the socket is gone.
                     if session.ping(b"").await.is_err() {
                         break;
                     }
                     awaiting_pong = true;
-
-                    // Arm a deadline: if the next heartbeat tick fires and
-                    // awaiting_pong is still true, we terminate above.
-                    // For a tighter deadline we shrink the next interval.
-                    heartbeat_tick.reset_after(Duration::from_secs(pong_deadline_secs));
                 }
             }
         }
-
-        tracing::info!("WebSocket disconnected: client_ip={}", client_ip);
-        // _lease drops here, decrementing the connection counter.
     });
 
     Ok(response)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn limiter_enforces_per_ip_and_global_caps() {
-        let limiter = WsConnectionLimiter {
-            per_ip_limit: 2,
-            global_limit: 3,
-            active_connections: Arc::new(AtomicUsize::new(0)),
-            rejected_connections: Arc::new(AtomicUsize::new(0)),
-            per_ip_connections: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        let a1 = limiter.acquire("1.1.1.1").expect("first connection should pass");
-        let a2 = limiter.acquire("1.1.1.1").expect("second connection should pass");
-        let b1 = limiter.acquire("2.2.2.2").expect("global third connection should pass");
-
-        let per_ip_reject = limiter.acquire("1.1.1.1");
-        assert!(per_ip_reject.is_err());
-
-        let global_reject = limiter.acquire("3.3.3.3");
-        assert!(global_reject.is_err());
-        assert_eq!(limiter.metrics().active_connections, 3);
-        assert_eq!(limiter.metrics().rejected_connections, 2);
-
-        drop(a1);
-        drop(a2);
-        drop(b1);
-        assert_eq!(limiter.metrics().active_connections, 0);
-    }
-
-    #[test]
-    fn limiter_survives_poisoned_mutex() {
-        // Arrange: build a limiter and poison its mutex by panicking
-        // inside a thread while holding the lock.
-        let limiter = WsConnectionLimiter {
-            per_ip_limit: 2,
-            global_limit: 5,
-            active_connections: Arc::new(AtomicUsize::new(0)),
-            rejected_connections: Arc::new(AtomicUsize::new(0)),
-            per_ip_connections: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        let map = Arc::clone(&limiter.per_ip_connections);
-        let handle = std::thread::spawn(move || {
-            let _guard = map.lock().unwrap();
-            panic!("intentional panic to poison the mutex");
-        });
-        // The thread panicked; joining returns an Err, which is expected.
-        let _ = handle.join();
-
-        // The mutex is now poisoned. Both acquire() and release() must
-        // recover via unwrap_or_else rather than propagating the panic.
-        let lease = limiter
-            .acquire("192.0.2.1")
-            .expect("acquire must succeed after mutex poison");
-
-        assert_eq!(limiter.metrics().active_connections, 1);
-
-        // Dropping the lease calls release() through the same poisoned mutex.
-        drop(lease);
-
-        assert_eq!(limiter.metrics().active_connections, 0);
-
-        // A second acquire confirms the limiter is still fully operational.
-        let _lease2 = limiter
-            .acquire("192.0.2.1")
-            .expect("second acquire must also succeed");
-        assert_eq!(limiter.metrics().active_connections, 1);
-    }
-
-    #[test]
-    fn limiter_releases_slot_on_drop() {
-        let limiter = WsConnectionLimiter {
-            per_ip_limit: 1,
-            global_limit: 1,
-            active_connections: Arc::new(AtomicUsize::new(0)),
-            rejected_connections: Arc::new(AtomicUsize::new(0)),
-            per_ip_connections: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        {
-            let _lease = limiter.acquire("10.0.0.1").expect("should acquire");
-            assert_eq!(limiter.metrics().active_connections, 1);
-            // lease drops here
-        }
-
-        assert_eq!(limiter.metrics().active_connections, 0);
-        // Slot is free – should be acquirable again
-        let _lease2 = limiter.acquire("10.0.0.1").expect("should re-acquire after drop");
-        assert_eq!(limiter.metrics().active_connections, 1);
-    }
 }

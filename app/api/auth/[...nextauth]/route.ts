@@ -1,6 +1,7 @@
 import NextAuth from 'next-auth';
 import { authOptions } from '@/lib/auth/config';
-import { checkRateLimit, getClientIp } from '@/lib/auth/route';
+import { getClientIp } from '@/lib/auth/rate-limit';
+import { checkRate } from '@/server/api/rate-limit';
 
 const handler = NextAuth(authOptions);
 
@@ -14,21 +15,17 @@ function withAuthRateLimit(
   next: (req: Request, ctx: unknown) => Promise<Response>,
 ) {
   return async (req: Request, ctx: unknown): Promise<Response> => {
-    const ip = getClientIp(req);
-    const limited = await checkRateLimit({
-      key: `auth:signin:ip:${ip}`,
-      limit: 30,
-      windowMs: 15 * 60 * 1000,
-    });
+    const ip = getClientIp(req.headers);
+    const limited = checkRate(`auth:signin:ip:${ip}`, 30, 15 * 60);
 
-    if (!limited.ok) {
+    if (!limited.allowed) {
       return new Response(
         JSON.stringify({ error: 'Too many requests. Please try again later.' }),
         {
           status: 429,
           headers: {
             'content-type': 'application/json',
-            'retry-after': String(limited.retryAfterSeconds),
+            'retry-after': String(limited.retryAfter),
           },
         },
       );

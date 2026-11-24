@@ -72,7 +72,7 @@ The following critical paths require review from @yosemite01 (or designees as th
 | `/backend/` | Backend services & business logic | @yosemite01 |
 | `/backend/services/indexer/` | Stellar blockchain indexer | @yosemite01 |
 | `/lib/auth/` | Authentication & authorization | @yosemite01 |
-| `/middleware.ts` | Request middleware | @yosemite01 |
+| `/proxy.ts` | Request proxy (auth redirects, CSP) | @yosemite01 |
 | `/app/api/admin/` | Admin endpoints & internal APIs | @yosemite01 |
 | `/prisma/migrations/` | Database migration scripts | @yosemite01 |
 | `/contracts/` | Smart contracts (Soroban/Stellar) | @yosemite01 |

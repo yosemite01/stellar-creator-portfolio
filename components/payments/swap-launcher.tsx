@@ -11,12 +11,15 @@ export function SwapLauncher() {
   return (
     <>
       <Button
+        type="button"
         variant="outline"
         size="sm"
+        aria-haspopup="dialog"
+        aria-expanded={open}
         className="gap-1.5 hidden lg:flex"
         onClick={() => setOpen(true)}
       >
-        <ArrowLeftRight className="h-4 w-4" />
+        <ArrowLeftRight className="h-4 w-4" aria-hidden="true" />
         Bridge
       </Button>
       <CrossChainSwapModal open={open} onClose={() => setOpen(false)} />

@@ -1,6 +1,6 @@
 /**
  * WebSocket endpoint for Yjs CRDT document synchronization.
- * Uses y-websocket's setupWSConnection to handle all Yjs protocol messages.
+ * Uses @y/websocket-server's setupWSConnection to handle all Yjs protocol messages.
  */
 import { type NextRequest, NextResponse } from 'next/server'
 import { WebSocket } from 'ws'

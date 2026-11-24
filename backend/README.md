@@ -189,11 +189,18 @@ pub trait FreelancerContract {
         bio: String,
     ) -> Result<(), RegistryError>;
     
+    // #1726: only the configured review contract may call this
+    // (`source` must equal `set_review_source` and authorize).
     fn update_rating(
         env: Env,
+        source: Address,
         freelancer: Address,
-        rating: i128,
-    ) -> Result<(), RegistryError>;
+        rating: u32,
+    ) -> Result<bool, FreelancerError>;
+
+    // #1726: earnings/completed projects are derived from released escrows
+    // read from the configured escrow contract; there is no admin write path.
+    fn record_escrow_release(env: Env, escrow_id: u64) -> Result<bool, FreelancerError>;
     
     fn verify_freelancer(
         env: Env,

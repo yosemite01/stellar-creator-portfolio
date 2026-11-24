@@ -10,7 +10,7 @@
 
 # Authentication and security
 /lib/auth/                  @yosemite01
-/middleware.ts              @yosemite01
+/proxy.ts                   @yosemite01
 /app/api/admin/             @yosemite01
 
 # Database migrations
@@ -25,7 +25,7 @@
 /tsconfig.json              @yosemite01
 /package.json               @yosemite01
 /pnpm-lock.yaml             @yosemite01
-Dockerfile                  @yosemite01
+Dockerfile*                 @yosemite01
 Makefile                    @yosemite01
 
 # Environment and secrets

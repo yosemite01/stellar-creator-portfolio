@@ -1,7 +1,8 @@
-'use client'
+'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { LiveRegion } from '@/lib/accessibility';
 import {
   discoverTransferServer,
   isSuccessStatus,
@@ -11,22 +12,30 @@ import {
   Sep24Error,
   startInteractiveFlow,
   type Sep24Transaction,
-} from '@/lib/stellar/sep24'
+} from '@/lib/stellar/sep24';
+import { Sep24Timeline, type Sep24TimelineTransaction } from './sep24-timeline';
 
-/**
- * SEP-24 interactive deposit/withdraw flow (Issue #1393).
- *
- * Previously a stub that only moved a local `status` variable. It now runs the
- * real protocol: discover the anchor's TRANSFER_SERVER, request an interactive
- * URL, open it, and poll `/transaction` to a terminal status.
- *
- * The polling is the part worth keeping: the anchor does its work out of band,
- * so the popup closing tells you nothing about whether the transfer happened.
- * A flow that stopped at "window closed" would report success for a transfer
- * the anchor later rejected.
- */
+/** Shape an anchor transaction for the timeline (history comes from the DB view). */
+function toTimelineTransaction(tx: Sep24Transaction, assetCode: string): Sep24TimelineTransaction {
+  return {
+    id: tx.id,
+    kind: tx.kind,
+    assetCode,
+    status: tx.status,
+    amountIn: tx.amount_in,
+    amountOut: tx.amount_out,
+    amountFee: tx.amount_fee,
+    message: tx.message,
+    moreInfoUrl: tx.more_info_url,
+    stellarTransactionId: tx.stellar_transaction_id,
+    externalTransactionId: tx.external_transaction_id,
+    startedAt: tx.started_at ?? new Date().toISOString(),
+    completedAt: tx.completed_at,
+    statusHistory: [],
+  };
+}
 
-export type Sep24FlowKind = 'deposit' | 'withdraw'
+export type Sep24FlowKind = 'deposit' | 'withdraw';
 
 export type Sep24TransactionStatus =
   | 'idle'
@@ -35,36 +44,23 @@ export type Sep24TransactionStatus =
   | 'pending_user'
   | 'pending_external'
   | 'completed'
-  | 'error'
+  | 'error';
 
 export interface Sep24FlowProps {
-  kind: Sep24FlowKind
-  assetCode: string
-  /**
-   * The anchor's home domain (`TRANSFER_SERVER` is read from its stellar.toml),
-   * or a TRANSFER_SERVER URL directly. A full URL is used as-is; anything else
-   * is treated as a domain to discover.
-   */
-  anchorTransferServerUrl: string
-  account: string
-  /** SEP-10 JWT. The interactive endpoints require authentication. */
-  authToken?: string
-  amount?: string
-  onStatusChange?: (status: Sep24TransactionStatus) => void
-  /** Receives every poll, for callers that want the full transaction record. */
-  onTransactionUpdate?: (tx: Sep24Transaction) => void
+  kind: Sep24FlowKind;
+  assetCode: string;
+  anchorTransferServerUrl: string;
+  account: string;
+  authToken?: string;
+  amount?: string;
+  onStatusChange?: (status: Sep24TransactionStatus) => void;
+  onTransactionUpdate?: (tx: Sep24Transaction) => void;
 }
 
-/**
- * Collapses the ~15 statuses SEP-24 defines onto the four this component
- * reports. Anything non-terminal is `pending_anchor` — the distinction between
- * `pending_external` and `pending_trust` matters to an anchor, not to someone
- * watching a spinner.
- */
 function toComponentStatus(tx: Sep24Transaction): Sep24TransactionStatus {
-  if (tx.status === 'incomplete') return 'incomplete'
-  if (!isTerminalStatus(tx.status)) return 'pending_anchor'
-  return isSuccessStatus(tx.status) ? 'completed' : 'error'
+  if (tx.status === 'incomplete') return 'incomplete';
+  if (!isTerminalStatus(tx.status)) return 'pending_anchor';
+  return isSuccessStatus(tx.status) ? 'completed' : 'error';
 }
 
 export function Sep24Flow({
@@ -77,43 +73,43 @@ export function Sep24Flow({
   onStatusChange,
   onTransactionUpdate,
 }: Sep24FlowProps) {
-  const [status, setStatus] = useState<Sep24TransactionStatus>('idle')
-  const [message, setMessage] = useState<string | null>(null)
-  const [interactiveUrl, setInteractiveUrl] = useState<string | null>(null)
+  const [status, setStatus] = useState<Sep24TransactionStatus>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+  const [interactiveUrl, setInteractiveUrl] = useState<string | null>(null);
+  const [transaction, setTransaction] = useState<Sep24Transaction | null>(null);
 
-  // Aborts the poll if the component unmounts mid-flow, so a closed page does
-  // not leave a request loop running against the anchor.
-  const abortRef = useRef<AbortController | null>(null)
+  const abortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => () => abortRef.current?.abort(), [])
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const advance = useCallback(
     (next: Sep24TransactionStatus) => {
-      setStatus(next)
-      onStatusChange?.(next)
+      setStatus(next);
+      onStatusChange?.(next);
     },
     [onStatusChange],
-  )
+  );
 
   const startFlow = useCallback(async () => {
     if (!authToken) {
-      setMessage('Sign in with your wallet before starting a transfer.')
-      advance('error')
-      return
+      setMessage('Sign in with your wallet before starting a transfer.');
+      advance('error');
+      return;
     }
 
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-    setMessage(null)
-    setInteractiveUrl(null)
-    advance('incomplete')
+    setMessage(null);
+    setInteractiveUrl(null);
+    setTransaction(null);
+    advance('incomplete');
 
     try {
       const transferServer = /^https?:\/\//.test(anchorTransferServerUrl)
         ? anchorTransferServerUrl.replace(/\/+$/, '')
-        : await discoverTransferServer(anchorTransferServerUrl)
+        : await discoverTransferServer(anchorTransferServerUrl);
 
       const interactive = await startInteractiveFlow({
         transferServer,
@@ -122,51 +118,47 @@ export function Sep24Flow({
         account,
         authToken,
         amount,
-      })
+      });
 
-      setInteractiveUrl(interactive.url)
+      setInteractiveUrl(interactive.url);
 
-      // A blocked popup is recoverable — the URL is rendered as a link below —
-      // so it must not abort the flow, because the transaction already exists
-      // at the anchor and still needs polling.
       try {
-        openInteractiveWindow(interactive.url)
+        openInteractiveWindow(interactive.url);
       } catch (err) {
         setMessage(
           err instanceof Sep24Error
             ? err.message
             : 'Could not open the anchor window. Use the link below.',
-        )
+        );
       }
 
-      advance('pending_anchor')
+      advance('pending_anchor');
 
       const final = await pollUntilTerminal({
         transferServer,
         id: interactive.id,
         authToken,
         signal: controller.signal,
-        onUpdate: (tx) => {
-          onTransactionUpdate?.(tx)
-          const mapped = toComponentStatus(tx)
-          // Only push non-terminal updates here; the terminal one is set below
-          // from the resolved value, so `onStatusChange` does not fire twice
-          // for the same state.
-          if (!isTerminalStatus(tx.status)) advance(mapped)
+        onUpdate: (tx: Sep24Transaction) => {
+          onTransactionUpdate?.(tx);
+          setTransaction(tx);
+          const mapped = toComponentStatus(tx);
+          if (!isTerminalStatus(tx.status)) advance(mapped);
         },
-      })
+      });
 
-      onTransactionUpdate?.(final)
-      advance(toComponentStatus(final))
+      onTransactionUpdate?.(final);
+      setTransaction(final);
+      advance(toComponentStatus(final));
 
       if (!isSuccessStatus(final.status)) {
-        setMessage(final.message ?? `Anchor reported: ${final.status}`)
+        setMessage(final.message ?? `Anchor reported: ${final.status}`);
       }
     } catch (err) {
       setMessage(
         err instanceof Sep24Error ? err.message : 'The transfer could not be started.',
-      )
-      advance('error')
+      );
+      advance('error');
     }
   }, [
     advance,
@@ -177,43 +169,66 @@ export function Sep24Flow({
     authToken,
     kind,
     onTransactionUpdate,
-  ])
+  ]);
 
-  const busy = status === 'incomplete' || status === 'pending_anchor'
+  const busy = status === 'incomplete' || status === 'pending_anchor';
+  const showTimeline = Boolean(transaction);
+
+  const statusAnnouncement =
+    status === 'idle'
+      ? ''
+      : status === 'incomplete'
+        ? `Starting ${kind} for ${assetCode} with anchor.`
+        : status === 'pending_anchor'
+          ? `Waiting for anchor to process ${kind} of ${assetCode}.`
+          : status === 'completed'
+            ? `${kind === 'deposit' ? 'Deposit' : 'Withdrawal'} of ${assetCode} completed.`
+            : status === 'error'
+              ? `Transfer error: ${message ?? 'Please try again.'}`
+              : `Transfer status: ${status}`;
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border p-4">
-      <p className="text-sm text-muted-foreground">
-        {kind === 'deposit' ? 'Deposit' : 'Withdraw'} {assetCode} via anchor (SEP-24)
-      </p>
+    <div className="flex flex-col gap-4">
+      {!showTimeline && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {kind === 'deposit' ? 'Deposit' : 'Withdraw'} {assetCode} via anchor (SEP-24)
+          </p>
 
-      <Button onClick={startFlow} disabled={busy}>
-        {busy ? 'Waiting for anchor…' : `Start ${kind}`}
-      </Button>
+          <Button type="button" onClick={startFlow} disabled={busy} aria-busy={busy}>
+            {busy ? 'Waiting for anchor…' : `Start ${kind}`}
+          </Button>
 
-      {status !== 'idle' && (
-        <p className="text-xs text-muted-foreground" role="status">
-          Status: {status}
-        </p>
+          {message && (
+            <p className="text-xs text-destructive" role="alert" aria-live="assertive">
+              {message}
+            </p>
+          )}
+        </div>
       )}
 
-      {/* Shown when the popup was blocked, so the flow is still completable. */}
-      {interactiveUrl && busy && (
+      {showTimeline && transaction && (
+        <Sep24Timeline
+          transaction={toTimelineTransaction(transaction, assetCode)}
+          onRetry={startFlow}
+        />
+      )}
+
+      {interactiveUrl && busy && !showTimeline && (
         <a
           href={interactiveUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs underline"
+          className="text-xs underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
         >
-          Open the anchor page
+          Open the anchor page (opens in new tab)
         </a>
       )}
 
-      {message && (
-        <p className="text-xs text-destructive" role="alert">
-          {message}
-        </p>
-      )}
+      <LiveRegion
+        message={statusAnnouncement}
+        role={status === 'error' ? 'alert' : 'status'}
+      />
     </div>
-  )
+  );
 }

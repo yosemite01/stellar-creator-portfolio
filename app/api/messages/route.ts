@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth/config'
+import { requireAuth } from '@/server/services/authorization'
 import {
   createMessage,
   listMessages,
@@ -25,12 +26,11 @@ import {
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-async function resolveAuth(): Promise<AuthContext | null> {
+async function resolveAuth(): Promise<AuthContext> {
   const session = await getServerSession(authOptions)
-  const userId = (session?.user as { id?: string } | undefined)?.id
-  const role = (session?.user as { role?: string } | undefined)?.role ?? 'USER'
-  if (!userId) return null
-  return { userId, role }
+  const user = requireAuth({ user: session?.user })
+  const role = user.role
+  return { userId: user.id, role }
 }
 
 /**
@@ -40,12 +40,6 @@ async function resolveAuth(): Promise<AuthContext | null> {
  */
 export async function GET(request: NextRequest) {
   const auth = await resolveAuth()
-  if (!auth) {
-    return NextResponse.json(
-      { error: { code: 'UNAUTHORIZED', message: 'Authentication required' } },
-      { status: 401 },
-    )
-  }
 
   const { searchParams } = new URL(request.url)
   const q = searchParams.get('q')?.trim() || undefined
@@ -72,12 +66,6 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   const auth = await resolveAuth()
-  if (!auth) {
-    return NextResponse.json(
-      { error: { code: 'UNAUTHORIZED', message: 'Authentication required' } },
-      { status: 401 },
-    )
-  }
 
   let body: Record<string, unknown>
   try {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { requireAuth, requireRole, requireOwnerOrAdmin } from '@/server/services/authorization'
 import { getStripe, isStripeConfigured } from '@/lib/payments/stripe'
 import {
   createEscrow,
@@ -18,11 +19,9 @@ export const runtime = 'nodejs'
 
 export async function GET() {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const user = requireAuth({ user: session?.user })
 
-  const escrows = listEscrowsForUser(session.user.id)
+  const escrows = listEscrowsForUser(user.id)
   return NextResponse.json({
     escrows,
     stripeConfigured: isStripeConfigured(),
@@ -31,9 +30,7 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const user = requireAuth({ user: session?.user })
 
   const idempotencyKey = request.headers.get('Idempotency-Key')
   if (!idempotencyKey) {
@@ -66,7 +63,9 @@ export async function POST(request: NextRequest) {
   const data = parsed.data
 
   if (data.type === 'bounty_escrow') {
-    if (session.user.role !== 'CLIENT' && session.user.role !== 'ADMIN') {
+    try {
+      requireRole(user, ['CLIENT', 'ADMIN'])
+    } catch (error) {
       return NextResponse.json({ error: 'Only clients can fund bounties' }, { status: 403 })
     }
 
@@ -79,7 +78,7 @@ export async function POST(request: NextRequest) {
 
     const escrow = createEscrow({
       bountyId: data.bountyId,
-      clientUserId: session.user.id,
+      clientUserId: user.id,
       amountCents: data.amountCents,
       currency: data.currency,
     })
@@ -93,7 +92,7 @@ export async function POST(request: NextRequest) {
       metadata: {
         escrowId: escrow.id,
         bountyId: data.bountyId,
-        clientUserId: session.user.id,
+        clientUserId: user.id,
         kind: 'bounty_escrow',
       },
     })
@@ -126,8 +125,8 @@ export async function POST(request: NextRequest) {
       line_items: [{ price: data.priceId, quantity: 1 }],
       success_url: successUrl,
       cancel_url: cancelUrl,
-      customer_email: session.user.email ?? undefined,
-      metadata: { userId: session.user.id },
+      customer_email: user.email ?? undefined,
+      metadata: { userId: user.id },
     })
 
     const responseBody = { url: sessionCheckout.url }
@@ -136,15 +135,13 @@ export async function POST(request: NextRequest) {
   }
 
   if (data.type === 'escrow_release') {
-    if (session.user.role !== 'CLIENT' && session.user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
     const escrow = getEscrow(data.escrowId)
     if (!escrow) {
       return NextResponse.json({ error: 'Escrow not found' }, { status: 404 })
     }
-    if (escrow.clientUserId !== session.user.id && session.user.role !== 'ADMIN') {
+    try {
+      requireOwnerOrAdmin(escrow.clientUserId, { user })
+    } catch (error) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
     if (escrow.status !== 'funded_authorized') {
@@ -178,13 +175,14 @@ export async function POST(request: NextRequest) {
   }
 
   if (data.type === 'escrow_refund') {
-    if (escrowRefundAllowed(session.user.role, session.user.id, data.escrowId) === false) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
     const escrow = getEscrow(data.escrowId)
     if (!escrow) {
       return NextResponse.json({ error: 'Escrow not found' }, { status: 404 })
+    }
+    try {
+      requireOwnerOrAdmin(escrow.clientUserId, { user })
+    } catch (error) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
     if (escrow.status !== 'funded_authorized' && escrow.status !== 'pending_funding') {
       return NextResponse.json({ error: 'Escrow cannot be refunded in this state' }, { status: 400 })
@@ -222,11 +220,4 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: 'Unsupported' }, { status: 400 })
-}
-
-function escrowRefundAllowed(role: string, userId: string, escrowId: string): boolean {
-  const escrow = getEscrow(escrowId)
-  if (!escrow) return false
-  if (role === 'ADMIN') return true
-  return escrow.clientUserId === userId
 }

@@ -1,5 +1,6 @@
 import { FeeBreakdown, PayoutRecord, PayoutReceipt, PayoutType, PayoutCurrency, PayoutStatus } from './types';
-import { generateReceiptPdf } from './pdf-receipt';
+import { generateReceiptPdf, signReceipt, verifyReceiptSignature } from './pdf-receipt';
+import { recordMovement } from './ledger';
 
 const DEFAULT_PLATFORM_FEE_RATE = 0.10; // 10% platform fee
 
@@ -171,6 +172,29 @@ export function createPayoutRecord(params: {
   };
 
   getStore().payouts.set(id, record);
+
+  // (#1737) Double-entry ledger: escrow is debited when the payout is
+  // disbursed; the net amount credits the freelancer and the fee credits
+  // platform revenue.  Both legs are written atomically.
+  if (record.status === 'completed') {
+    recordMovement(
+      'CLIENT_ESCROW',
+      'FREELANCER_PAYABLE',
+      record.feeBreakdown.netPayoutAmount,
+      currency,
+      `Net payout for bounty "${record.bountyTitle}"`,
+      id,
+    );
+    recordMovement(
+      'CLIENT_ESCROW',
+      'PLATFORM_FEE',
+      record.feeBreakdown.platformFeeAmount,
+      currency,
+      `Platform fee for bounty "${record.bountyTitle}"`,
+      id,
+    );
+  }
+
   return record;
 }
 
@@ -201,4 +225,4 @@ export function generateReceiptFromPayout(payout: PayoutRecord): PayoutReceipt {
   };
 }
 
-export { generateReceiptPdf };
+export { generateReceiptPdf, signReceipt, verifyReceiptSignature };

@@ -1,5 +1,6 @@
-import { checkRate } from './rate-limit';
-import type { Request, Response, NextFunction } from 'express';
+import { checkRate } from './rate-limit'
+import { requireRole, requireAuth, requireOwnership, requireOwnerOrAdmin, NotAuthenticatedError, ForbiddenError } from '../services/authorization'
+import type { Request, Response, NextFunction } from 'express'
 
 // Express-style middleware. Applies stricter limits for unauthenticated users.
 export function rateLimitMiddleware(opts?: { unauthenticatedLimit?: number; authenticatedLimit?: number }) {
@@ -31,3 +32,60 @@ export function rateLimitMiddleware(opts?: { unauthenticatedLimit?: number; auth
     }
   };
 }
+
+// ── Authorization Middleware for Express/REST ─────────────────────────────────
+
+export interface AuthorizationOptions {
+  role?: string | string[]
+  ownerField?: string
+}
+
+/**
+ * Authorization middleware for Express/REST routes.
+ * Usage:
+ *   app.get('/api/resource', authorizationMiddleware({ role: 'ADMIN' }), handler)
+ *   app.post('/api/resource', authorizationMiddleware({ ownerField: 'id' }), handler)
+ */
+export function authorizationMiddleware(options: AuthorizationOptions = {}) {
+  return async function (req: Request, res: Response, next: NextFunction) {
+    try {
+      // Extract user from session
+      const session = (req as any).session
+      const user = session?.user
+      const role = (req as any).user?.role
+
+      const authContext = { user, role }
+
+      // Require authentication
+      requireAuth(authContext)
+
+      // Check role if specified
+      if (options.role) {
+        const allowedRoles = Array.isArray(options.role) ? options.role : [options.role]
+        requireRole(authContext, allowedRoles as any)
+      }
+
+      // Check ownership if specified (for IDOR prevention)
+      if (options.ownerField) {
+        const resourceOwner = req.body?.[options.ownerField] || req.params?.[options.ownerField]
+        const userId = authContext.user!.id
+        requireOwnership(resourceOwner, userId)
+      }
+
+      next()
+    } catch (error) {
+      if (error instanceof NotAuthenticatedError) {
+        res.status(401).json({ error: 'Unauthorized' })
+        return
+      }
+      if (error instanceof ForbiddenError) {
+        res.status(403).json({ error: 'Forbidden' })
+        return
+      }
+      next(error)
+    }
+  }
+}
+
+// Re-export authorization errors and helpers
+export { requireAuth, requireRole, requireOwnership, requireOwnerOrAdmin, NotAuthenticatedError, ForbiddenError }

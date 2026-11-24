@@ -23,7 +23,7 @@
  *
  * Protocol messages (all JSON):
  *  Client → Server:
- *    { type: "join",      roomId, peerId }
+ *    { type: "join",      roomId, peerId, roomToken? }
  *    { type: "offer",     to, sdp }
  *    { type: "answer",    to, sdp }
  *    { type: "ice",       to, candidate }
@@ -47,11 +47,15 @@ import {
   DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
   MAX_SIGNALING_MESSAGE_BYTES,
   allowSignalingMessage,
+  allowMessagePerConnection,
   fieldWithinLimit,
   messageTooLarge,
   relayAllowed,
-  signalingTokenSecret,
+  signCallToken,
   verifyCallToken,
+  sanitizeSignalingMessage,
+  generateTurnCredentials,
+  signalingTokenSecret,
 } from './signaling-policy';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -83,6 +87,7 @@ interface PeerState {
   callId: string;
   roomId: string | null;
   recentMessageTimestamps: number[];
+  connectionMessageTimestamps: number[];
   awaitingPong: boolean;
   pongDeadlineTimer: ReturnType<typeof setTimeout> | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -112,16 +117,12 @@ let totalMessagesRelayed = 0;
  * Credentials expire automatically — the TURN server validates them without
  * any server-to-server round-trip.
  */
-function generateTurnCredentials(peerId: string): {
+function generateTurnCredentialsPerPeer(peerId: string): {
   username: string;
   credential: string;
 } {
-  const expiry = Math.floor(Date.now() / 1000) + TURN_CREDENTIAL_TTL;
-  const username = `${expiry}:${peerId}`;
-  const credential = createHmac('sha1', TURN_SECRET)
-    .update(username)
-    .digest('base64');
-  return { username, credential };
+  const credentials = generateTurnCredentials(peerId, TURN_SECRET, TURN_CREDENTIAL_TTL);
+  return { username: credentials.username, credential: credentials.credential };
 }
 
 /**
@@ -129,7 +130,7 @@ function generateTurnCredentials(peerId: string): {
  * Includes both STUN and time-limited TURN credentials.
  */
 function buildIceServers(peerId: string): RTCIceServer[] {
-  const { username, credential } = generateTurnCredentials(peerId);
+  const { username, credential } = generateTurnCredentialsPerPeer(peerId);
 
   return [
     // Public STUN (no auth needed)
@@ -245,9 +246,9 @@ function terminatePeer(ws: WebSocket): void {
 function handleJoin(
   ws: WebSocket,
   state: PeerState,
-  msg: { roomId: string; peerId: string },
+  msg: { roomId: string; peerId: string; roomToken?: string },
 ): void {
-  const { roomId, peerId } = msg;
+  const { roomId, peerId, roomToken } = msg;
 
   if (!roomId || typeof roomId !== 'string' || roomId.length > 128) {
     return sendError(ws, 'Invalid roomId');
@@ -263,6 +264,18 @@ function handleJoin(
   const room = rooms.get(roomId) ?? new Set<WebSocket>();
   if (room.size >= MAX_PEERS_PER_ROOM) {
     return sendError(ws, `Room full (max ${MAX_PEERS_PER_ROOM} peers)`);
+  }
+
+  // Verify room token if provided
+  if (roomToken) {
+    const claimToken = requireRoomToken(roomToken, roomId);
+    if (!claimToken.allowed) {
+      return sendError(ws, claimToken.message || 'Room membership token invalid');
+    }
+    // Validate user owns the token
+    if (claimToken.userId !== state.userId) {
+      return sendError(ws, 'Room membership token does not belong to this user');
+    }
   }
 
   // Update state
@@ -292,6 +305,18 @@ function handleJoin(
   console.log(`[Signaling] Peer ${peerId} joined room ${roomId} (${room.size} peers)`);
 }
 
+function requireRoomToken(token: string, roomId: string): { allowed: boolean; userId?: string; message?: string } {
+  const secret = signalingTokenSecret();
+  const claims = verifyCallToken(token, secret);
+  if (!claims) {
+    return { allowed: false, message: 'Invalid or expired room token' };
+  }
+  if (claims.callId !== roomId) {
+    return { allowed: false, message: 'Room token does not match target room' };
+  }
+  return { allowed: true, userId: claims.userId };
+}
+
 function handleRelay(
   ws: WebSocket,
   state: PeerState,
@@ -315,10 +340,18 @@ function handleRelay(
     return sendError(ws, 'Peer is not in this room');
   }
 
-  const decision = allowSignalingMessage(state.recentMessageTimestamps);
-  state.recentMessageTimestamps = decision.timestamps;
-  if (!decision.allowed) {
-    return sendError(ws, 'Rate limit exceeded');
+  // Per-connection rate limit
+  const connectionDecision = allowMessagePerConnection(state.connectionMessageTimestamps);
+  state.connectionMessageTimestamps = connectionDecision.timestamps;
+  if (!connectionDecision.allowed) {
+    return sendError(ws, `Connection rate limit exceeded. Retry after ${connectionDecision.retryAfter}s`);
+  }
+
+  // User-level rate limit (for HTTP fallback)
+  const userDecision = allowSignalingMessage(state.recentMessageTimestamps);
+  state.recentMessageTimestamps = userDecision.timestamps;
+  if (!userDecision.allowed) {
+    return sendError(ws, `User rate limit exceeded. Retry after ${userDecision.retryAfter}s`);
   }
 
   const relayed: Record<string, unknown> = { type: msg.type, to, from: state.peerId };
@@ -352,16 +385,22 @@ function handleMessage(ws: WebSocket, rawData: string): void {
     return sendError(ws, 'Missing message type');
   }
 
-  switch (msg.type) {
+  // Sanitize message to remove private IPs
+  const sanitized = sanitizeSignalingMessage(msg);
+  if (!sanitized) {
+    return sendError(ws, 'Invalid or unsafe message');
+  }
+
+  switch (sanitized.type) {
     case 'join':
-      handleJoin(ws, state, msg);
+      handleJoin(ws, state, sanitized as any);
       break;
 
     case 'offer':
     case 'answer':
     case 'ice':
     case 'tip':
-      handleRelay(ws, state, msg);
+      handleRelay(ws, state, sanitized as any);
       break;
 
     case 'leave':
@@ -373,7 +412,7 @@ function handleMessage(ws: WebSocket, rawData: string): void {
       break;
 
     default:
-      sendError(ws, `Unknown message type: ${msg.type}`);
+      sendError(ws, `Unknown message type: ${sanitized.type}`);
   }
 }
 
@@ -454,6 +493,7 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     callId: claims.callId,
     roomId: null,
     recentMessageTimestamps: [],
+    connectionMessageTimestamps: [],
     awaitingPong: false,
     pongDeadlineTimer: null,
     idleTimer: null,

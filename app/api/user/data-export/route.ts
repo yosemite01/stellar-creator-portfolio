@@ -29,11 +29,8 @@ export async function GET(req: NextRequest) {
       bounties: true,
       applications: true,
       notifications: true,
-      messages: true,
-      reviews: true,
-      payments: true,
-      referrals: true,
-      kycVerification: true,
+      messagesSent: true,
+      kycSubmission: true,
       auditLogs: {
         orderBy: { createdAt: 'desc' },
         take: 1000,
@@ -44,6 +41,11 @@ export async function GET(req: NextRequest) {
   if (!user) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 });
   }
+
+  // Reviews are linked by user id rather than a relation on User.
+  const reviews = await prisma.review.findMany({
+    where: { OR: [{ reviewerId: user.id }, { creatorId: user.id }] },
+  });
 
   // Log the data-export request itself
   await prisma.auditLog.create({
@@ -72,32 +74,26 @@ export async function GET(req: NextRequest) {
     },
     bounties: user.bounties,
     applications: user.applications,
-    messages: user.messages.map(m => ({
-      id: m.id, bountyId: m.bountyId, senderId: m.senderId, receiverId: m.receiverId,
-      content: m.content, createdAt: m.createdAt, readAt: m.readAt,
+    // Message bodies are end-to-end encrypted; export metadata only.
+    messages: user.messagesSent.map((m) => ({
+      id: m.id, threadId: m.threadId, senderId: m.senderId, recipientId: m.recipientId,
+      status: m.status, createdAt: m.createdAt,
     })),
-    reviews: user.reviews.map(r => ({
-      id: r.id, bountyId: r.bountyId, reviewerId: r.reviewerId, revieweeId: r.revieweeId,
-      rating: r.rating, comment: r.comment, createdAt: r.createdAt,
+    reviews: reviews.map((r) => ({
+      id: r.id, bountyId: r.bountyId, reviewerId: r.reviewerId, creatorId: r.creatorId,
+      rating: r.rating, title: r.title, body: r.body, createdAt: r.createdAt,
     })),
-    payments: user.payments.map(p => ({
-      id: p.id, bountyId: p.bountyId, amount: p.amount, currency: p.currency,
-      status: p.status, createdAt: p.createdAt,
-    })),
-    notifications: user.notifications.map(n => ({
+    notifications: user.notifications.map((n) => ({
       id: n.id, title: n.title, body: n.body, type: n.type,
       createdAt: n.createdAt, readAt: n.readAt,
     })),
-    referrals: user.referrals.map(r => ({
-      id: r.id, referredUserId: r.referredUserId, status: r.status, createdAt: r.createdAt,
-    })),
-    kycVerification: user.kycVerification
+    kycSubmission: user.kycSubmission
       ? {
-          id: user.kycVerification.id,
-          status: user.kycVerification.status,
-          provider: user.kycVerification.provider,
-          submittedAt: user.kycVerification.submittedAt,
-          reviewedAt: user.kycVerification.reviewedAt,
+          id: user.kycSubmission.id,
+          status: user.kycSubmission.status,
+          documentType: user.kycSubmission.documentType,
+          uploadedAt: user.kycSubmission.uploadedAt,
+          reviewedAt: user.kycSubmission.adminReviewedAt,
         }
       : null,
     auditLogs: user.auditLogs,

@@ -69,3 +69,27 @@ pnpm exec prisma migrate diff \
 ```
 
 A zero exit code means no drift.
+
+## Expand/contract policy (issue #1762)
+
+During a rolling deploy the previous app release keeps running against the
+new schema, so every migration must be safe for the release before it.
+
+1. **Expand** — ship additive changes only: new tables, nullable columns or
+   columns with a default, new indexes. The app writes both old and new shapes.
+2. **Migrate** — backfill data in application code or a separate script.
+3. **Contract** — once no running release reads the old shape (at least one
+   release later), drop or tighten it in a separate migration.
+
+`scripts/check-migration-safety.mjs` runs in the `prisma-migrations` CI job
+and fails on `DROP TABLE`, `DROP COLUMN`, `RENAME`, column type changes,
+`SET NOT NULL`, `DROP TYPE` and `TRUNCATE` in any migration newer than its
+`BASELINE`. A statement that is a deliberate contract step must be marked on
+the line above (or inline):
+
+```sql
+-- migration-safety: contract
+ALTER TABLE "User" DROP COLUMN "legacyBio";
+```
+
+Run it locally with `node scripts/check-migration-safety.mjs`.
