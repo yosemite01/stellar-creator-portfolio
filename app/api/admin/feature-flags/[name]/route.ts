@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 /**
  * Admin Feature Flag Detail API — /api/admin/feature-flags/[name]
  *
@@ -38,7 +39,7 @@ async function requireAdmin(
 const patchSchema = z.object({
   enabled:        z.boolean().optional(),
   rolloutPercent: z.number().int().min(0).max(100).optional(),
-  userSegment:    z.record(z.unknown()).nullable().optional(),
+  userSegment:    z.record(z.string(), z.unknown()).nullable().optional(),
   description:    z.string().optional(),
 });
 
@@ -85,7 +86,8 @@ export async function PATCH(
       action: before ? 'update' : 'create',
       resourceId: flag.id,
       status: 'SUCCESS',
-      payload: {
+      // Round-trip through JSON so nested nulls/unknowns are plain JSON values.
+      payload: JSON.parse(JSON.stringify({
         name,
         requested: parsed.data,
         before: before
@@ -102,7 +104,7 @@ export async function PATCH(
           userSegment: flag.userSegment,
           description: flag.description,
         },
-      },
+      })) as Prisma.InputJsonValue,
       requestPath: req.nextUrl.pathname,
       httpMethod: 'PATCH',
     },

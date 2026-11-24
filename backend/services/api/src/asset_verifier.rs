@@ -210,6 +210,25 @@ struct HorizonBalance {
 #[cfg(test)]
 mod tests {
     use super::{parse_stroops, validate_proof_of_reserve, DeclaredReserves, ObservedReserves};
+    use serde::Deserialize;
+
+    // Shared test vectors consumed by both the Rust API and the TS implementation.
+    // See `shared/test-vectors/asset-verifier.json`.
+    const SHARED_VECTORS: &str = include_str!("../../../../shared/test-vectors/asset-verifier.json");
+
+    #[derive(Deserialize)]
+    struct VectorFile {
+        reserve_vectors: Vec<ReserveVector>,
+    }
+
+    #[derive(Deserialize)]
+    struct ReserveVector {
+        name: String,
+        declared: DeclaredReserves,
+        observed: ObservedReserves,
+        valid: bool,
+        mismatch_roles: Vec<String>,
+    }
 
     fn declared() -> DeclaredReserves {
         DeclaredReserves {
@@ -260,5 +279,24 @@ mod tests {
     fn parses_stellar_decimal_precision_without_float_rounding() {
         assert_eq!(parse_stroops("1.0000001").expect("amount"), 10_000_001);
         assert!(parse_stroops("1.00000001").is_err());
+    }
+
+    #[test]
+    fn shared_reserve_vectors_match_rust_implementation() {
+        let file: VectorFile =
+            serde_json::from_str(SHARED_VECTORS).expect("shared vectors parse");
+        assert!(!file.reserve_vectors.is_empty(), "vectors must not be empty");
+
+        for vector in &file.reserve_vectors {
+            let report = validate_proof_of_reserve(&vector.declared, &vector.observed)
+                .unwrap_or_else(|err| panic!("vector '{}' failed: {err}", vector.name));
+            assert_eq!(report.valid, vector.valid, "vector '{}' validity", vector.name);
+            let roles: Vec<String> = report
+                .mismatches
+                .iter()
+                .map(|m| m.account_role.to_string())
+                .collect();
+            assert_eq!(roles, vector.mismatch_roles, "vector '{}' roles", vector.name);
+        }
     }
 }

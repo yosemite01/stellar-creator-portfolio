@@ -31,13 +31,11 @@ jobs:
     name: Frontend (lint · typecheck · test · build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          node-version-file: .nvmrc
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -62,7 +60,7 @@ jobs:
       - name: Build
         run: pnpm run build
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: next-build-${{ github.sha }}
           path: .next/
@@ -76,20 +74,18 @@ jobs:
     name: Frontend Coverage (Vitest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          node-version-file: .nvmrc
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Run tests with coverage
         run: pnpm run test:coverage
       - name: Upload frontend coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/lcov.info
@@ -102,7 +98,7 @@ jobs:
     name: Migration health (no duplicate prefixes)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check no duplicate migration prefixes
         run: |
           cd backend/migrations
@@ -133,16 +129,17 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app
       DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          node-version-file: .nvmrc
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      # #1762 — expand/contract: no unmarked destructive statements in new migrations.
+      - name: Migration safety lint
+        run: node scripts/check-migration-safety.mjs
       - name: Apply all migrations
         run: pnpm exec prisma migrate deploy
       - name: Fail if schema has objects no migration creates (drift check)
@@ -176,13 +173,11 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5433/test_db
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          node-version-file: .nvmrc
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -228,12 +223,12 @@ jobs:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5434/test_db
       DATABASE_URL: postgresql://postgres:postgres@localhost:5434/test_db
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.84.0"
+          toolchain: "1.94.1"
           components: clippy
 
       - name: Rust Cache
@@ -284,12 +279,12 @@ jobs:
     name: Rust workspace (clippy · test · benchmarks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust 1.84.0
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.84.0"
+          toolchain: "1.94.1"
           components: clippy
 
       - name: Rust Cache
@@ -299,6 +294,11 @@ jobs:
 
       - name: No unwrap/panic in contract code
         run: ./scripts/check-contract-panics.sh
+
+      # #1719 — every contract upgrades only through the shared timelocked
+      # stellar-upgradeable library and runs its conformance tests.
+      - name: Upgrades only via stellar-upgradeable
+        run: ./scripts/check-contract-upgrades.sh
 
       # #2585 — clippy covers every workspace member including insurance, referral,
       # stellar_insights, upgradeable, etc. — no crate can rot silently.
@@ -329,12 +329,12 @@ jobs:
     name: Rust Coverage (cargo-llvm-cov)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust (nightly for llvm-cov)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.84.0"
+          toolchain: "1.94.1"
           components: llvm-tools-preview
 
       - name: Rust Cache
@@ -359,7 +359,7 @@ jobs:
             --ignore-filename-regex '(build\.rs|\.cargo/registry|contracts/.*/wasm_bindgen|__generated__|test_utils)'
 
       - name: Upload Rust coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: backend/lcov.info
@@ -371,7 +371,7 @@ jobs:
     name: Contract TypeScript Bindings
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -381,9 +381,9 @@ jobs:
         with:
           workspaces: backend
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -404,11 +404,11 @@ jobs:
     name: Verify Reproducible Contract Hashes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build & verify hashes
         run: ./scripts/verify.sh
       - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soroban-contracts-${{ github.sha }}
           path: artifacts/
@@ -419,18 +419,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          node-version-file: .nvmrc
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: next-build-${{ github.sha }}
           path: .next/
@@ -440,7 +438,7 @@ jobs:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
       - name: Comment PR with Lighthouse scores
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');

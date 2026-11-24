@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 
-export type WalletType = 'freighter' | 'albedo' | 'xbull' | 'walletconnect';
+export type WalletType = 'freighter' | 'albedo' | 'xbull' | 'passkey' | 'walletconnect';
 export type NetworkType = 'mainnet' | 'testnet' | 'unknown';
 
 interface WalletState {
@@ -39,62 +39,65 @@ interface WalletAdapter {
   getNetwork(): Promise<NetworkType>;
 }
 
-async function getFreighterAdapter(): Promise<WalletAdapter> {
-  const { isConnected, requestAccess, getNetwork } = await import('@stellar/freighter-api');
-  const connection = await isConnected();
-  if (connection.error || !connection.isConnected) {
-    throw new Error('Freighter extension not found');
-  }
-  return {
-    getPublicKey: async () => {
-      // requestAccess prompts for permission the first time and resolves
-      // with the already-authorised address on later calls.
-      const result = await requestAccess();
-      if (result.error || !result.address) {
-        throw new Error('Failed to get public key from Freighter');
+export class StellarWalletsKit {
+  constructor(private wallet: WalletType) {}
+
+  async getAdapter(): Promise<WalletAdapter> {
+    switch (this.wallet) {
+      case 'freighter': {
+        const { isConnected, requestAccess, getNetwork } = await import('@stellar/freighter-api');
+        const connection = await isConnected();
+        if (connection.error || !connection.isConnected) throw new Error('Freighter extension not found');
+        return {
+          getPublicKey: async () => {
+            const result = await requestAccess();
+            if (result.error || !result.address) throw new Error('Failed to get public key from Freighter');
+            return result.address;
+          },
+          getNetwork: async () => {
+            const result = await getNetwork();
+            const n = result.error ? '' : result.network.toLowerCase();
+            if (n.includes('main') || n === 'public') return 'mainnet';
+            if (n.includes('test')) return 'testnet';
+            return 'unknown';
+          },
+        };
       }
-      return result.address;
-    },
-    getNetwork: async () => {
-      const result = await getNetwork();
-      const n = result.error ? '' : result.network.toLowerCase();
-      if (n.includes('main') || n === 'public') return 'mainnet';
-      if (n.includes('test')) return 'testnet';
-      return 'unknown';
-    },
-  };
-}
-
-async function getAlbedoAdapter(): Promise<WalletAdapter> {
-  const albedo = (await import('@albedo-link/intent')).default;
-  return {
-    getPublicKey: async () => {
-      const res = await albedo.publicKey({ require_existing: true });
-      return res.pubkey;
-    },
-    getNetwork: async () => 'unknown',
-  };
-}
-
-async function getXBullAdapter(): Promise<WalletAdapter> {
-  const xbull = (window as any).xBullSDK;
-  if (!xbull) throw new Error('xBull extension not found');
-  return {
-    getPublicKey: async () => {
-      const res = await xbull.connect();
-      return res.publicKey ?? res;
-    },
-    getNetwork: async () => 'unknown',
-  };
+      case 'albedo': {
+        const albedo = (await import('@albedo-link/intent')).default;
+        return {
+          getPublicKey: async () => (await albedo.publicKey({ require_existing: true })).pubkey,
+          getNetwork: async () => 'unknown',
+        };
+      }
+      case 'xbull': {
+        const xbull = (window as any).xBullSDK;
+        if (!xbull) throw new Error('xBull extension not found');
+        return {
+          getPublicKey: async () => {
+            const res = await xbull.connect();
+            return res.publicKey ?? res;
+          },
+          getNetwork: async () => 'unknown',
+        };
+      }
+      case 'passkey': {
+        const passkey = (window as any).passkeyKit;
+        if (!passkey) throw new Error('Passkey wallet provider not found');
+        return {
+          getPublicKey: async () => (await passkey.connect()).address,
+          getNetwork: async () => 'unknown',
+        };
+      }
+      case 'walletconnect':
+        throw new Error('WalletConnect not yet implemented');
+    }
+  }
 }
 
 async function getWalletAdapter(walletType: WalletType): Promise<WalletAdapter> {
-  switch (walletType) {
-    case 'freighter': return getFreighterAdapter();
-    case 'albedo': return getAlbedoAdapter();
-    case 'xbull': return getXBullAdapter();
-    case 'walletconnect': throw new Error('WalletConnect not yet implemented');
-  }
+  const kit = new StellarWalletsKit(walletType);
+  return kit.getAdapter();
 }
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {

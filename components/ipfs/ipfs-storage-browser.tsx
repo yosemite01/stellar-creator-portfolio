@@ -329,9 +329,9 @@ function UploadForm({ onUpload, uploading }: UploadFormProps) {
   );
 }
 
-export function IpfsStorageBrowser() {
-  const [files, setFiles] = useState<IPFSFile[]>([]);
-  const [loading, setLoading] = useState(true);
+export function IpfsStorageBrowser({ initialFiles }: { initialFiles?: IPFSFile[] } = {}) {
+  const [files, setFiles] = useState<IPFSFile[]>(initialFiles ?? []);
+  const [loading, setLoading] = useState(initialFiles ? false : true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -350,8 +350,10 @@ export function IpfsStorageBrowser() {
   }, []);
 
   useEffect(() => {
-    loadFiles();
-  }, [loadFiles]);
+    if (!initialFiles) {
+      loadFiles();
+    }
+  }, [loadFiles, initialFiles]);
 
   const handleUpload = async (file: File, description?: string) => {
     try {

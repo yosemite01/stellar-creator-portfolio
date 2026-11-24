@@ -49,6 +49,12 @@ jobs:
       - name: Template render (dry-run)
         run: helm template stellar helm/ --debug > /dev/null
 
+      # No cluster on the runner, so validate offline against the Kubernetes schemas.
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+
       - name: Validate rendered manifests
         run: |
-          helm template stellar helm/ | kubectl apply --dry-run=client -f -
+          helm template stellar helm/ | kubeconform -strict -summary -ignore-missing-schemas

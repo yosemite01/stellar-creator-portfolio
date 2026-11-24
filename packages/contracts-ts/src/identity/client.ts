@@ -1,4 +1,4 @@
-import {VerificationTier, KycLevel, SocialProof, KycAttestation} from './types.js';
+import {VerificationTier, KycLevel, SocialProof, KycAttestation} from './types';
 import {Spec, AssembledTransaction, Client as ContractClient, ClientOptions as ContractClientOptions, MethodOptions} from '@stellar/stellar-sdk/contract';
 import {Address} from '@stellar/stellar-sdk';
 import { Buffer } from 'buffer';

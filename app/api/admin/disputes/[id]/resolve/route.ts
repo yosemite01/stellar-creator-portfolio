@@ -72,7 +72,11 @@ export async function POST(
 
   // Validate split amounts against the escrow total when provided.
   if (splitAmounts) {
-    const escrowTotal = Number(dispute.amount);
+    const escrow = await prisma.escrow.findUnique({
+      where: { id: dispute.escrowId },
+      select: { amount: true },
+    });
+    const escrowTotal = Number(escrow?.amount);
     const sum = splitAmounts.freelancer + splitAmounts.creator;
     if (!Number.isFinite(escrowTotal) || sum !== escrowTotal) {
       return NextResponse.json(

@@ -183,11 +183,75 @@ function truncateTo5Minutes(date: Date): Date {
 }
 
 /**
+ * Price lookup used for currency conversion.
+ *
+ * Returns the price of `currency` in the reference unit at the given
+ * transaction time. Implementations MUST be time-aware: the returned
+ * price must reflect the historical price at `at`, not the latest price.
+ */
+export type PriceAtTimeFn = (
+  currency: string,
+  at: Date
+) => Promise<number | null>;
+
+/**
+ * Default price lookup. Resolves the historical price from the
+ * `priceHistory` table (one row per currency per timestamp).
+ * Returns null when no price is available at or before `at`.
+ */
+export const defaultPriceAtTime: PriceAtTimeFn = async (currency, at) => {
+  const row = await prisma.priceHistory.findFirst({
+    where: { currency, timestamp: { lte: at } },
+    orderBy: { timestamp: 'desc' },
+  });
+  return row ? Number(row.price) : null;
+};
+
+/**
+ * Convert an amount (in stroops) to the reference unit using the price
+ * at the transaction time. Returns null when no historical price exists
+ * so callers can skip rather than fall back to today's price.
+ */
+export async function convertAtTransactionTime(
+  amount: bigint,
+  currency: string,
+  at: Date,
+  priceAtTime: PriceAtTimeFn = defaultPriceAtTime
+): Promise<bigint | null> {
+  const price = await priceAtTime(currency, at);
+  if (price === null || !Number.isFinite(price)) {
+    return null;
+  }
+  // amount is in stroops (1e7); price is per whole unit.
+  return BigInt(Math.round((Number(amount) / 10_000_000) * price * 10_000_000));
+}
+
+/**
+ * In-memory cache of computed aggregates keyed by corridor + period bucket.
+ * Keeps historical totals stable and avoids recomputation on repeated reads.
+ */
+const aggregateCache = new Map<string, { volume: bigint; count: number }>();
+
+/**
+ * Clear the aggregate cache. Exposed for tests and for invalidation when
+ * the underlying data is re-indexed.
+ */
+export function clearAggregateCache(): void {
+  aggregateCache.clear();
+}
+
+/**
  * Aggregate raw corridor events into corridor_payments table.
  * Groups by source_currency, dest_currency, and 5-minute period bucket.
  * Should be called every 5 minutes by a background job/cron.
+ *
+ * Converted amounts are computed with the price at each event's
+ * transaction time and stored alongside the raw volume so historical
+ * totals do not drift with current prices.
  */
-export async function aggregateCorridorPayments(): Promise<void> {
+export async function aggregateCorridorPayments(
+  priceAtTime: PriceAtTimeFn = defaultPriceAtTime
+): Promise<void> {
   try {
     // Fetch recent PathPayment operations from Stellar Horizon API
     const since = Math.floor(Date.now() / 1000) - 5 * 60; // Last 5 minutes
@@ -201,7 +265,7 @@ export async function aggregateCorridorPayments(): Promise<void> {
     // Group events by (source_currency, dest_currency, 5-minute period)
     const aggregates = new Map<
       string,
-      { volume: bigint; count: number; periodBucket: Date }
+      { volume: bigint; convertedVolume: bigint; count: number; periodBucket: Date }
     >();
 
     for (const event of events) {
@@ -209,13 +273,28 @@ export async function aggregateCorridorPayments(): Promise<void> {
       const periodBucket = truncateTo5Minutes(event.timestamp);
       const aggregateKey = `${key}:${periodBucket.getTime()}`;
 
+      const converted = await convertAtTransactionTime(
+        event.amount,
+        event.sourceCurrency,
+        event.timestamp,
+        priceAtTime
+      );
+      if (converted === null) {
+        console.warn(
+          `No historical price for ${event.sourceCurrency} at ${event.timestamp.toISOString()}; skipping conversion`
+        );
+        continue;
+      }
+
       const existing = aggregates.get(aggregateKey);
       if (existing) {
         existing.volume += event.amount;
+        existing.convertedVolume += converted;
         existing.count += 1;
       } else {
         aggregates.set(aggregateKey, {
           volume: event.amount,
+          convertedVolume: converted,
           count: 1,
           periodBucket,
         });
@@ -236,15 +315,22 @@ export async function aggregateCorridorPayments(): Promise<void> {
         },
         update: {
           volume: data.volume,
+          convertedVolume: data.convertedVolume,
           transactionCount: data.count,
         },
         create: {
           sourceCurrency,
           destCurrency,
           volume: data.volume,
+          convertedVolume: data.convertedVolume,
           transactionCount: data.count,
           periodBucket: data.periodBucket,
         },
+      });
+
+      aggregateCache.set(key, {
+        volume: data.volume,
+        count: data.count,
       });
     }
 
@@ -259,9 +345,28 @@ export async function aggregateCorridorPayments(): Promise<void> {
  * Index a raw corridor payment event.
  * This is called by the Rust indexer or Stellar Horizon listener
  * when a PathPaymentStrictSend or PathPaymentStrictReceive operation is detected.
+ *
+ * The converted amount is computed with the price at the event's
+ * transaction time and stored so historical totals stay stable.
  */
-export async function indexCorridorPayment(event: PathPaymentEvent): Promise<void> {
+export async function indexCorridorPayment(
+  event: PathPaymentEvent,
+  priceAtTime: PriceAtTimeFn = defaultPriceAtTime
+): Promise<void> {
   const periodBucket = truncateTo5Minutes(event.timestamp);
+
+  const converted = await convertAtTransactionTime(
+    event.amount,
+    event.sourceCurrency,
+    event.timestamp,
+    priceAtTime
+  );
+  if (converted === null) {
+    console.warn(
+      `No historical price for ${event.sourceCurrency} at ${event.timestamp.toISOString()}; skipping conversion`
+    );
+    return;
+  }
 
   await prisma.corridorPayment.upsert({
     where: {
@@ -275,6 +380,9 @@ export async function indexCorridorPayment(event: PathPaymentEvent): Promise<voi
       volume: {
         increment: event.amount,
       },
+      convertedVolume: {
+        increment: converted,
+      },
       transactionCount: {
         increment: 1,
       },
@@ -283,8 +391,13 @@ export async function indexCorridorPayment(event: PathPaymentEvent): Promise<voi
       sourceCurrency: event.sourceCurrency,
       destCurrency: event.destCurrency,
       volume: event.amount,
+      convertedVolume: converted,
       transactionCount: 1,
       periodBucket,
     },
   });
+
+  // Invalidate cached aggregate for this corridor so the next read
+  // recomputes from the stored (time-correct) converted amounts.
+  aggregateCache.delete(`${event.sourceCurrency}:${event.destCurrency}`);
 }

@@ -9,14 +9,16 @@ import { Button } from '@/components/ui/button';
 import { DeferredSwapLauncher } from '@/components/streaming/deferred-swap-launcher';
 import { NotificationCenter } from '@/components/notifications/notification-center';
 import { ConnectWalletButton, formatAccount } from '@/components/wallet/connect-wallet-button';
+import { WalletConnectModal } from '@/components/wallet/wallet-connect-modal';
 import { useWallet } from '@/components/wallet/wallet-context';
 
 export function Header() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const { address, network, isConnected, isLoading, connect, disconnect } = useWallet();
+  const { address, network, walletType, isConnected, isLoading, error, connect, disconnect } = useWallet();
   const expectedNetwork: string = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'testnet';
   const networkMismatch = isConnected && network !== 'unknown' && network !== expectedNetwork;
 
@@ -57,7 +59,10 @@ export function Header() {
     <>
     <header className="sticky top-0 z-50 w-full bg-background/75 backdrop-blur-xl border-b border-border/40 shadow-sm">
       {networkMismatch && (
-        <div className="bg-yellow-500/10 border-b border-yellow-500/30 px-4 py-1.5 flex items-center justify-center gap-2 text-xs text-yellow-700 dark:text-yellow-400">
+        <div
+          role="alert"
+          className="bg-yellow-500/10 border-b border-yellow-500/30 px-4 py-1.5 flex items-center justify-center gap-2 text-xs text-yellow-700 dark:text-yellow-400"
+        >
           <AlertTriangle size={14} aria-hidden="true" />
           <span>Wrong network: connected to <strong>{network}</strong>, expected <strong>{expectedNetwork}</strong></span>
         </div>
@@ -109,7 +114,10 @@ export function Header() {
                 <ConnectWalletButton
                   account={address}
                   isLoading={isLoading}
-                  onConnect={isConnected ? disconnect : () => connect('freighter')}
+                  error={error}
+                  aria-haspopup="dialog"
+                  aria-expanded={isWalletModalOpen}
+                  onConnect={() => setIsWalletModalOpen(true)}
                   connectedLabel={address ? formatAccount(address) : undefined}
                   className="hidden sm:inline-flex"
                 />
@@ -144,6 +152,20 @@ export function Header() {
       session={null}
       onSignOut={() => undefined}
       themeToggleSlot={themeToggle}
+    />
+
+    <WalletConnectModal
+      open={isWalletModalOpen}
+      onClose={() => setIsWalletModalOpen(false)}
+      address={address}
+      network={network}
+      expectedNetwork={expectedNetwork}
+      walletType={walletType}
+      isConnected={isConnected}
+      isLoading={isLoading}
+      error={error}
+      onConnect={connect}
+      onDisconnect={disconnect}
     />
     </>
   );

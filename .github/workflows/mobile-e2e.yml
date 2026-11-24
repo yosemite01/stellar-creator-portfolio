@@ -44,7 +44,7 @@ jobs:
           cache-dependency-path: mobile/package-lock.json
 
       - name: Install mobile dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps  # expo-router 4 still declares SDK-52 peers
         working-directory: mobile
 
       - uses: actions/setup-java@v6

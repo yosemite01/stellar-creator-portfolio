@@ -154,7 +154,7 @@ export function validateRequest<S extends z.ZodTypeAny>(
 }
 
 export function formatZodErrors(error: z.ZodError): { field: string; message: string }[] {
-  return error.errors.map((err) => ({
+  return error.issues.map((err) => ({
     field: err.path.join('.'),
     message: err.message,
   }))

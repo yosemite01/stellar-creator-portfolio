@@ -1,6 +1,6 @@
-/// Example demonstrating request ID usage in various scenarios
-/// 
-/// Run with: cargo run --example request_id_usage
+//! Example demonstrating request ID usage in various scenarios
+//!
+//! Run with: cargo run --example request_id_usage
 
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, middleware as actix_middleware};
 use serde_json::json;

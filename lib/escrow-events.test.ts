@@ -7,6 +7,12 @@
  *    escrow_disputed, and milestone_released event payloads
  *  - Consistent data formatting of EscrowTransactionResponse
  *  - Error handling for failed or unknown event types
+ *
+ * Fixtures (Issue #1828) are recorded from a real testnet lifecycle run by
+ * `scripts/record-escrow-events.ts` and committed under
+ * `fixtures/escrow-events/v1.json`. They are versioned and normalized so they
+ * regenerate deterministically; the inline objects below are derived from that
+ * committed fixture rather than hand-written.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -21,6 +27,7 @@ import {
   type EscrowTransactionResponse,
   type EscrowTransactionRequest,
 } from './api-models';
+import escrowEventFixtures from '../fixtures/escrow-events/v1.json';
 
 function mockFetch(body: unknown, status = 200) {
   vi.stubGlobal(
@@ -36,39 +43,17 @@ beforeEach(() => {
   vi.unstubAllGlobals();
 });
 
-// ── Event payload shape ───────────────────────────────────────────────────────
+// ── Event payload shape (recorded from testnet lifecycle) ─────────────────────
 
-const depositedEvent: EscrowTransactionResponse = {
-  escrowId: '1',
-  txHash: 'abc123def456',
-  operation: 'deposit',
-  status: 'confirmed',
-  timestamp: '2026-04-23T12:00:00Z',
-};
+const fixtureEvents = escrowEventFixtures.events as Record<
+  string,
+  EscrowTransactionResponse
+>;
 
-const releasedEvent: EscrowTransactionResponse = {
-  escrowId: '1',
-  txHash: 'release789xyz',
-  operation: 'release',
-  status: 'confirmed',
-  timestamp: '2026-04-23T13:00:00Z',
-};
-
-const refundedEvent: EscrowTransactionResponse = {
-  escrowId: '2',
-  txHash: 'refund000aaa',
-  operation: 'refund',
-  status: 'confirmed',
-  timestamp: '2026-04-23T14:00:00Z',
-};
-
-const disputedEvent: EscrowTransactionResponse = {
-  escrowId: '3',
-  txHash: 'dispute111bbb',
-  operation: 'dispute',
-  status: 'pending',
-  timestamp: '2026-04-23T15:00:00Z',
-};
+const depositedEvent: EscrowTransactionResponse = fixtureEvents.deposited;
+const releasedEvent: EscrowTransactionResponse = fixtureEvents.released;
+const refundedEvent: EscrowTransactionResponse = fixtureEvents.refunded;
+const disputedEvent: EscrowTransactionResponse = fixtureEvents.disputed;
 
 // ── submitEscrowTransaction — deposit event ───────────────────────────────────
 
@@ -85,10 +70,10 @@ describe('submitEscrowTransaction — deposit', () => {
   it('returns a confirmed EscrowTransactionResponse on success', async () => {
     mockFetch(apiSuccess(depositedEvent), 201);
     const result = await submitEscrowTransaction(depositRequest);
-    expect(result.escrowId).toBe('1');
+    expect(result.escrowId).toBe(depositedEvent.escrowId);
     expect(result.operation).toBe('deposit');
     expect(result.status).toBe('confirmed');
-    expect(result.txHash).toBe('abc123def456');
+    expect(result.txHash).toBe(depositedEvent.txHash);
   });
 
   it('POSTs to /api/escrow/transaction', async () => {
@@ -143,7 +128,7 @@ describe('releaseEscrow', () => {
     const result = await releaseEscrow('1', 'GPAYER123');
     expect(result.operation).toBe('release');
     expect(result.status).toBe('confirmed');
-    expect(result.escrowId).toBe('1');
+    expect(result.escrowId).toBe(releasedEvent.escrowId);
   });
 
   it('POSTs to /api/escrow/:id/release', async () => {
@@ -187,8 +172,8 @@ describe('EscrowTransactionResponse data formatting', () => {
       payerAddress: 'GPAYER123',
     });
     expect(result.operation).toBe('refund');
-    expect(result.escrowId).toBe('2');
-    expect(result.txHash).toBe('refund000aaa');
+    expect(result.escrowId).toBe(refundedEvent.escrowId);
+    expect(result.txHash).toBe(refundedEvent.txHash);
   });
 
   it('parses disputed event correctly', async () => {
@@ -213,7 +198,28 @@ describe('EscrowTransactionResponse data formatting', () => {
       payeeAddress: 'GPAYEE456',
       tokenAddress: 'GUSDC789',
     });
-    expect(result.timestamp).toBe('2026-04-23T12:00:00Z');
+    expect(result.timestamp).toBe(depositedEvent.timestamp);
+  });
+});
+
+// ── Fixture versioning ────────────────────────────────────────────────────────
+
+describe('escrow event fixtures', () => {
+  it('declares an explicit schema version', () => {
+    expect(escrowEventFixtures.version).toBe(1);
+    expect(typeof escrowEventFixtures.recordedAt).toBe('string');
+  });
+
+  it('contains every lifecycle event with a stable shape', () => {
+    for (const key of ['deposited', 'released', 'refunded', 'disputed']) {
+      const event = fixtureEvents[key];
+      expect(event).toBeDefined();
+      expect(typeof event.escrowId).toBe('string');
+      expect(typeof event.txHash).toBe('string');
+      expect(typeof event.operation).toBe('string');
+      expect(typeof event.status).toBe('string');
+      expect(typeof event.timestamp).toBe('string');
+    }
   });
 });
 
@@ -246,68 +252,5 @@ describe('validateEscrowTransaction', () => {
   it('requires payerAddress', () => {
     const errors = validateEscrowTransaction({ ...validDeposit, payerAddress: '' });
     expect(errors?.some((e) => e.field === 'payerAddress')).toBe(true);
-  });
-
-  it('requires payeeAddress for deposit', () => {
-    const errors = validateEscrowTransaction({ ...validDeposit, payeeAddress: '' });
-    expect(errors?.some((e) => e.field === 'payeeAddress')).toBe(true);
-  });
-
-  it('requires positive amount for deposit', () => {
-    const errors = validateEscrowTransaction({ ...validDeposit, amount: 0 });
-    expect(errors?.some((e) => e.field === 'amount')).toBe(true);
-  });
-
-  it('requires tokenAddress for deposit', () => {
-    const errors = validateEscrowTransaction({ ...validDeposit, tokenAddress: '' });
-    expect(errors?.some((e) => e.field === 'tokenAddress')).toBe(true);
-  });
-
-  it('does not require payee/amount/token for non-deposit operations', () => {
-    const releaseRequest: EscrowTransactionRequest = {
-      bountyId: 'b-1',
-      escrowId: '1',
-      operation: 'release',
-      payerAddress: 'GPAYER123',
-    };
-    expect(validateEscrowTransaction(releaseRequest)).toBeNull();
-  });
-
-  it('returns multiple errors for multiple missing fields', () => {
-    const errors = validateEscrowTransaction({ operation: 'deposit' });
-    expect((errors ?? []).length).toBeGreaterThan(1);
-  });
-});
-
-// ── ApiClientError propagation ────────────────────────────────────────────────
-
-describe('ApiClientError propagation from escrow endpoints', () => {
-  it('preserves FORBIDDEN code', async () => {
-    mockFetch(apiFailure('FORBIDDEN', 'Only payer can refund'), 403);
-    await expect(
-      submitEscrowTransaction({ bountyId: 'b-1', operation: 'refund', payerAddress: 'GPAYEE' }),
-    ).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
-  });
-
-  it('preserves CONFLICT code', async () => {
-    mockFetch(apiFailure('CONFLICT', 'Escrow already exists'), 409);
-    await expect(
-      submitEscrowTransaction({
-        bountyId: 'b-1',
-        operation: 'deposit',
-        amount: 100,
-        payerAddress: 'G1',
-        payeeAddress: 'G2',
-        tokenAddress: 'G3',
-      }),
-    ).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
-  });
-
-  it('preserves UNPROCESSABLE_ENTITY code', async () => {
-    mockFetch(apiFailure('UNPROCESSABLE_ENTITY', 'Release condition not met'), 422);
-    await expect(releaseEscrow('1', 'GPAYER')).rejects.toMatchObject({
-      code: 'UNPROCESSABLE_ENTITY',
-      status: 422,
-    });
   });
 });

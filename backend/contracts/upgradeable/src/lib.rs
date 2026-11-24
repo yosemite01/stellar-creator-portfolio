@@ -1,4 +1,9 @@
 #![no_std]
+// `Events::publish` and `update_current_contract_wasm` are deprecated in
+// soroban-sdk 23+. Moving to `#[contractevent]` changes the on-chain topic/data
+// layout that indexers decode (see the event docs on each function), so keep
+// the existing calls until that migration is done for all contracts at once.
+#![allow(deprecated)]
 
 //! Shared upgrade and admin-transfer pattern for the canonical contracts
 //! (Issue #1564).
@@ -240,4 +245,130 @@ pub fn cancel_admin_transfer(env: &Env, caller: &Address, stored_admin: &Address
 /// The nominated-but-not-yet-accepted admin, if any.
 pub fn pending_admin(env: &Env) -> Option<Address> {
     env.storage().persistent().get(&UpgradeKey::UpgPendingAdmin)
+}
+
+// ── Shared conformance tests (Issue #1719) ───────────────────────────────────
+
+/// Generates the standard upgrade-timelock conformance tests for a contract
+/// that exposes the shared `propose_upgrade` / `execute_upgrade` /
+/// `cancel_upgrade` / `get_pending_upgrade` entrypoints.
+///
+/// Every canonical contract invokes this once so "execute before the delay
+/// fails" is proven per contract, not just for the library:
+///
+/// ```ignore
+/// stellar_upgradeable::upgrade_timelock_tests!(
+///     upgrade_conformance, MyContract, MyContractClient,
+///     |env, id, admin| { MyContractClient::new(&env, &id).initialize(&admin); }
+/// );
+/// ```
+///
+/// The init block receives the `Env`, the registered contract id and the
+/// admin address, and must leave the contract with `admin` as its upgrade
+/// authority.
+#[macro_export]
+macro_rules! upgrade_timelock_tests {
+    ($mod_name:ident, $contract:expr, $client:ident, |$env:ident, $id:ident, $admin:ident| $init:block) => {
+        $crate::upgrade_timelock_tests!(@inner $mod_name, $client, $env, $id, $admin,
+            $env.register($contract, ()), $init);
+    };
+    // For contracts whose `__constructor(admin)` sets the upgrade authority.
+    ($mod_name:ident, $contract:expr, $client:ident, constructor_admin) => {
+        $crate::upgrade_timelock_tests!(@inner $mod_name, $client, env, id, admin,
+            env.register($contract, (admin.clone(),)), {});
+    };
+    (@inner $mod_name:ident, $client:ident, $env:ident, $id:ident, $admin:ident, $register:expr, $init:block) => {
+        #[cfg(test)]
+        mod $mod_name {
+            #[allow(unused_imports)]
+            use super::*;
+            use soroban_sdk::testutils::{Address as _, Ledger as _};
+
+            fn hash(env: &soroban_sdk::Env) -> soroban_sdk::BytesN<32> {
+                soroban_sdk::BytesN::from_array(env, &[7u8; 32])
+            }
+
+            fn setup() -> (soroban_sdk::Env, soroban_sdk::Address, soroban_sdk::Address) {
+                let $env = soroban_sdk::Env::default();
+                $env.mock_all_auths();
+                $env.ledger().set_timestamp(1_000_000);
+                let $admin = soroban_sdk::Address::generate(&$env);
+                let $id = $register;
+                $init
+                ($env, $id, $admin)
+            }
+
+            fn contract_error(code: u32) -> soroban_sdk::Error {
+                soroban_sdk::Error::from_contract_error(code)
+            }
+
+            #[test]
+            fn propose_enforces_minimum_delay() {
+                let (env, id, admin) = setup();
+                let client = $client::new(&env, &id);
+                let at = client.propose_upgrade(&admin, &hash(&env));
+                assert_eq!(at, 1_000_000 + $crate::UPGRADE_TIMELOCK_SECS);
+                let pending = client.get_pending_upgrade().unwrap();
+                assert_eq!(pending.executable_at, at);
+                assert_eq!(pending.wasm_hash, hash(&env));
+            }
+
+            #[test]
+            fn execute_before_delay_fails() {
+                let (env, id, admin) = setup();
+                let client = $client::new(&env, &id);
+                let at = client.propose_upgrade(&admin, &hash(&env));
+
+                // Immediately after proposing.
+                let err = client.try_execute_upgrade(&admin).err().unwrap().unwrap();
+                assert_eq!(err, contract_error($crate::UpgradeError::TimelockNotElapsed as u32));
+
+                // One second before the timelock ends.
+                env.ledger().set_timestamp(at - 1);
+                let err = client.try_execute_upgrade(&admin).err().unwrap().unwrap();
+                assert_eq!(err, contract_error($crate::UpgradeError::TimelockNotElapsed as u32));
+
+                // Proposal is still pending after the failed attempts.
+                assert!(client.get_pending_upgrade().is_some());
+            }
+
+            #[test]
+            fn execute_without_proposal_fails() {
+                let (env, id, admin) = setup();
+                let client = $client::new(&env, &id);
+                let err = client.try_execute_upgrade(&admin).err().unwrap().unwrap();
+                assert_eq!(err, contract_error($crate::UpgradeError::NoPendingUpgrade as u32));
+            }
+
+            #[test]
+            fn non_admin_cannot_propose_or_execute() {
+                let (env, id, admin) = setup();
+                let client = $client::new(&env, &id);
+                let attacker = soroban_sdk::Address::generate(&env);
+                let err = client
+                    .try_propose_upgrade(&attacker, &hash(&env))
+                    .err()
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(err, contract_error($crate::UpgradeError::Unauthorized as u32));
+
+                let at = client.propose_upgrade(&admin, &hash(&env));
+                env.ledger().set_timestamp(at);
+                let err = client.try_execute_upgrade(&attacker).err().unwrap().unwrap();
+                assert_eq!(err, contract_error($crate::UpgradeError::Unauthorized as u32));
+            }
+
+            #[test]
+            fn cancel_clears_pending_and_blocks_execute() {
+                let (env, id, admin) = setup();
+                let client = $client::new(&env, &id);
+                let at = client.propose_upgrade(&admin, &hash(&env));
+                client.cancel_upgrade(&admin);
+                assert!(client.get_pending_upgrade().is_none());
+                env.ledger().set_timestamp(at);
+                let err = client.try_execute_upgrade(&admin).err().unwrap().unwrap();
+                assert_eq!(err, contract_error($crate::UpgradeError::NoPendingUpgrade as u32));
+            }
+        }
+    };
 }

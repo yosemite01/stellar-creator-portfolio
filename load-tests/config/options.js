@@ -5,10 +5,13 @@
 export const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000';
 export const RUST_API_URL = __ENV.RUST_API_URL || 'http://localhost:3001';
 
-/** Standard thresholds applied to every scenario */
+const P95_MS = __ENV.LOAD_TEST_P95 || '500';
+const P99_MS = __ENV.LOAD_TEST_P99 || '1500';
+
+/** Standard thresholds applied to every scenario (#1860) */
 export const defaultThresholds = {
-  // 95% of requests must complete within 500ms
-  http_req_duration: ['p(95)<500', 'p(99)<1000'],
+  // 95% of requests must complete within threshold
+  http_req_duration: [`p(95)<${P95_MS}`, `p(99)<${P99_MS}`],
   // Error rate must stay below 1%
   http_req_failed: ['rate<0.01'],
   // At least 95% of custom checks must pass

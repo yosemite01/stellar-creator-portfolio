@@ -5,7 +5,7 @@
 /// the Soroban contracts indexed by the event indexer.
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
 use deadpool_redis::{redis::AsyncCommands, Pool};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;

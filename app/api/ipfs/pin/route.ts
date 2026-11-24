@@ -3,6 +3,15 @@ import { getServerSession } from '@/lib/auth/auth';
 import { checkPinRateLimit } from '@/lib/rate-limit';
 import { maxUploadBytes, validatePinnedBytes } from '@/lib/storage/upload-validation';
 import { writeAuditLog } from '@/server/services/audit';
+import {
+  getPinners,
+  MultiProviderPinner,
+  PinUnavailableError,
+  type ProviderPinOutcome,
+} from '@/lib/ipfs/pinner';
+import { buildGatewayUrl } from '@/lib/ipfs/gateways';
+import { prisma } from '@/lib/prisma';
+import { revalidateIpfsFiles } from '@/lib/cache/revalidate';
 
 // nodejs runtime: session auth, in-memory quota and Prisma-backed audit log
 // are unavailable on the edge runtime.
@@ -10,6 +19,53 @@ export const runtime = 'nodejs';
 
 function sha256ToCid(sha256: string): string {
   return `bafy${sha256.slice(0, 52)}`;
+}
+
+async function persistPinReplicas(
+  cid: string,
+  sha256: string,
+  size: number,
+  ownerId: string,
+  outcomes: ProviderPinOutcome[],
+): Promise<void> {
+  try {
+    await prisma.pinnedFile.upsert({
+      where: { cid },
+      update: {},
+      create: { cid, sha256, size, ownerId },
+    });
+
+    const now = new Date();
+    await Promise.allSettled(
+      outcomes.map((outcome) =>
+        prisma.ipfsPinReplica.upsert({
+          where: { cid_provider: { cid, provider: outcome.provider } },
+          update: {
+            providerPinId: outcome.providerPinId ?? undefined,
+            status: outcome.ok ? 'PINNED' : 'FAILED',
+            lastCheckedAt: now,
+            lastHealthyAt: outcome.ok ? now : undefined,
+            consecutiveFailures: outcome.ok ? 0 : { increment: 1 },
+            lastLatencyMs: outcome.latencyMs,
+            lastError: outcome.ok ? null : (outcome.error ?? 'Pin failed'),
+          },
+          create: {
+            cid,
+            provider: outcome.provider,
+            providerPinId: outcome.providerPinId ?? null,
+            status: outcome.ok ? 'PINNED' : 'FAILED',
+            lastCheckedAt: now,
+            lastHealthyAt: outcome.ok ? now : null,
+            consecutiveFailures: outcome.ok ? 0 : 1,
+            lastLatencyMs: outcome.latencyMs,
+            lastError: outcome.ok ? null : (outcome.error ?? 'Pin failed'),
+          },
+        }),
+      ),
+    );
+  } catch {
+    // Best-effort persistence when DB is unavailable in isolated tests.
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -35,7 +91,7 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Expected multipart form data' }, { status: 400 });
   }
-  const file = form.get('file') as Blob | null;
+  const file = form.get('file') as (Blob & { name?: string }) | null;
   // Duck-type on arrayBuffer(): a Blob in the runtime realm, but jsdom/undici
   // hand back a File from a different realm, so `instanceof Blob` is unreliable.
   if (!file || typeof file.arrayBuffer !== 'function') {
@@ -60,17 +116,75 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Hash mismatch' }, { status: 422 });
   }
 
-  const cid = sha256ToCid(sha256);
-  const gatewayUrl = `https://ipfs.io/ipfs/${cid}`;
+  const configuredProviders = getPinners();
+  let cid: string;
+  let size = bytes.byteLength;
+  let providers: ProviderPinOutcome[] | undefined;
+  let redundancy: { target: number; achieved: number; met: boolean; degraded: boolean } | undefined;
 
-  // Best-effort, non-blocking audit trail of who pinned what.
+  if (configuredProviders.length > 0) {
+    const minProviders = Number(process.env.IPFS_MIN_PIN_PROVIDERS);
+    const targetRedundancy =
+      Number.isFinite(minProviders) && minProviders > 0 ? minProviders : 2;
+    const requireQuorum = process.env.IPFS_REQUIRE_QUORUM === 'true';
+
+    const multi = new MultiProviderPinner(configuredProviders, {
+      targetRedundancy,
+      requireQuorum,
+    });
+
+    try {
+      const fileName = typeof file.name === 'string' && file.name ? file.name : `upload-${sha256.slice(0, 12)}`;
+      const result = await multi.pin(new Blob([bytes]), fileName);
+      cid = result.cid;
+      size = result.size > 0 ? result.size : bytes.byteLength;
+      providers = result.outcomes;
+      redundancy = {
+        target: targetRedundancy,
+        achieved: result.succeededProviders.length,
+        met: result.redundancyMet,
+        degraded: result.degraded,
+      };
+      await persistPinReplicas(cid, sha256, size, session.user.id, result.outcomes);
+    } catch (err) {
+      const message =
+        err instanceof PinUnavailableError
+          ? err.message
+          : 'IPFS pinning service is currently unavailable';
+      return NextResponse.json({ error: message }, { status: 503 });
+    }
+  } else if (process.env.IPFS_REQUIRE_PROVIDERS === 'true') {
+    return NextResponse.json(
+      { error: 'No IPFS pinning providers configured' },
+      { status: 503 },
+    );
+  } else {
+    cid = sha256ToCid(sha256);
+  }
+
+  const gatewayUrl = buildGatewayUrl(cid, 0);
+
+  // Best-effort, non-blocking audit trail & RSC cache revalidation.
   writeAuditLog({
     userId: session.user.id,
     resource: 'ipfs',
     action: 'pin',
     resourceId: cid,
-    payload: { cid, size: bytes.byteLength },
+    payload: {
+      cid,
+      size,
+      ...(redundancy ? { redundancy } : {}),
+    },
   }).catch(() => {});
 
-  return NextResponse.json({ cid, sha256, size: bytes.byteLength, gatewayUrl });
+  void revalidateIpfsFiles();
+
+  return NextResponse.json({
+    cid,
+    sha256,
+    size,
+    gatewayUrl,
+    ...(providers ? { providers } : {}),
+    ...(redundancy ? { redundancy } : {}),
+  });
 }

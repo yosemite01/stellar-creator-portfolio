@@ -4,6 +4,7 @@ import GoogleProvider from 'next-auth/providers/google';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { upsertOAuthUser } from '@/lib/auth/oauth-user';
+import { revokeToken } from '@/lib/auth/revocation';
 
 // Legacy scheme (pre-fix): every account shared this one hardcoded salt,
 // which defeats the point of salting. Kept only so accounts hashed before
@@ -33,6 +34,12 @@ function verifyPassword(password: string, stored: string): boolean {
   if (hash.length !== storedHash.length) return false;
   return timingSafeEqual(hash, storedHash);
 }
+
+// RSA keys for the JWKS endpoint live in lib/auth/keys.ts and are loaded on
+// demand there; loading them at import time broke builds without key files.
+
+// Token expiration times
+const SESSION_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: 'jwt' },
@@ -140,3 +147,4 @@ export const authOptions: NextAuthOptions = {
 };
 
 export { hashPassword };
+

@@ -13,8 +13,7 @@
 
 import { onEvent, onAnyEvent } from '@/server/services/events';
 import { logger } from '@/lib/logger';
-import { enqueueEmail } from '@/lib/email/mailer';
-import { notifyMatchedCreators } from '@/lib/matching-engine';
+import { matchCreatorsForBounty } from '@/lib/match-creators';
 
 // ── Idempotency ───────────────────────────────────────────────────────────────
 
@@ -54,16 +53,8 @@ onEvent('BountyCreated', async ({ payload, eventId, createdAt }) => {
     return;
   }
 
-  // Non-blocking: push email job to queue
-  await enqueueEmail('bounty-created', {
-    bountyId: payload.bountyId,
-    creatorId: payload.creatorId,
-    title: payload.title,
-    budget: payload.budget,
-  });
-
-  // Notify creators matched to this bounty.
-  await notifyMatchedCreators(payload.bountyId);
+  // Notify the best-matched creators (in-app MatchNotification rows).
+  await matchCreatorsForBounty(payload.bountyId);
 });
 
 // ── BountyUpdated ─────────────────────────────────────────────────────────────

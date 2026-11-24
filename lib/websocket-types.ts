@@ -131,6 +131,29 @@ export interface WebSocketMessage<T = WebSocketEventPayload> {
   type: 'bounty.updated' | 'creator.updated' | 'application.updated';
   data: T;
   timestamp: number;
+  /**
+   * Monotonically increasing sequence number assigned by the server.
+   * Clients track the last seen value and send it back on reconnect so
+   * the server can resume delivery (see WebSocketResumeRequest).
+   */
+  seq?: number;
+}
+
+// Resume / replay support for horizontally scaled deployments
+export interface WebSocketResumeRequest {
+  type: 'resume';
+  /** Last sequence number the client successfully processed. */
+  lastSeq: number;
+}
+
+export interface WebSocketResumeResult {
+  type: 'resume.result';
+  /** True when the server could replay everything after lastSeq. */
+  resumed: boolean;
+  /** Highest sequence number the server has emitted so far. */
+  latestSeq: number;
+  /** Number of buffered messages replayed to the client. */
+  replayed: number;
 }
 
 // Connection lifecycle events emitted by the consolidated client

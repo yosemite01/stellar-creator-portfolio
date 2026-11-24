@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma';
-import { encryptField } from '@/lib/kyc-encryption';
+import { encryptFieldsWithEnvelope } from '@/lib/kyc-envelope-encryption';
 import { KYCDocumentType } from '@prisma/client';
 import { z } from 'zod';
 
@@ -11,7 +11,13 @@ import { z } from 'zod';
  * Accepts OCR-extracted document fields from the mobile app's
  * `OCRKYCService` scan flow and creates (or replaces, if previously
  * rejected) the caller's `KYCSubmission` record. Extracted PII is encrypted
- * before it ever reaches the database (Issue #782).
+ * with envelope encryption before it ever reaches the database.
+ *
+ * Envelope encryption provides:
+ * - Per-record DEK (Data Encryption Key) for each submission
+ * - KMS CMK encryption of DEKs
+ * - Key versioning for rotation support
+ * - AAD binding for tamper detection (user ID + field name)
  *
  * Body:
  *   documentType: "PASSPORT" | "DRIVER_LICENSE" | "NATIONAL_ID"
@@ -92,6 +98,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const userId = session.user.id;
+
   let rawBody: unknown;
   try {
     rawBody = await req.json();
@@ -124,34 +132,41 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const [encryptedName, encryptedDOB, encryptedIdNumber] = await Promise.all([
-    encryptField(name),
-    encryptField(dateOfBirth),
-    encryptField(idNumber),
-  ]);
+  // Encrypt PII fields with envelope encryption
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
 
-  const uploadedAt = new Date();
-  const expiresAt = new Date(uploadedAt.getTime() + 90 * 24 * 60 * 60 * 1000);
+  const encryptedFields = await encryptFieldsWithEnvelope(
+    {
+      name,
+      dateOfBirth,
+      idNumber,
+    },
+    userId,
+  );
 
   const submission = await prisma.kYCSubmission.upsert({
     where: { userId: session.user.id },
     create: {
       userId: session.user.id,
       documentType,
-      uploadedAt,
+      uploadedAt: now,
       expiresAt,
-      encryptedName,
-      encryptedDOB,
-      encryptedIdNumber,
+      encryptedName: encryptedFields.name!,
+      encryptedDOB: encryptedFields.dateOfBirth!,
+      encryptedIdNumber: encryptedFields.idNumber!,
       status: 'PENDING',
+      // Key metadata for envelope encryption
+      keyId: 'default', // Will be updated by background job
+      keyVersion: 'v1',
     },
     update: {
       documentType,
-      uploadedAt,
+      uploadedAt: now,
       expiresAt,
-      encryptedName,
-      encryptedDOB,
-      encryptedIdNumber,
+      encryptedName: encryptedFields.name!,
+      encryptedDOB: encryptedFields.dateOfBirth!,
+      encryptedIdNumber: encryptedFields.idNumber!,
       status: 'PENDING',
       adminReviewedBy: null,
       adminReviewedAt: null,

@@ -1,4 +1,4 @@
-import { supabaseServer } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 
 export interface SearchFilters {
   query?: string;
@@ -24,132 +24,161 @@ export interface BountyFilters {
   offset?: number;
 }
 
-// Advanced search for creators with multiple filters
+/**
+ * Advanced search for creators with multiple filters (#1760: unified on Prisma).
+ */
 export async function searchCreators(filters: SearchFilters) {
-  let query = supabaseServer
-    .from('creators')
-    .select('*, users:user_id(id, email, name, avatar_url)', { count: 'exact' });
+  const limit = filters.limit || 10;
+  const offset = filters.offset || 0;
 
-  // Text search
+  const where: Record<string, any> = {};
+
   if (filters.query) {
-    query = query.ilike('bio', `%${filters.query}%`)
-      .or(`title.ilike.%${filters.query}%`);
+    where.OR = [
+      { displayName: { contains: filters.query, mode: 'insensitive' } },
+      { bio: { contains: filters.query, mode: 'insensitive' } },
+    ];
   }
 
-  // Filter by discipline
   if (filters.discipline) {
-    query = query.eq('discipline', filters.discipline);
+    where.discipline = { equals: filters.discipline, mode: 'insensitive' };
   }
 
-  // Filter by skills (array contains)
   if (filters.skills && filters.skills.length > 0) {
-    // Note: This assumes skills are stored as an array type in Supabase
-    query = query.contains('skills', filters.skills);
+    where.skills = { hasSome: filters.skills };
   }
 
-  // Filter by hourly rate range
-  if (filters.minRate !== undefined) {
-    query = query.gte('hourly_rate', filters.minRate);
-  }
-  
-  if (filters.maxRate !== undefined) {
-    query = query.lte('hourly_rate', filters.maxRate);
-  }
-
-  // Filter by availability
-  if (filters.availability) {
-    query = query.eq('availability', filters.availability);
-  }
-
-  // Filter by minimum rating
   if (filters.minRating !== undefined) {
-    query = query.gte('rating', filters.minRating);
+    where.rating = { gte: filters.minRating };
   }
 
-  // Apply sorting and pagination
-  const limit = filters.limit || 10;
-  const offset = filters.offset || 0;
+  try {
+    const [data, total] = await Promise.all([
+      prisma.creatorProfile.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              image: true,
+            },
+          },
+        },
+        orderBy: [{ rating: 'desc' }, { completedProjects: 'desc' }],
+        skip: offset,
+        take: limit,
+      }),
+      prisma.creatorProfile.count({ where }),
+    ]);
 
-  query = query
-    .order('rating', { ascending: false })
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1);
+    const formatted = data.map((c: any) => ({
+      ...c,
+      title: c.displayName,
+      users: c.user,
+    }));
 
-  const { data, error, count } = await query;
-
-  return { data, error, count, limit, offset };
+    return { data: formatted, error: null, count: total, limit, offset };
+  } catch (error: any) {
+    return { data: [], error, count: 0, limit, offset };
+  }
 }
 
-// Advanced search for bounties with multiple filters
+/**
+ * Advanced search for bounties with multiple filters (#1760: unified on Prisma).
+ */
 export async function searchBounties(filters: BountyFilters) {
-  let query = supabaseServer
-    .from('bounties')
-    .select('*', { count: 'exact' });
-
-  // Text search
-  if (filters.query) {
-    query = query.ilike('title', `%${filters.query}%`)
-      .or(`description.ilike.%${filters.query}%`);
-  }
-
-  // Filter by difficulty
-  if (filters.difficulty) {
-    query = query.eq('difficulty', filters.difficulty);
-  }
-
-  // Filter by category
-  if (filters.category) {
-    query = query.eq('category', filters.category);
-  }
-
-  // Filter by budget range
-  if (filters.minBudget !== undefined) {
-    query = query.gte('budget', filters.minBudget);
-  }
-
-  if (filters.maxBudget !== undefined) {
-    query = query.lte('budget', filters.maxBudget);
-  }
-
-  // Filter by status
-  if (filters.status) {
-    query = query.eq('status', filters.status);
-  }
-
-  // Filter by tags (array overlaps)
-  if (filters.tags && filters.tags.length > 0) {
-    query = query.overlaps('tags', filters.tags);
-  }
-
-  // Apply sorting and pagination
   const limit = filters.limit || 10;
   const offset = filters.offset || 0;
 
-  query = query
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1);
+  const where: Record<string, any> = {};
 
-  const { data, error, count } = await query;
+  if (filters.query) {
+    where.OR = [
+      { title: { contains: filters.query, mode: 'insensitive' } },
+      { description: { contains: filters.query, mode: 'insensitive' } },
+    ];
+  }
 
-  return { data, error, count, limit, offset };
+  if (filters.difficulty) {
+    where.difficulty = filters.difficulty.toLowerCase();
+  }
+
+  if (filters.category) {
+    where.category = { equals: filters.category, mode: 'insensitive' };
+  }
+
+  if (filters.minBudget !== undefined || filters.maxBudget !== undefined) {
+    where.budget = {};
+    if (filters.minBudget !== undefined) where.budget.gte = filters.minBudget;
+    if (filters.maxBudget !== undefined) where.budget.lte = filters.maxBudget;
+  }
+
+  if (filters.status) {
+    where.status = filters.status.toUpperCase();
+  }
+
+  if (filters.tags && filters.tags.length > 0) {
+    where.tags = { hasSome: filters.tags };
+  }
+
+  try {
+    const [data, total] = await Promise.all([
+      prisma.bounty.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+      }),
+      prisma.bounty.count({ where }),
+    ]);
+
+    return { data, error: null, count: total, limit, offset };
+  } catch (error: any) {
+    return { data: [], error, count: 0, limit, offset };
+  }
 }
 
-// Get search suggestions for autocomplete
+/**
+ * Get search suggestions for autocomplete (#1760: unified on Prisma).
+ */
 export async function getCreatorSearchSuggestions(query: string) {
   if (query.length < 2) {
     return [];
   }
 
-  const { data } = await supabaseServer
-    .from('creators')
-    .select('id, title, bio, skills')
-    .ilike('title', `%${query}%`)
-    .limit(5);
+  try {
+    const creators = await prisma.creatorProfile.findMany({
+      where: {
+        OR: [
+          { displayName: { contains: query, mode: 'insensitive' } },
+          { bio: { contains: query, mode: 'insensitive' } },
+        ],
+      },
+      select: {
+        id: true,
+        displayName: true,
+        bio: true,
+        skills: true,
+      },
+      take: 5,
+    });
 
-  return data || [];
+    return creators.map((c) => ({
+      id: c.id,
+      title: c.displayName,
+      bio: c.bio,
+      skills: c.skills,
+    }));
+  } catch {
+    return [];
+  }
 }
 
-// Parse search operators (e.g., "discipline:design skill:figma")
+/**
+ * Parse search operators (e.g., "discipline:design skill:figma")
+ */
 export function parseSearchOperators(query: string): SearchFilters {
   const filters: SearchFilters = {};
   const parts = query.split(' ');
@@ -158,7 +187,7 @@ export function parseSearchOperators(query: string): SearchFilters {
   for (const part of parts) {
     if (part.includes(':')) {
       const [key, value] = part.split(':');
-      
+
       switch (key) {
         case 'discipline':
           filters.discipline = value;
@@ -168,10 +197,10 @@ export function parseSearchOperators(query: string): SearchFilters {
           filters.skills.push(value);
           break;
         case 'minrate':
-          filters.minRate = parseInt(value);
+          filters.minRate = parseInt(value, 10);
           break;
         case 'maxrate':
-          filters.maxRate = parseInt(value);
+          filters.maxRate = parseInt(value, 10);
           break;
         case 'rating':
           filters.minRating = parseFloat(value);

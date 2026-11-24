@@ -27,6 +27,7 @@
 //! ```
 
 pub mod consul;
+pub mod k8s;
 pub mod r#static;
 
 use anyhow::Result;
@@ -85,17 +86,23 @@ pub trait ServiceDiscovery: Send + Sync {
 }
 
 /// Create the appropriate [`ServiceDiscovery`] backend based on environment
-/// variables.
+/// variables (#1756).
 ///
+/// - If `KUBERNETES_SERVICE_HOST` or `DISCOVERY_TYPE=k8s` is set, uses native Kubernetes DNS.
 /// - If `CONSUL_HTTP_ADDR` is set, returns a Consul-backed implementation.
-/// - Otherwise, returns a static/env-based implementation.
+/// - Otherwise, returns a static/env-based implementation (default for local dev).
 pub async fn create_discovery() -> Result<Box<dyn ServiceDiscovery>> {
-    if let Ok(consul_addr) = std::env::var("CONSUL_HTTP_ADDR") {
+    if std::env::var("KUBERNETES_SERVICE_HOST").is_ok()
+        || std::env::var("DISCOVERY_TYPE").as_deref() == Ok("k8s")
+    {
+        tracing::info!("Service discovery: Kubernetes DNS native resolution (#1756)");
+        Ok(Box::new(k8s::K8sDnsDiscovery::new(None)))
+    } else if let Ok(consul_addr) = std::env::var("CONSUL_HTTP_ADDR") {
         tracing::info!("Service discovery: Consul at {consul_addr}");
         let client = consul::ConsulDiscovery::new(&consul_addr)?;
         Ok(Box::new(client))
     } else {
-        tracing::info!("Service discovery: static/env fallback (set CONSUL_HTTP_ADDR to enable Consul)");
+        tracing::info!("Service discovery: static/env fallback (Consul dropped in dev, native k8s DNS in prod)");
         Ok(Box::new(r#static::StaticDiscovery::from_env()))
     }
 }
@@ -154,5 +161,15 @@ mod tests {
             consul_disc.is_ok(),
             "picking the Consul backend must not require a reachable Consul server"
         );
+    }
+
+    #[tokio::test]
+    async fn k8s_dns_discovery_resolves_service_names() {
+        let disc = k8s::K8sDnsDiscovery::new(Some("stellar".to_string()));
+        let resolved = disc.resolve("stellar-api").await.unwrap();
+        assert!(resolved.is_some());
+        let info = resolved.unwrap();
+        assert_eq!(info.address, "stellar-api.stellar.svc.cluster.local");
+        assert_eq!(info.port, 3001);
     }
 }

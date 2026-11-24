@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next';
-import { headers } from 'next/headers';
 
 import { Analytics } from '@vercel/analytics/next';
+import { WebVitalsReporter } from '@/components/analytics/web-vitals-reporter';
 import { ThemeProvider } from 'next-themes';
 import { LayoutProvider } from '@/components/layout/layout-provider';
 import { DataLoaderProvider } from '@/components/providers/data-loader-provider';
@@ -76,9 +76,6 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Per-request nonce set by middleware.ts; forwarded to <Script nonce>.
-  const nonce = (await headers()).get('x-nonce') ?? undefined;
-
   return (
     <html lang="en" suppressHydrationWarning className="scroll-smooth">
       <body className="font-sans antialiased transition-smooth">
@@ -99,7 +96,9 @@ export default async function RootLayout({
               </TRPCProvider>
             </WalletProvider>
           </SessionProvider>
-          <Analytics nonce={nonce} />
+          {/* @vercel/analytics has no nonce prop; CSP must allow its script origin. */}
+          <Analytics />
+          <WebVitalsReporter />
         </ThemeProvider>
       </body>
     </html>

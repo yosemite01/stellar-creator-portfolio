@@ -209,6 +209,17 @@ export const appRouter = router({
         return profiles.map(toCreator);
       }),
 
+    /** Headline counts for the landing page. */
+    stats: publicProcedure
+      .use(rateLimit({ windowMs: 60_000, max: 60 }))
+      .query(async () => {
+        const [creatorCount, projectCount] = await Promise.all([
+          prisma.creatorProfile.count(),
+          prisma.project.count(),
+        ]);
+        return { creatorCount, projectCount };
+      }),
+
     list: publicProcedure
       .input(
         z.object({
@@ -519,8 +530,8 @@ export const appRouter = router({
     verifyZk: publicProcedure
       .input(
         z.object({
-          proof: z.record(z.unknown()),
-          publicInputs: z.record(z.unknown()),
+          proof: z.record(z.string(), z.unknown()),
+          publicInputs: z.record(z.string(), z.unknown()),
           nullifier: z.string(),
         })
       )

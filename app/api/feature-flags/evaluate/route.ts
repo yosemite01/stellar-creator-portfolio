@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { evaluateFlag } from '@/lib/feature-flags/service';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/config';
+import { requireAuth } from '@/server/services/authorization';
 
 export const runtime = 'nodejs'; // needs Prisma + Redis
 
@@ -25,6 +26,11 @@ export async function GET(req: NextRequest) {
   const userId = session?.user
     ? (session.user as { id?: string }).id
     : searchParams.get('userId') ?? undefined;
+
+  // If user is present in session, require authentication
+  if (userId) {
+    requireAuth({ user: session?.user });
+  }
 
   const ctx = {
     userId,

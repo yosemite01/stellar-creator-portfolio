@@ -27,7 +27,8 @@ export function generateApiKey(options?: {
   const secret = randomBytes(24).toString('hex');
   const rawKey = `${API_KEY_PREFIX}${prefix}_${secret}`;
   const keyHash = hashApiKey(secret);
-  const scopes = options?.scopes && options.scopes.length > 0 ? options.scopes : ['read-only'];
+  const scopes: ApiKeyScope[] =
+    options?.scopes && options.scopes.length > 0 ? options.scopes : ['read-only'];
   const expiresAt =
     options?.expiresAt ?? new Date(Date.now() + (options?.ttlMs ?? DEFAULT_API_KEY_TTL_MS));
   return { rawKey, prefix, keyHash, scopes, expiresAt };

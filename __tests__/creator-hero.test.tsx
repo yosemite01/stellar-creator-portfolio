@@ -30,4 +30,18 @@ describe('CreatorHeroSection hero image', () => {
     expect(heroImage.getAttribute('loading')).toBe('eager');
     expect(heroImage.getAttribute('sizes')).toContain('100vw');
   });
+
+  it('renders deterministically across repeated renders (no hydration mismatch sources)', async () => {
+    // Hydration mismatches arise when server and client render different markup.
+    // Rendering the same server component twice must produce identical HTML so
+    // that dates, random values, or window access cannot leak into the output.
+    const first = render(await CreatorHeroSection({ id: creator.id }));
+    const firstHtml = first.container.innerHTML;
+    first.unmount();
+
+    const second = render(await CreatorHeroSection({ id: creator.id }));
+    const secondHtml = second.container.innerHTML;
+
+    expect(secondHtml).toBe(firstHtml);
+  });
 });

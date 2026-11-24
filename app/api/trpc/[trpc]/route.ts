@@ -25,7 +25,6 @@ import { createContext } from '@/server/api/trpc';
 import { initStellarClient } from '@/server/stellar/client';
 import { NextRequest } from 'next/server';
 import { logger } from '@/lib/logger';
-import { verifyMobileAccessToken } from '@/lib/mobile-auth';
 
 let stellarReady: Promise<void> | undefined;
 
@@ -41,35 +40,16 @@ function ensureStellarClient(): Promise<void> {
   return stellarReady;
 }
 
-/**
- * Extract and verify a mobile Bearer access token, if present.
- * Returns `undefined` when no Bearer header is supplied or it is invalid —
- * in that case we fall back to the NextAuth cookie path in `createContext`.
- */
-async function resolveBearer(req: NextRequest) {
-  const header = req.headers.get('authorization');
-  if (!header) return undefined;
-  const [scheme, token] = header.split(' ');
-  if (!token || scheme.toLowerCase() !== 'bearer') return undefined;
-  try {
-    return await verifyMobileAccessToken(token);
-  } catch (err) {
-    logger.warn('[tRPC] Invalid mobile Bearer token', { err: String(err) });
-    return undefined;
-  }
-}
-
 const handler = async (req: NextRequest) => {
   // Resolves immediately on every call after the first.
   await ensureStellarClient();
-
-  const bearer = await resolveBearer(req);
 
   return fetchRequestHandler({
     endpoint: '/api/trpc',
     req,
     router: appRouter,
-    createContext: () => createContext(req, bearer),
+    // createContext verifies mobile Bearer tokens (see lib/auth/mobile-session.ts).
+    createContext: () => createContext(req),
     onError:
       process.env.NODE_ENV === 'development'
         ? ({ path, error }) => {

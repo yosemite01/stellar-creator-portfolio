@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth/config'
+import { requireAuth } from '@/server/services/authorization'
 import {
   computeEarningsMetrics,
   computePerformanceMetrics,
@@ -34,13 +35,8 @@ export async function GET(req: NextRequest) {
 
   // --- Authentication: extract userId from session -------------------------
   const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return NextResponse.json(
-      { error: 'Authentication required' },
-      { status: 401 },
-    )
-  }
-  const userId = session.user.id
+  const user = requireAuth({ user: session?.user })
+  const userId = user.id
 
   // --- Date range -----------------------------------------------------------
   let range: DateRange
