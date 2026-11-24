@@ -1,3 +1,6 @@
+import { prisma } from '@/lib/prisma';
+import { getRedisClient } from '@/lib/storage/redis';
+
 export type DependencyCriticality = "critical" | "optional";
 
 export type DependencyStatus = "up" | "down";
@@ -73,4 +76,79 @@ export async function checkReadiness(
     degraded: !criticalDown && optionalDown,
     dependencies: results,
   };
+}
+
+// ── Concrete probe for the /api/ready and /ready routes (#1599, #1812) ───────
+//
+// Restored after #1812 replaced this module with the generic evaluator above.
+// DB is critical; Redis and Horizon are optional and only mark the result
+// `degraded` when down.
+
+
+export type CheckStatus = 'ok' | 'error';
+
+export interface ProbeResult {
+  status: CheckStatus;
+  latencyMs: number;
+  error?: string;
+}
+
+export interface ReadinessProbeResult {
+  ready: boolean;
+  degraded: boolean;
+  db: ProbeResult;
+  redis: ProbeResult;
+  horizon: ProbeResult;
+  timestamp: string;
+}
+
+const TIMEOUT_MS = 3_000;
+
+async function probe(label: string, fn: () => Promise<unknown>): Promise<ProbeResult> {
+  const start = Date.now();
+  try {
+    await Promise.race([
+      fn(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`${label} check timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS),
+      ),
+    ]);
+    return { status: 'ok', latencyMs: Date.now() - start };
+  } catch (err) {
+    return {
+      status: 'error',
+      latencyMs: Date.now() - start,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+const checkDb = () => probe('db', () => prisma.$queryRaw`SELECT 1`);
+
+const checkRedis = () =>
+  probe('redis', async () => {
+    const redis = getRedisClient();
+    if (!redis) throw new Error('Redis client not configured (REDIS_URL not set)');
+    await redis.ping();
+  });
+
+const checkHorizon = () =>
+  probe('horizon', async () => {
+    const horizonUrl = process.env.HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
+    const res = await fetch(`${horizonUrl}/`, {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Horizon returned HTTP ${res.status}`);
+  });
+
+/**
+ * Run the DB, Redis and Horizon checks in parallel. Not ready only when the
+ * critical DB check fails; optional failures set `degraded`.
+ */
+export async function runReadinessChecks(): Promise<ReadinessProbeResult> {
+  const [db, redis, horizon] = await Promise.all([checkDb(), checkRedis(), checkHorizon()]);
+  const ready = db.status === 'ok';
+  const degraded = ready && (redis.status !== 'ok' || horizon.status !== 'ok');
+  return { ready, degraded, db, redis, horizon, timestamp: new Date().toISOString() };
 }

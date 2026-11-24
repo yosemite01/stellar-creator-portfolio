@@ -102,6 +102,7 @@ model User {
   disputeEvidence     DisputeEvidence[] @relation("dispute_evidence_uploader")
   pinnedFiles         PinnedFile[]
   pushDeviceTokens    PushDeviceToken[]
+  pushSubscriptions   PushSubscription[]
   threadMemberships   ThreadMember[]
   messagesSent        Message[]      @relation("message_sender")
   sep24Transactions   Sep24Transaction[]
@@ -453,6 +454,21 @@ model PushDeviceToken {
   updatedAt  DateTime  @updatedAt
 
   @@unique([userId, token])
+  @@index([userId])
+}
+
+/// Web Push (VAPID) subscription for a browser (#1820). Pruned on 404/410
+/// from the push service and invalidated wholesale on VAPID key rotation.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([userId])
 }
 
@@ -1078,6 +1094,9 @@ model CorridorPayment {
   sourceCurrency   String
   destCurrency     String
   volume           BigInt
+  /// Volume converted to the reference unit at each payment's own timestamp
+  /// (#1809, server/services/corridor-analytics.ts).
+  convertedVolume  BigInt   @default(0)
   transactionCount Int
   periodBucket     DateTime
   createdAt        DateTime @default(now())
@@ -1087,6 +1106,18 @@ model CorridorPayment {
   @@index([destCurrency])
   @@index([periodBucket])
   @@index([sourceCurrency, destCurrency])
+}
+
+/// Historical asset price, one row per currency per timestamp (#1809).
+/// Used to convert corridor volume at transaction time, not today's price.
+model PriceHistory {
+  id        String   @id @default(cuid())
+  currency  String
+  price     Decimal  @db.Decimal(38, 18)
+  timestamp DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([currency, timestamp])
 }
 
 // ── Encrypted messaging (opaque ciphertext; see ADR 0007) ─────────────────
