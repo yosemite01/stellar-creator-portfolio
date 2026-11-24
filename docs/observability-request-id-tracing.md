@@ -46,7 +46,7 @@ Next.js server
 **`server/services/tracing.ts`** has a complete OpenTelemetry implementation:
 - `initializeTracing()`: bootstraps the OTel `NodeSDK` with `W3CTraceContextPropagator`, `OTLPTraceExporter` (gRPC → Jaeger/Datadog), `BatchSpanProcessor` (512 spans, 5s flush), and auto-instrumentations.
 - `tracingMiddleware`: a tRPC middleware that extracts `traceparent` from the request headers, starts a root span per procedure call, and runs the handler inside `context.with()`.
-- `createPrismaTracingMiddleware()`: Prisma `$use` middleware that wraps every DB query in a child span.
+- `prismaTracingExtension`: Prisma `$extends` query extension (built on `createPrismaTracingMiddleware()`) that wraps every DB query in a child span.
 - `getTraceparent()`: serialises the current span context to `00-traceId-spanId-flags` for outbound propagation.
 
 ### What is missing
