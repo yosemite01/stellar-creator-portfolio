@@ -14,7 +14,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { BOUNTY_TEMPLATES } from '@/lib/bounty-templates';
-import type { BountyTemplate as PrismaBountyTemplate } from '@prisma/client';
+import type { BountyTemplate as PrismaBountyTemplate } from '@/lib/generated/prisma/client';
 
 let systemTemplatesSeeded = false;
 

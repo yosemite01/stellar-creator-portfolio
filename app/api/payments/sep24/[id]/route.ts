@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getSep24Transaction } from '@/lib/stellar/sep24-service'
 import { prisma } from '@/lib/prisma'
-import type { Sep24Status } from '@prisma/client'
+import type { Sep24Status } from '@/lib/generated/prisma/client'
 
 /**
  * GET /api/payments/sep24/[id] — fetch a single SEP-24 transaction.

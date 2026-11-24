@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { protectedProcedure, publicProcedure, rateLimit, router } from './trpc';
 import { emitEvent } from '@/server/services/events';
 import { writeAuditLog } from '@/server/services/audit';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/generated/prisma/client';
 import { prisma } from '@/lib/prisma';
 import { creatorCardSelect, toCreator } from './creator-mapper';
 import { getJwtSecret } from './jwt-secret';

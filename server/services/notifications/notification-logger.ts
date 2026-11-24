@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma';
-import { NotificationStatus } from '@prisma/client';
+import { NotificationStatus } from '@/lib/generated/prisma/client';
 import { logger as appLogger } from '@/lib/logger';
 
 interface NotificationLog {

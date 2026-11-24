@@ -26,8 +26,7 @@ export async function POST(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const prisma = (await import('@prisma/client')).PrismaClient
-  const db = new prisma()
+  const { prisma: db } = await import('@/lib/prisma')
 
   try {
     const swapSession = await db.swapSession.findUnique({

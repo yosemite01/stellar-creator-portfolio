@@ -1,4 +1,4 @@
-import { Prisma, type BountyDifficulty, type BountyStatus } from '@prisma/client';
+import { Prisma, type BountyDifficulty, type BountyStatus } from '@/lib/generated/prisma/client';
 import { prisma } from '@/lib/prisma';
 import { GraphQLContext } from './context';
 

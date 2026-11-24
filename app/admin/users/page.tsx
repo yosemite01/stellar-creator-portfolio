@@ -15,7 +15,7 @@ import {
   getUsersSummary,
 } from '@/app/admin/actions';
 import { KYCReviewPanel } from '@/components/admin/kyc-review-panel';
-import { Role } from '@prisma/client';
+import { Role } from '@/lib/generated/prisma/browser';
 import { StatusBadge } from '@/components/ui/status-badge';
 
 const ROLES: Role[] = ['ADMIN', 'CLIENT', 'CREATOR', 'USER'];

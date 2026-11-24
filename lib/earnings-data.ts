@@ -7,7 +7,7 @@
  * rate while still exposing the original currency totals.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@/lib/generated/prisma/client';
 
 export type EarningCurrency = 'XLM' | 'USDC' | 'USD';
 

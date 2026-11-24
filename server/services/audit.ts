@@ -18,7 +18,7 @@
  */
 
 import { prisma } from '@/lib/prisma';
-import type { AuditStatus, AuditLog as PrismaAuditLog, Prisma } from '@prisma/client';
+import type { AuditStatus, AuditLog as PrismaAuditLog, Prisma } from '@/lib/generated/prisma/client';
 import { createHash, randomUUID } from 'crypto';
 
 // ── Types ────────────────────────────────────────────────────────────────────

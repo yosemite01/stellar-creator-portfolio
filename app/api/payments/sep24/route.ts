@@ -73,8 +73,7 @@ export async function POST(request: NextRequest) {
     })
 
     // Persist the transaction for status tracking (Issue #1548)
-    const prisma = (await import('@prisma/client')).PrismaClient
-    const db = new prisma()
+    const { prisma: db } = await import('@/lib/prisma')
     
     try {
       await db.sep24Transaction.create({
@@ -135,8 +134,7 @@ export async function GET(request: NextRequest) {
   const limit = parseInt(searchParams.get('limit') ?? '20', 10)
   const offset = parseInt(searchParams.get('offset') ?? '0', 10)
 
-  const prisma = (await import('@prisma/client')).PrismaClient
-  const db = new prisma()
+  const { prisma: db } = await import('@/lib/prisma')
 
   try {
     const transactions = await db.sep24Transaction.findMany({

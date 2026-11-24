@@ -10,14 +10,14 @@
  * @see https://github.com/yosemite01/stellar-creator-portfolio/issues/1725
  */
 
-import { type PrismaClient, type SwapPhase, type SwapSession, type SwapStatus } from '@prisma/client'
+import { type PrismaClient, type SwapPhase, type SwapSession, type SwapStatus } from '@/lib/generated/prisma/client'
 
 // Re-export types for convenience
 export type {
   SwapSession,
   SwapStatus,
   SwapPhase,
-} from '@prisma/client'
+} from '@/lib/generated/prisma/client'
 
 /**
  * Quote parameters for a cross-chain swap.

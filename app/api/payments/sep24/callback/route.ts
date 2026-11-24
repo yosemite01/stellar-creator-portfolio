@@ -1,4 +1,4 @@
-import type { Sep24Status } from '@prisma/client'
+import type { Sep24Status } from '@/lib/generated/prisma/client'
 import { NextRequest, NextResponse } from 'next/server'
 import { getSep24Transaction, updateSep24TransactionStatus } from '@/lib/stellar/sep24-service'
 
@@ -80,8 +80,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const prisma = (await import('@prisma/client')).PrismaClient
-  const db = new prisma()
+  const { prisma: db } = await import('@/lib/prisma')
 
   try {
     // Find transaction by anchor ID
