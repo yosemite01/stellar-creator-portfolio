@@ -102,6 +102,7 @@ model User {
   disputeEvidence     DisputeEvidence[] @relation("dispute_evidence_uploader")
   pinnedFiles         PinnedFile[]
   pushDeviceTokens    PushDeviceToken[]
+  pushSubscriptions   PushSubscription[]
   threadMemberships   ThreadMember[]
   messagesSent        Message[]      @relation("message_sender")
   sep24Transactions   Sep24Transaction[]
@@ -453,6 +454,21 @@ model PushDeviceToken {
   updatedAt  DateTime  @updatedAt
 
   @@unique([userId, token])
+  @@index([userId])
+}
+
+/// Web Push (VAPID) subscription for a browser (#1820). Pruned on 404/410
+/// from the push service and invalidated wholesale on VAPID key rotation.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([userId])
 }
 
