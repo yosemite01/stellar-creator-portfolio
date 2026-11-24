@@ -145,8 +145,8 @@ jobs:
       - name: Fail if schema has objects no migration creates (drift check)
         run: |
           pnpm exec prisma migrate diff \
-            --from-url "$DATABASE_URL" \
-            --to-schema-datamodel prisma/schema.prisma \
+            --from-config-datasource \
+            --to-schema prisma/schema.prisma \
             --script > drift.sql
           if grep -qE 'CREATE TABLE|ADD COLUMN|CREATE TYPE' drift.sql; then
             echo "::error::schema.prisma declares objects that no migration creates:"

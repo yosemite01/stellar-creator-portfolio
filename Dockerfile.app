@@ -6,7 +6,9 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml prisma.config.ts ./
+# postinstall runs `prisma generate`, which needs the schema and config.
+COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 
 FROM node:22-alpine AS builder
@@ -15,7 +17,8 @@ RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm build
+# Prisma 7 generates the client into lib/generated/prisma (gitignored).
+RUN pnpm exec prisma generate && pnpm build
 
 FROM node:22-alpine AS runner
 WORKDIR /app

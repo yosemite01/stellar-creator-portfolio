@@ -76,3 +76,4 @@ __v0_jsx-dev-runtime.ts
 # Local scratch notes
 somzilla.md
 CHANGES_LOCAL.md
+/lib/generated/
