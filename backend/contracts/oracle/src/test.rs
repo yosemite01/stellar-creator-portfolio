@@ -205,7 +205,7 @@ fn stale_price_is_an_error_not_a_fallback() {
     // Regression: this used to return FALLBACK_PRICE_MICRO_USD (120_000).
     assert_eq!(client.try_get_price(), Err(Ok(OracleError::Stale)));
     assert_eq!(
-        client.try_value_in_tokens(&1_000_000),
+        client.try_value_in_tokens(&1_000_000, &7, &RoundingMode::Down),
         Err(Ok(OracleError::Stale))
     );
 }
@@ -249,11 +249,85 @@ fn future_dated_price_is_rejected() {
 fn value_in_tokens_uses_live_price() {
     let (env, client, admin, oracle) = setup();
     ready(&env, &client, &admin, &oracle);
+    // price: 100_000 micro-USD = $0.10 per whole token
     client.update_price(&oracle, &price(&env, 100_000));
-    let v = client.value_in_tokens(&1_000_000);
-    assert_eq!(v.token_amount, 10);
+
+    // $1.00 (1_000_000 micro-USD) at $0.10/token = 10 whole tokens.
+    // With 7 decimals (XLM stroops): 10 * 10^7 = 100_000_000 stroops.
+    let v = client.value_in_tokens(&1_000_000, &7, &RoundingMode::Down);
+    assert_eq!(v.token_amount, 100_000_000);
+    assert_eq!(v.token_decimals, 7);
     assert_eq!(v.price_used, 100_000);
     assert!(!v.used_fallback);
+}
+
+// Table-driven tests per the issue's test plan.
+
+#[test]
+fn value_in_tokens_table_tests() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    // price = $1.00/token (1_000_000 micro-USD)
+    client.update_price(&oracle, &price(&env, 1_000_000));
+
+    // $0.50 at $1.00/token = 0.5 tokens = 5_000_000 stroops (7 decimals)
+    let v = client.value_in_tokens(&500_000, &7, &RoundingMode::Down);
+    assert_eq!(v.token_amount, 5_000_000, "$0.50 -> 5_000_000 stroops (down)");
+
+    // Same but rounded up: same result since it divides evenly.
+    let v = client.value_in_tokens(&500_000, &7, &RoundingMode::Up);
+    assert_eq!(v.token_amount, 5_000_000, "$0.50 -> 5_000_000 stroops (up)");
+
+    // $149.99 at $1.00/token with 7 decimals:
+    // 149_990_000 micro-USD * 10^7 / 1_000_000 = 1_499_900_000 stroops
+    let v = client.value_in_tokens(&149_990_000, &7, &RoundingMode::Down);
+    assert_eq!(v.token_amount, 1_499_900_000, "$149.99 -> 1_499_900_000 stroops (down)");
+
+    // With 6 decimals (USDC-style): $1.00 / $1.00 = 1_000_000 units.
+    let v = client.value_in_tokens(&1_000_000, &6, &RoundingMode::Down);
+    assert_eq!(v.token_amount, 1_000_000, "$1.00 at 6 decimals -> 1_000_000 units");
+}
+
+#[test]
+fn value_in_tokens_rounding_up_favours_protocol() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    // price = 3_000_000 micro-USD = $3.00/token
+    client.update_price(&oracle, &price(&env, 3_000_000));
+
+    // $1.00 / $3.00 = 0.333... tokens.
+    // Down: floor -> 3_333_333 stroops (7 dec)
+    // Up: ceil -> 3_333_334 stroops
+    let down = client.value_in_tokens(&1_000_000, &7, &RoundingMode::Down);
+    let up = client.value_in_tokens(&1_000_000, &7, &RoundingMode::Up);
+    assert_eq!(down.token_amount, 3_333_333);
+    assert_eq!(up.token_amount, 3_333_334);
+    assert!(up.token_amount > down.token_amount, "Up must round higher");
+}
+
+#[test]
+fn value_in_tokens_zero_decimals() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    // price = 1_000_000 micro-USD = $1.00/token
+    client.update_price(&oracle, &price(&env, 1_000_000));
+
+    // 0 decimals: result should be whole tokens only.
+    let v = client.value_in_tokens(&5_000_000, &0, &RoundingMode::Down);
+    assert_eq!(v.token_amount, 5);
+}
+
+#[test]
+fn value_in_tokens_large_amount_no_overflow() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    // price = 1_000_000 micro-USD = $1.00/token
+    client.update_price(&oracle, &price(&env, 1_000_000));
+
+    // $1,000,000.00 (1e12 micro-USD) with 7 decimals.
+    // Expected: 1e12 * 1e7 / 1e6 = 1e13 stroops.
+    let v = client.value_in_tokens(&1_000_000_000_000, &7, &RoundingMode::Down);
+    assert_eq!(v.token_amount, 10_000_000_000_000);
 }
 
 // ── Multi-reporter median ───────────────────────────────────────────────────
@@ -422,7 +496,7 @@ fn reflector_is_used_when_primary_is_stale() {
 
     let p = client.get_price();
     assert_eq!(p.price_micro_usd, 110_000);
-    assert!(client.value_in_tokens(&1_100_000).used_fallback);
+    assert!(client.value_in_tokens(&1_100_000, &7, &RoundingMode::Down).used_fallback);
 }
 
 #[test]

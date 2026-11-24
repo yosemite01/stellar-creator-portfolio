@@ -23,6 +23,36 @@ A platform for creators to manage bounties, portfolio projects, and Stellar-base
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
 
+## Oracle Valuation (`value_in_tokens`)
+
+`value_in_tokens` converts a USD-denominated amount to the **token's smallest
+unit** (e.g. stroops for XLM, the equivalent unit for USDC):
+
+```
+token_amount = usd_amount_micro × 10^token_decimals / price_micro_usd
+```
+
+**Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `usd_amount_micro` | `i128` | Value to convert, in micro-USD (1 USD = 1 000 000) |
+| `token_decimals` | `u32` | Decimal places of the target token (7 for XLM, 6 for USDC) |
+| `rounding` | `RoundingMode` | `Up` favours the protocol (fees, minimum deposits); `Down` favours the user (payouts, withdrawals) |
+
+**Returns** `Result<ValuationResult, OracleError>` where `ValuationResult.token_amount`
+is in the token's smallest unit. Divide by `10^token_decimals` to recover whole
+tokens for display.
+
+The function returns `Err(OracleError::Stale)` or `Err(OracleError::NoPrice)` when
+no fresh price is available. Callers must revert on error — no hardcoded fallback
+rate is ever used.
+
+> **Migration note (issue #1829):** before this fix `token_amount` was in whole
+> tokens (truncated). It is now in stroops. Update any call site that divided
+> the result by a token scale, and pass `token_decimals` and `rounding` at
+> every call site.
+
 ## Corridor Analytics
 
 Corridor analytics (`server/services/corridor-analytics.ts`) converts amounts

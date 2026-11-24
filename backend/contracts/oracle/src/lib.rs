@@ -84,15 +84,32 @@ pub struct PriceData {
     pub sources: u32,
 }
 
+/// Rounding direction for `value_in_tokens`.
+///
+/// Choose the direction that is safe for the call site:
+/// - `Up`   – round **in favour of the protocol** (fees, minimum deposits).
+///            The payer is never under-charged.
+/// - `Down` – round **in favour of the user** (payouts, withdrawals).
+///            The recipient is never over-charged.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum RoundingMode {
+    Up = 0,
+    Down = 1,
+}
+
 /// Result of an atomic valuation at execution time.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValuationResult {
     /// USD amount requested (micro-USD).
     pub usd_amount_micro: i128,
-    /// Equivalent token amount at the locked-in price.
+    /// Equivalent token amount expressed in the token's smallest unit
+    /// (`10^token_decimals` per whole token, e.g. stroops for XLM/USDC).
     pub token_amount: i128,
-    /// Price used for the conversion (micro-USD per token).
+    /// Decimal places of the token used for this conversion (e.g. 7 for XLM).
+    pub token_decimals: u32,
+    /// Price used for the conversion (micro-USD per whole token).
     pub price_used: i128,
     /// Whether the secondary (Reflector) source supplied the price instead of
     /// the primary reporters / registered oracle. Never a hardcoded rate.
@@ -397,27 +414,80 @@ impl OracleContract {
 
     // ── Atomic valuation ─────────────────────────────────────────────────────
 
-    /// Convert a USD-denominated bounty amount to tokens at the current oracle
-    /// price, atomically at the moment of execution.
+    /// Convert a USD-denominated amount to the token's smallest unit (e.g.
+    /// stroops for XLM) at the current oracle price, atomically at execution time.
     ///
-    /// `usd_amount_micro` – the bounty value in micro-USD (e.g. $100 = 100_000_000).
+    /// # Parameters
     ///
-    /// Returns `Err(OracleError::Stale | NoPrice)` rather than converting at a
-    /// made-up rate.
-    pub fn value_in_tokens(env: Env, usd_amount_micro: i128) -> Result<ValuationResult, OracleError> {
+    /// - `usd_amount_micro` – the value to convert, in micro-USD
+    ///   (1 USD = 1_000_000; e.g. $100.00 = 100_000_000).
+    /// - `token_decimals` – decimal places of the target token
+    ///   (7 for XLM and most Stellar assets; 6 for USDC).
+    /// - `rounding` – direction to round when the division is inexact:
+    ///   - `RoundingMode::Up`   rounds in favour of the **protocol** (fees,
+    ///     minimum deposit gates — the payer is never under-charged).
+    ///   - `RoundingMode::Down` rounds in favour of the **user** (payouts,
+    ///     withdrawals — the recipient is never over-charged).
+    ///
+    /// # Formula
+    ///
+    /// ```text
+    /// token_amount_stroops = usd_amount_micro * 10^token_decimals / price_micro_usd
+    /// ```
+    ///
+    /// All arithmetic uses checked `i128` operations; the function panics on
+    /// overflow rather than silently wrapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(OracleError::Stale)` or `Err(OracleError::NoPrice)` when
+    /// no fresh price is available.  Callers that receive an error **must**
+    /// revert — never use a cached or guessed rate for value transfer.
+    pub fn value_in_tokens(
+        env: Env,
+        usd_amount_micro: i128,
+        token_decimals: u32,
+        rounding: RoundingMode,
+    ) -> Result<ValuationResult, OracleError> {
         assert!(usd_amount_micro > 0, "Amount must be positive");
 
         let (price_data, used_fallback) = resolve_fresh(&env)?;
 
-        // token_amount = usd_amount_micro / price_micro_usd
-        // Both values are in micro-units so the result is in whole tokens.
-        let token_amount = usd_amount_micro
-            .checked_div(price_data.price_micro_usd)
-            .expect("Division by zero in price conversion");
+        // scale = 10^token_decimals
+        // token_amount = usd_amount_micro * scale / price_micro_usd
+        //
+        // Multiply first to preserve precision; both operands are positive so
+        // checked_mul is the right guard against overflow.
+        let scale: i128 = 10i128
+            .checked_pow(token_decimals)
+            .expect("token_decimals overflow computing scale");
+
+        let numerator: i128 = usd_amount_micro
+            .checked_mul(scale)
+            .expect("Overflow computing token numerator");
+
+        let price = price_data.price_micro_usd;
+        assert!(price > 0, "Price must be positive");
+
+        let token_amount = match rounding {
+            RoundingMode::Down => numerator
+                .checked_div(price)
+                .expect("Division by zero in price conversion"),
+            RoundingMode::Up => {
+                // ceil division for positive operands: (a + b - 1) / b
+                let adjusted = numerator
+                    .checked_add(price - 1)
+                    .expect("Overflow in ceiling division adjustment");
+                adjusted
+                    .checked_div(price)
+                    .expect("Division by zero in price conversion")
+            }
+        };
 
         Ok(ValuationResult {
             usd_amount_micro,
             token_amount,
+            token_decimals,
             price_used: price_data.price_micro_usd,
             used_fallback,
         })
