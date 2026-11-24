@@ -11,7 +11,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 stellar-upgradeable = { path = "../upgradeable" }
-stellar-oracle-contract = { path = "../oracle" }
 soroban-sdk.workspace = true
 
 [dev-dependencies]
