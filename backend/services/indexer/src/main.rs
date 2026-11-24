@@ -8,7 +8,7 @@
 //! `indexer_cursors` table so restarts resume from where they left off.
 
 use anyhow::{Context, Result};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sqlx::PgPool;
@@ -17,9 +17,9 @@ use stellar_discovery::{create_discovery, ServiceInfo};
 use tracing::{error, info, warn};
 
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
-use opentelemetry::KeyValue;
+use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{runtime, trace, Resource};
+use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 
@@ -136,7 +136,6 @@ struct GetLedgerResult {
 
 #[derive(Debug, Deserialize)]
 struct LedgerInfo {
-    sequence: u32,
     hash: String,
 }
 
@@ -398,8 +397,8 @@ const FREELANCER_EVENT_SIGNATURES: &[&str] = &["freelancer_registered", "freelan
 const ESCROW_EVENT_SIGNATURES: &[&str] =
     &["escrow_deposited", "escrow_released", "escrow_refunded"];
 
-fn allowed_event_signatures<'a>(
-    cfg: &'a Config,
+fn allowed_event_signatures(
+    cfg: &Config,
     contract_id: &str,
 ) -> Option<&'static [&'static str]> {
     if contract_id == cfg.bounty_contract_id {
@@ -413,6 +412,76 @@ fn allowed_event_signatures<'a>(
     }
 }
 
+/// Upgrade lifecycle events emitted by `stellar-upgradeable` (#1719).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpgradeLifecycle {
+    /// `(upgrade, proposed)`: new wasm can land after the 48h timelock.
+    Proposed,
+    /// `(upgrade, cancelled)`.
+    Cancelled,
+    /// `(contract, upgraded)`: the code swap happened.
+    Executed,
+}
+
+/// Classifies the shared upgrade-lifecycle topics. Every canonical contract
+/// emits the same topics because they all go through `stellar-upgradeable`.
+fn upgrade_lifecycle(topics: &[String]) -> Option<UpgradeLifecycle> {
+    match (
+        topics.first().map(String::as_str),
+        topics.get(1).map(String::as_str),
+    ) {
+        (Some("upgrade"), Some("proposed")) => Some(UpgradeLifecycle::Proposed),
+        (Some("upgrade"), Some("cancelled")) => Some(UpgradeLifecycle::Cancelled),
+        (Some("contract"), Some("upgraded")) => Some(UpgradeLifecycle::Executed),
+        _ => None,
+    }
+}
+
+fn is_watched_contract(cfg: &Config, contract_id: &str) -> bool {
+    contract_id == cfg.bounty_contract_id
+        || contract_id == cfg.freelancer_contract_id
+        || contract_id == cfg.escrow_contract_id
+}
+
+/// Alerts on upgrade proposals / executions for any watched contract.
+/// Returns `true` when the event was an upgrade lifecycle event.
+fn alert_on_upgrade_event(event: &SorobanEvent, cfg: &Config) -> bool {
+    if !is_watched_contract(cfg, &event.contract_id) {
+        return false;
+    }
+    match upgrade_lifecycle(&event.topic) {
+        Some(UpgradeLifecycle::Proposed) => {
+            error!(
+                alert = "contract_upgrade_proposed",
+                contract_id = %event.contract_id,
+                ledger = event.ledger,
+                value = %event.value,
+                "ALERT: contract upgrade proposed; it becomes executable after the 48h timelock"
+            );
+            true
+        }
+        Some(UpgradeLifecycle::Executed) => {
+            error!(
+                alert = "contract_upgraded",
+                contract_id = %event.contract_id,
+                ledger = event.ledger,
+                value = %event.value,
+                "ALERT: contract wasm was upgraded"
+            );
+            true
+        }
+        Some(UpgradeLifecycle::Cancelled) => {
+            warn!(
+                contract_id = %event.contract_id,
+                ledger = event.ledger,
+                "Pending contract upgrade cancelled"
+            );
+            true
+        }
+        None => false,
+    }
+}
+
 fn is_relevant_event(event: &SorobanEvent, cfg: &Config) -> bool {
     let name = topic_name(&event.topic);
     allowed_event_signatures(cfg, &event.contract_id)
@@ -422,6 +491,13 @@ fn is_relevant_event(event: &SorobanEvent, cfg: &Config) -> bool {
 
 async fn process_event(pool: &PgPool, event: &SorobanEvent, cfg: &Config) -> Result<()> {
     let name = topic_name(&event.topic);
+
+    // Upgrade proposals are users' advance warning of a code change, so they
+    // are alerted on and persisted regardless of the per-contract allowlist.
+    if alert_on_upgrade_event(event, cfg) {
+        upsert_raw_event(pool, event).await?;
+        return Ok(());
+    }
 
     if !is_relevant_event(event, cfg) {
         info!(
@@ -829,21 +905,17 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     // Initialize OpenTelemetry
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint(std::env::var("OTLP_ENDPOINT").unwrap_or_else(|_| "http://jaeger:4317".to_string())),
-        )
-        .with_trace_config(
-            trace::Config::default().with_resource(Resource::new(vec![KeyValue::new(
-                opentelemetry_semantic_conventions::resource::SERVICE_NAME,
-                "stellar-indexer",
-            )])),
-        )
-        .install_batch(runtime::Tokio)
-        .expect("Failed to initialize tracer");
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(std::env::var("OTLP_ENDPOINT").unwrap_or_else(|_| "http://jaeger:4317".to_string()))
+        .build()
+        .expect("Failed to build OTLP span exporter");
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(Resource::builder().with_service_name("stellar-indexer").build())
+        .build();
+    let tracer = tracer_provider.tracer("stellar-indexer");
+    opentelemetry::global::set_tracer_provider(tracer_provider);
 
     let telemetry = OpenTelemetryLayer::new(tracer);
     
@@ -1106,11 +1178,57 @@ mod tests {
         assert!(!is_relevant_event(&event, &cfg));
     }
 
+    fn upgrade_event(contract_id: &str, topics: &[&str]) -> SorobanEvent {
+        SorobanEvent {
+            contract_id: contract_id.to_string(),
+            id: "evt-upg".to_string(),
+            ledger: 1,
+            ledger_closed_at: "2026-03-27T00:00:00Z".to_string(),
+            paging_token: "1".to_string(),
+            topic: topics.iter().map(|t| t.to_string()).collect(),
+            value: "{}".to_string(),
+        }
+    }
+
+    #[test]
+    fn upgrade_lifecycle_classifies_shared_topics() {
+        let t = |a: &str, b: &str| vec![a.to_string(), b.to_string()];
+        assert_eq!(upgrade_lifecycle(&t("upgrade", "proposed")), Some(UpgradeLifecycle::Proposed));
+        assert_eq!(upgrade_lifecycle(&t("upgrade", "cancelled")), Some(UpgradeLifecycle::Cancelled));
+        assert_eq!(upgrade_lifecycle(&t("contract", "upgraded")), Some(UpgradeLifecycle::Executed));
+        assert_eq!(upgrade_lifecycle(&t("upgrade", "other")), None);
+        assert_eq!(upgrade_lifecycle(&["upgrade".to_string()]), None);
+        assert_eq!(upgrade_lifecycle(&[]), None);
+    }
+
+    #[test]
+    fn upgrade_proposal_on_watched_contract_alerts() {
+        let cfg = test_config();
+        for id in [&cfg.bounty_contract_id, &cfg.freelancer_contract_id, &cfg.escrow_contract_id] {
+            let ev = upgrade_event(id, &["upgrade", "proposed"]);
+            assert!(alert_on_upgrade_event(&ev, &cfg));
+        }
+    }
+
+    #[test]
+    fn upgrade_event_on_unknown_contract_is_ignored() {
+        let cfg = test_config();
+        let ev = upgrade_event("other-contract", &["upgrade", "proposed"]);
+        assert!(!alert_on_upgrade_event(&ev, &cfg));
+    }
+
+    #[test]
+    fn non_upgrade_event_does_not_alert() {
+        let cfg = test_config();
+        let ev = upgrade_event(&cfg.bounty_contract_id, &["bounty_created"]);
+        assert!(!alert_on_upgrade_event(&ev, &cfg));
+    }
+
     // ── Reorg detection unit tests ────────────────────────────────────────────
 
     #[test]
     fn reorg_depth_constant_is_positive() {
-        assert!(REORG_DEPTH > 0, "REORG_DEPTH must be > 0");
+        const { assert!(REORG_DEPTH > 0, "REORG_DEPTH must be > 0") };
     }
 
     #[test]

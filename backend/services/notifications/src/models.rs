@@ -17,6 +17,29 @@ pub struct Notification {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserNotificationPreferences {
+    pub user_id: String,
+    pub email_enabled: bool,
+    pub sms_enabled: bool,
+    pub push_enabled: bool,
+    pub quiet_hours_start: Option<u32>, // 0-23
+    pub quiet_hours_end: Option<u32>,   // 0-23
+}
+
+impl Default for UserNotificationPreferences {
+    fn default() -> Self {
+        Self {
+            user_id: String::new(),
+            email_enabled: true,
+            sms_enabled: true,
+            push_enabled: true,
+            quiet_hours_start: None,
+            quiet_hours_end: None,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NotificationError {
     #[error("Configuration error: {0}")]
@@ -29,6 +52,8 @@ pub enum NotificationError {
     #[error("Rate limited")]
     #[allow(dead_code)] // reserved for future rate-limiting support
     RateLimited,
+    #[error("Notification opted out by user preference for channel {channel:?}")]
+    PreferenceOptOut { channel: NotificationChannel },
     #[error("Invalid recipient: {0}")]
     InvalidRecipient(String),
     #[error("Internal error: {0}")]

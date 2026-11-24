@@ -1,4 +1,4 @@
-import {PriceData, ValuationResult} from './types.js';
+import {PriceData, ValuationResult} from './types';
 import {Spec, AssembledTransaction, Client as ContractClient, ClientOptions as ContractClientOptions, MethodOptions} from '@stellar/stellar-sdk/contract';
 import {Address} from '@stellar/stellar-sdk';
 

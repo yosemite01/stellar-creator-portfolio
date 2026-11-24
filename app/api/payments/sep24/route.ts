@@ -7,19 +7,14 @@ import {
   Sep24Error,
   startInteractiveFlow,
 } from '@/lib/stellar/sep24'
+import { createSep24Transaction } from '@/lib/stellar/sep24-service'
 
 /**
- * POST /api/payments/sep24 — start a SEP-24 interactive transfer (Issue #1393).
+ * POST /api/payments/sep24 — start a SEP-24 interactive transfer (Issue #1548).
  *
- * `components/payments/sep24-payment-form.tsx` posts its validated form here. The anchor
- * handshake is server-side because the interactive endpoints require a SEP-10
- * JWT, and minting one in the browser would mean shipping the signing key
- * there.
- *
- * Environment:
- *   SEP24_ANCHOR_DOMAIN  — anchor home domain, e.g. `testanchor.stellar.org`.
- *                          TRANSFER_SERVER is read from its stellar.toml.
- *   SEP24_ASSET_CODE     — asset to transfer. Defaults to USDC.
+ * Creates a database record for the transaction, then initiates the anchor
+ * interactive flow. The transaction ID is persisted so the status can be
+ * tracked via polling and the timeline API.
  */
 
 export const runtime = 'nodejs'
@@ -77,6 +72,27 @@ export async function POST(request: NextRequest) {
       amount: String(parsed.data.amount),
     })
 
+    // Persist the transaction for status tracking (Issue #1548)
+    const { prisma: db } = await import('@/lib/prisma')
+    
+    try {
+      await db.sep24Transaction.create({
+        data: {
+          userId: session.user.id,
+          anchorId: interactive.id,
+          transferServer,
+          kind: 'deposit',
+          assetCode: process.env.SEP24_ASSET_CODE ?? 'USDC',
+          amountIn: String(parsed.data.amount),
+          status: 'pending_user_transfer_start',
+          message: 'User needs to send funds to anchor',
+          moreInfoUrl: interactive.url,
+        },
+      })
+    } finally {
+      await db.$disconnect()
+    }
+
     return NextResponse.json({ id: interactive.id, url: interactive.url })
   } catch (err) {
     if (err instanceof Sep24Error) {
@@ -89,6 +105,61 @@ export async function POST(request: NextRequest) {
 
     console.error('[sep24] unexpected failure starting interactive flow:', err)
     return NextResponse.json({ error: 'Could not start the transfer.' }, { status: 500 })
+  }
+}
+
+/**
+ * GET /api/payments/sep24/[id] — fetch a SEP-24 transaction by ID.
+ *
+ * Returns the transaction with full status history for timeline display.
+ *
+ * Path: /api/payments/sep24/[id]/route.ts
+ */
+
+/**
+ * GET /api/payments/sep24 — fetch user's SEP-24 transactions.
+ *
+ * Query params:
+ * - limit: max results (default: 20)
+ * - offset: pagination offset (default: 0)
+ */
+
+export async function GET(request: NextRequest) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const { searchParams } = new URL(request.url)
+  const limit = parseInt(searchParams.get('limit') ?? '20', 10)
+  const offset = parseInt(searchParams.get('offset') ?? '0', 10)
+
+  const { prisma: db } = await import('@/lib/prisma')
+
+  try {
+    const transactions = await db.sep24Transaction.findMany({
+      where: { userId: session.user.id },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        statusHistory: {
+          orderBy: { createdAt: 'desc' },
+          take: 1, // Latest status only
+        },
+      },
+      take: limit,
+      skip: offset,
+    })
+
+    return NextResponse.json({
+      transactions,
+      meta: {
+        limit,
+        offset,
+        count: transactions.length,
+      },
+    })
+  } finally {
+    await db.$disconnect()
   }
 }
 

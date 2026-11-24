@@ -5,7 +5,14 @@
 
 import { nativeToScVal, xdr } from '@stellar/stellar-sdk';
 import type { ClientOptions, Spec } from '@stellar/stellar-sdk/contract';
-import { bounty, escrow, freelancer, governance, identity, oracle } from '@/packages/contracts-ts/src';
+// Import each contract module directly: the package entry re-exports
+// './<name>/index.js', which Turbopack can't map back to index.ts.
+import * as bounty from '@/packages/contracts-ts/src/bounty';
+import * as escrow from '@/packages/contracts-ts/src/escrow';
+import * as freelancer from '@/packages/contracts-ts/src/freelancer';
+import * as governance from '@/packages/contracts-ts/src/governance';
+import * as identity from '@/packages/contracts-ts/src/identity';
+import * as oracle from '@/packages/contracts-ts/src/oracle';
 import { CONTRACT_NAMES, currentNetwork, getContractId, type ContractName } from '@/lib/contracts/deployments';
 
 const CLIENTS = {

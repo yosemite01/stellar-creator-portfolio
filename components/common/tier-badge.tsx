@@ -11,7 +11,7 @@
  * Used on: creator card, profile header, search results.
  */
 
-import { VerificationTier } from '@prisma/client';
+import { VerificationTier } from '@/lib/generated/prisma/browser';
 
 interface TierBadgeProps {
   tier: VerificationTier;

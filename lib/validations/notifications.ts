@@ -16,7 +16,9 @@ import { z } from "zod";
  */
 export const notificationIdSchema = z.object({
   id: z
-    .string({ required_error: "Notification id is required" })
+    .string({
+      error: (iss) => (iss.input === undefined ? "Notification id is required" : undefined),
+    })
     .trim()
     .min(1, "Notification id is required"),
 });
@@ -38,20 +40,28 @@ export type ReadAllNotificationsInput = z.infer<
  */
 export const createNotificationSchema = z.object({
   userId: z
-    .string({ required_error: "User id is required" })
+    .string({
+      error: (iss) => (iss.input === undefined ? "User id is required" : undefined),
+    })
     .trim()
     .min(1, "User id is required"),
   type: z
-    .string({ required_error: "Notification type is required" })
+    .string({
+      error: (iss) => (iss.input === undefined ? "Notification type is required" : undefined),
+    })
     .trim()
     .min(1, "Notification type is required"),
   title: z
-    .string({ required_error: "Title is required" })
+    .string({
+      error: (iss) => (iss.input === undefined ? "Title is required" : undefined),
+    })
     .trim()
     .min(1, "Title is required")
     .max(200, "Title must be 200 characters or fewer"),
   message: z
-    .string({ required_error: "Message is required" })
+    .string({
+      error: (iss) => (iss.input === undefined ? "Message is required" : undefined),
+    })
     .trim()
     .min(1, "Message is required")
     .max(2000, "Message must be 2000 characters or fewer"),

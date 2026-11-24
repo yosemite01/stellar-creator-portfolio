@@ -16,7 +16,9 @@ export const paymentFlowSchema = z.object({
     .trim()
     .refine(isValidStellarAddress, 'Enter a valid Stellar public key (G...)'),
   amount: z
-    .number({ invalid_type_error: 'Enter an amount' })
+    .number({
+      error: (iss) => (iss.input === undefined ? undefined : 'Enter an amount'),
+    })
     .positive('Amount must be greater than zero')
     .finite()
     .refine(

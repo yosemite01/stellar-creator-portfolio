@@ -62,3 +62,18 @@ export function sanitizeRichText(html: string | null | undefined): string {
     return `<a href="${href}" target="_blank" rel="noopener noreferrer">`;
   });
 }
+
+/** Plain text of a rich-text HTML string (tags stripped, content kept). */
+export function richTextToPlainText(html: string): string {
+  const fragment = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [],
+    KEEP_CONTENT: true,
+    RETURN_DOM_FRAGMENT: true,
+  });
+  return (fragment.textContent ?? '').trim();
+}
+
+/** True when the HTML has visible text or an embedded video. */
+export function hasRichTextContent(html: string): boolean {
+  return richTextToPlainText(html).length > 0 || html.includes('data-video-embed');
+}

@@ -24,9 +24,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARTIFACTS_DIR="$REPO_ROOT/artifacts"
 IMAGE_TAG="stellar-contracts-builder:local"
 
-# Pinned tool versions — must match Dockerfile.
-RUST_VERSION="1.89.0"
-STELLAR_CLI_VERSION="20.3.1"
+# Pinned tool versions — must match Dockerfile.contracts.
+RUST_VERSION="1.94.1"
+STELLAR_CLI_VERSION="28.1.0"
 
 echo "🔨 Building reproducible contracts…"
 echo "   Rust version        : $RUST_VERSION  (pinned)"
@@ -43,7 +43,7 @@ fi
 
 docker build \
   "${BUILD_ARGS[@]}" \
-  --file "$REPO_ROOT/Dockerfile" \
+  --file "$REPO_ROOT/Dockerfile.contracts" \
   --tag  "$IMAGE_TAG" \
   --target builder \
   "$REPO_ROOT"
@@ -55,7 +55,7 @@ if [[ "$ACTUAL_RUST" != "$RUST_VERSION" ]]; then
   echo "❌ Rust version mismatch in image!"
   echo "   Expected: $RUST_VERSION"
   echo "   Actual:   $ACTUAL_RUST"
-  echo "   Update RUST_VERSION in both Dockerfile and this script, then re-baseline."
+  echo "   Update RUST_VERSION in both Dockerfile.contracts and this script, then re-baseline."
   exit 1
 fi
 echo "  ✅ Rust version verified: $ACTUAL_RUST"

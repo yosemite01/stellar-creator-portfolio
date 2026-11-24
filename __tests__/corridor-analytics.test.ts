@@ -3,13 +3,19 @@ import {
   parseStroops,
   parsePathPaymentOperation,
   fetchPathPaymentOperations,
+  convertAtTransactionTime,
+  aggregateCorridorTotals,
+  clearCorridorAggregateCache,
   type HorizonOperationRecord,
+  type CorridorPricePoint,
+  type CorridorConversion,
 } from '@/server/services/corridor-analytics';
 import recordedFixture from './fixtures/horizon-path-payments.json';
 
 describe('Corridor Analytics Service', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    clearCorridorAggregateCache();
   });
 
   describe('parseStroops', () => {
@@ -136,6 +142,95 @@ describe('Corridor Analytics Service', () => {
 
       const events = await fetchPathPaymentOperations(undefined, 'https://mock-horizon.stellar.org');
       expect(events).toEqual([]);
+    });
+  });
+
+  describe('convertAtTransactionTime', () => {
+    const priceHistory: CorridorPricePoint[] = [
+      { currency: 'XLM', priceUsd: 0.1, timestamp: new Date('2026-08-01T00:00:00Z') },
+      { currency: 'XLM', priceUsd: 0.2, timestamp: new Date('2026-08-15T00:00:00Z') },
+      { currency: 'XLM', priceUsd: 0.5, timestamp: new Date('2026-09-01T00:00:00Z') },
+    ];
+
+    it('uses the price in effect at the transaction time, not the latest price', () => {
+      const conversion = convertAtTransactionTime(
+        { sourceCurrency: 'XLM', destCurrency: 'USDC', amount: 10_000_000n, timestamp: new Date('2026-08-10T00:00:00Z') },
+        priceHistory,
+      );
+      // 1 XLM at 2026-08-10 is 0.1 USD -> 1 XLM = 1_000_000n stroops
+      expect(conversion).not.toBeNull();
+      expect(conversion?.priceUsd).toBe(0.1);
+      expect(conversion?.convertedUsdStroops).toBe(1_000_000n);
+    });
+
+    it('picks the most recent price at or before the transaction time', () => {
+      const conversion = convertAtTransactionTime(
+        { sourceCurrency: 'XLM', destCurrency: 'USDC', amount: 10_000_000n, timestamp: new Date('2026-08-20T00:00:00Z') },
+        priceHistory,
+      );
+      expect(conversion?.priceUsd).toBe(0.2);
+      expect(conversion?.convertedUsdStroops).toBe(2_000_000n);
+    });
+
+    it('returns null when no price exists at or before the transaction time', () => {
+      const conversion = convertAtTransactionTime(
+        { sourceCurrency: 'XLM', destCurrency: 'USDC', amount: 10_000_000n, timestamp: new Date('2026-07-01T00:00:00Z') },
+        priceHistory,
+      );
+      expect(conversion).toBeNull();
+    });
+  });
+
+  describe('aggregateCorridorTotals', () => {
+    const conversions: CorridorConversion[] = [
+      {
+        sourceCurrency: 'XLM',
+        destCurrency: 'USDC',
+        amount: 10_000_000n,
+        timestamp: new Date('2026-08-10T00:00:00Z'),
+        priceUsd: 0.1,
+        convertedUsdStroops: 1_000_000n,
+      },
+      {
+        sourceCurrency: 'XLM',
+        destCurrency: 'USDC',
+        amount: 10_000_000n,
+        timestamp: new Date('2026-08-20T00:00:00Z'),
+        priceUsd: 0.2,
+        convertedUsdStroops: 2_000_000n,
+      },
+    ];
+
+    it('aggregates stored converted amounts per corridor', () => {
+      const totals = aggregateCorridorTotals(conversions);
+      expect(totals).toHaveLength(1);
+      expect(totals[0]).toMatchObject({
+        sourceCurrency: 'XLM',
+        destCurrency: 'USDC',
+        totalUsdStroops: 3_000_000n,
+        transactionCount: 2,
+      });
+    });
+
+    it('keeps historical totals stable when current prices change', () => {
+      const first = aggregateCorridorTotals(conversions);
+      // Simulate a later price update; stored conversions must not change.
+      const laterPrices: CorridorPricePoint[] = [
+        { currency: 'XLM', priceUsd: 99, timestamp: new Date('2026-12-01T00:00:00Z') },
+      ];
+      const second = aggregateCorridorTotals(conversions, laterPrices);
+      expect(second[0].totalUsdStroops).toBe(first[0].totalUsdStroops);
+      expect(second[0].totalUsdStroops).toBe(3_000_000n);
+    });
+
+    it('caches aggregates and reuses them across calls', () => {
+      const first = aggregateCorridorTotals(conversions);
+      const second = aggregateCorridorTotals(conversions);
+      expect(second).toBe(first);
+    });
+
+    it('returns an empty array for no conversions', () => {
+      expect(aggregateCorridorTotals([])).toEqual([]);
     });
   });
 });

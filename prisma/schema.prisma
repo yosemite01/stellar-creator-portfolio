@@ -2,15 +2,14 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
 }
 
+// Connection URLs live in prisma.config.ts (CLI / migrations) and in
+// lib/prisma.ts via the @prisma/adapter-pg driver adapter (runtime).
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  // DIRECT_DATABASE_URL bypasses PgBouncer for Prisma migrations.
-  // In production set this to the direct Postgres connection (port 5432).
-  directUrl = env("DIRECT_DATABASE_URL")
+  provider = "postgresql"
 }
 
 // NextAuth.js required models
@@ -102,8 +101,11 @@ model User {
   disputeEvidence     DisputeEvidence[] @relation("dispute_evidence_uploader")
   pinnedFiles         PinnedFile[]
   pushDeviceTokens    PushDeviceToken[]
+  pushSubscriptions   PushSubscription[]
   threadMemberships   ThreadMember[]
   messagesSent        Message[]      @relation("message_sender")
+  sep24Transactions   Sep24Transaction[]
+  swapSessions        SwapSession[]
 
   @@index([email])
   @@index([suspendedAt])
@@ -253,6 +255,8 @@ model ApiKey {
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   keyHash    String    @unique
+  /// Public, non-secret part of the key shown in the dashboard (see lib/api-keys.ts).
+  prefix     String?   @unique
   name       String
   scopes     String[]
   lastUsedAt DateTime?
@@ -274,6 +278,10 @@ model Bounty {
   budget      Int
   deadline    DateTime
   status      BountyStatus @default(OPEN)
+  /// Optimistic-concurrency version (#1810). Every status transition goes
+  /// through server/services/bounty.service.ts `transitionBounty`, which
+  /// only writes when this still matches and increments it.
+  version     Int      @default(0)
   category    String?
   tags        String[]
   /// Skill level required: beginner | intermediate | advanced | expert
@@ -445,6 +453,21 @@ model PushDeviceToken {
   updatedAt  DateTime  @updatedAt
 
   @@unique([userId, token])
+  @@index([userId])
+}
+
+/// Web Push (VAPID) subscription for a browser (#1820). Pruned on 404/410
+/// from the push service and invalidated wholesale on VAPID key rotation.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([userId])
 }
 
@@ -668,8 +691,15 @@ model DisputeEvidence {
 
 // ── Audit Logging & Telemetry ────────────────────────────────────────────
 
-/// Immutable audit trail for all mutating operations.
+/// Tamper-evident audit trail with hash-chain integrity protection.
+/// Each entry hashes all previous entries using SHA-256 — any modification breaks the chain.
 /// Records who did what, when, and from where — used for security tracing and compliance.
+/// 
+/// Hash chain mechanics:
+/// - `prevHash`: SHA-256 of previous entry's data (null for first entry)
+/// - `entryHash`: SHA-256 of current entry's data + prevHash (computed by DB trigger)
+/// - Database trigger prevents UPDATE/DELETE operations to preserve integrity
+/// - Periodic anchoring on Stellar provides cryptographic proof of existence
 model AuditLog {
   id            String    @id @default(cuid())
 
@@ -713,6 +743,18 @@ model AuditLog {
   /// ISO-3166-1 country code inferred from IP geo-lookup (optional).
   geoCountry    String?
 
+  /// Hash of the previous audit entry (null for first entry).
+  prevHash      String?
+
+  /// Computed hash of this entry (SHA-256 of entry data + prevHash).
+  entryHash     String    @unique @default("") // filled in by the DB trigger
+
+  /// Whether this entry (or any prior entry) has been tampered with.
+  isTampered    Boolean   @default(false)
+
+  /// Timestamp when this entry was anchored on Stellar (optional).
+  anchoredAt    DateTime?
+
   createdAt     DateTime  @default(now())
 
   @@index([userId, createdAt])
@@ -721,6 +763,8 @@ model AuditLog {
   @@index([traceId])
   @@index([createdAt])
   @@index([status, createdAt])
+  @@index([entryHash])
+  @@index([prevHash])
 }
 
 enum AuditStatus {
@@ -978,6 +1022,16 @@ model KYCSubmission {
   encryptedDOB      String
   encryptedIdNumber String
 
+  // Envelope encryption: which data key encrypted this row (see lib/kyc-envelope-encryption.ts).
+  keyId      String @default("default") @map("key_id")
+  keyVersion String @default("v1") @map("key_version")
+
+  // Uploaded document in object storage
+  documentKey            String?
+  documentImageKey       String?
+  encryptedDocumentImage String?   @db.Text
+  sanitizedAt            DateTime?
+
   // Verification flow
   status          KYCStatus @default(PENDING)
   adminReviewedBy String?
@@ -991,6 +1045,8 @@ model KYCSubmission {
   @@index([userId])
   @@index([status])
   @@index([expiresAt])
+  @@index([keyVersion], map: "idx_kyc_submissions_key_version")
+  @@index([keyId], map: "idx_kyc_submissions_key_id")
 }
 
 /// Portfolio project. `description` holds sanitized rich-text HTML produced by
@@ -1037,6 +1093,9 @@ model CorridorPayment {
   sourceCurrency   String
   destCurrency     String
   volume           BigInt
+  /// Volume converted to the reference unit at each payment's own timestamp
+  /// (#1809, server/services/corridor-analytics.ts).
+  convertedVolume  BigInt   @default(0)
   transactionCount Int
   periodBucket     DateTime
   createdAt        DateTime @default(now())
@@ -1046,6 +1105,18 @@ model CorridorPayment {
   @@index([destCurrency])
   @@index([periodBucket])
   @@index([sourceCurrency, destCurrency])
+}
+
+/// Historical asset price, one row per currency per timestamp (#1809).
+/// Used to convert corridor volume at transaction time, not today's price.
+model PriceHistory {
+  id        String   @id @default(cuid())
+  currency  String
+  price     Decimal  @db.Decimal(38, 18)
+  timestamp DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([currency, timestamp])
 }
 
 // ── Encrypted messaging (opaque ciphertext; see ADR 0007) ─────────────────
@@ -1097,4 +1168,288 @@ model Message {
   @@index([threadId, createdAt(sort: Desc)])
   @@index([senderId])
   @@map("messages")
+}
+
+// ── SEP-24 Transaction Tracking — Issue #1548 ──────────────────────────────
+
+/// SEP-24 deposit/withdrawal transaction with full state persistence.
+/// Every state transition emits a status entry for timeline display.
+model Sep24Transaction {
+  id                   String        @id @default(cuid())
+  userId               String
+  user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  /// Anchor's transaction ID (from /transactions/{deposit,withdraw}/interactive response)
+  anchorId             String        @unique
+  /// Anchor's TRANSFER_SERVER URL
+  transferServer       String
+  /// deposit or withdrawal
+  kind                 Sep24Kind
+  /// Asset code (e.g. USDC, XLM)
+  assetCode            String
+  
+  /// Amounts from anchor's /transaction response
+  amountIn             String?
+  amountOut            String?
+  amountFee            String?
+  
+  /// Current transaction status (from anchor)
+  status               Sep24Status   @default(pending_user_transfer_start)
+  /// Human-readable message from anchor
+  message              String?       @db.Text
+  /// URL for more info from anchor
+  moreInfoUrl          String?       @db.Text
+  
+  /// Stellar chain references (when available)
+  stellarTransactionId String?
+  externalTransactionId String?
+  
+  /// Timing
+  startedAt            DateTime      @default(now())
+  completedAt          DateTime?
+  /// Last time we polled the anchor
+  lastPolledAt         DateTime?
+  
+  /// Polling metadata
+  pollCount            Int           @default(0)
+  /// When to mark as stale (startedAt + 72h)
+  staleAt              DateTime?
+  
+  /// Full status history for timeline display
+  statusHistory        Sep24StatusEntry[]
+  
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  
+  @@index([userId, createdAt])
+  @@index([anchorId])
+  @@index([status])
+  @@index([status, lastPolledAt])
+}
+
+/// Status history entry for timeline display.
+/// Created on every state change via the service layer.
+model Sep24StatusEntry {
+  id           String        @id @default(cuid())
+  transaction  Sep24Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  transactionId String       @map("transaction_id")
+  
+  status       Sep24Status
+  message      String?       @db.Text
+  /// JSON metadata for debugging (e.g. raw anchor response)
+  metadata     Json?
+  
+  createdAt    DateTime      @default(now())
+  
+  @@index([transactionId, createdAt])
+}
+
+enum Sep24Kind {
+  deposit
+  withdrawal
+}
+
+enum Sep24Status {
+  incomplete
+  pending_user_transfer_start
+  pending_user_transfer_complete
+  pending_external
+  pending_anchor
+  pending_stellar
+  pending_trust
+  pending_user
+  completed
+  refunded
+  expired
+  no_market
+  too_small
+  too_large
+  error
+}
+
+// ── Cross-Chain Swap Sessions — Issue #1725 ────────────────────────────────
+
+/// Cross-chain swap session with crash recovery and refund handling.
+/// Tracks HTLC state, multi-leg routing, and refund progress.
+model SwapSession {
+  id               String       @id @default(cuid())
+  userId           String
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Swap parameters
+  fromChain        String       // ChainId enum value
+  toChain          String       // ChainId enum value
+  fromAmount       String
+  toAmount         String
+  minOut           String       // Minimum output enforced at execution
+  quoteExpiry      DateTime     // Quote expires after this
+  
+  // Route info
+  routeId          String
+  hops             Json         // Route hops with fees and protocols
+  
+  // HTLC state
+  htlcHash         String?      // SHA-256 hash for HTLC
+  htlcSecret       String?      // Preimage (revealed on success)
+  htlcLocktime     Int?         // Locktime in ledger seconds
+  
+  // State machine
+  status           SwapStatus   @default(initiated)
+  phase            SwapPhase    @default(initiated)
+  
+  // Refund tracking
+  refundTxId       String?      // Refund transaction ID
+  refundedAt       DateTime?
+  
+  // Timing
+  startedAt        DateTime     @default(now())
+  completedAt      DateTime?
+  
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  
+  @@index([userId, status])
+  @@index([status, phase])
+  @@index([quoteExpiry, status])  // Expired cleanup
+  @@index([htlcHash])
+}
+
+enum SwapStatus {
+  initiated
+  source_lock
+  destination_claim
+  completed
+  refund_requested
+  refunded
+  error
+  failed
+}
+
+enum SwapPhase {
+  initiated
+  source_lock
+  destination_claim
+  completed
+  refund_requested
+  refunded
+  error
+}
+// ── Revoked Tokens ───────────────────────────────────────────────────────────
+
+/// Revoked token registry for token invalidation across services.
+/// When a token is revoked, its JTI is added here and both NextAuth and
+/// Rust auth services check this list before accepting tokens.
+model RevokedToken {
+  jti       String   @id
+  exp       DateTime
+  createdAt DateTime @default(now())
+
+  @@index([exp])
+}
+// ── KYC Key Rotation History ───────────────────────────────────────────────
+
+/// Tracks key rotation history for KYC encrypted fields.
+/// Enables tracking which key version was used for each encryption.
+model KycKeyRotationHistory {
+  id             String   @id @default(cuid())
+  previousKeyId  String
+  newKeyId       String
+  rotatedAt      DateTime @default(now())
+  rotatedBy      String?
+
+  @@index([rotatedAt])
+}
+
+/// CSP violation reports, stored only when CSP_ENFORCE=true (app/api/csp-report).
+model CSPViolation {
+  id        String   @id @default(cuid())
+  directive String
+  blocked   String
+  document  String
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([directive])
+}
+
+// ── Transactional Outbox for Domain Events (#1759) ───────────────────────────
+
+model OutboxEvent {
+  id          String            @id @default(cuid())
+  eventId     String            @unique
+  eventType   String
+  payload     Json
+  status      OutboxEventStatus @default(PENDING)
+  retryCount  Int               @default(0)
+  maxRetries  Int               @default(5)
+  lastError   String?           @db.Text
+  createdAt   DateTime          @default(now())
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+  @@index([eventType])
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+// ── IPFS Multi-Provider Pin Redundancy & Health Monitoring (#1769) ───────────
+
+/// Tracks per-provider pin replicas and periodic retrievability health checks
+/// for each CID so dropped pins can be detected and re-pinned automatically.
+model IpfsPinReplica {
+  id                  String    @id @default(cuid())
+  cid                 String
+  provider            String
+  providerPinId       String?
+  status              String    @default("PINNED")
+  lastCheckedAt       DateTime?
+  lastHealthyAt       DateTime?
+  consecutiveFailures Int       @default(0)
+  lastLatencyMs       Int?
+  lastError           String?   @db.Text
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([cid, provider])
+  @@index([cid])
+  @@index([status])
+  @@index([lastCheckedAt])
+}
+
+// ── Adaptive Video Media Pipeline (#1770) ────────────────────────────────────
+
+/// Tracks uploaded videos transcoded to HLS ABR renditions with poster frames,
+/// thumbnails, and short-lived signed CloudFront/S3 delivery URLs.
+model MediaAsset {
+  id                String    @id @default(cuid())
+  ownerId           String
+  sourceKey         String
+  contentType       String
+  sizeBytes         Int
+  durationSeconds   Float?
+  width             Int?
+  height            Int?
+  status            String    @default("QUEUED")
+  progress          Int       @default(0)
+  backend           String    @default("ffmpeg")
+  externalJobId     String?
+  masterPlaylistKey String?
+  renditions        Json?
+  posterKey         String?
+  thumbnailKeys     Json?
+  thumbnailsVttKey  String?
+  errorMessage      String?   @db.Text
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  completedAt       DateTime?
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([externalJobId])
 }

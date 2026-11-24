@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
+import type { ApplicationStatus, BountyStatus } from '@/lib/generated/prisma/client';
 
 interface EntityChanges {
   created?: Record<string, unknown>[];
@@ -25,8 +26,8 @@ interface PushPayload {
 const ALLOWED_ENTITY_TYPES = ['bounties', 'applications', 'messages'] as const;
 type AllowedEntityType = (typeof ALLOWED_ENTITY_TYPES)[number];
 
-const BOUNTY_STATUSES = ['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
-const APPLICATION_STATUSES = ['PENDING', 'ACCEPTED', 'REJECTED', 'WITHDRAWN'];
+const BOUNTY_STATUSES = ['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'] as const satisfies readonly BountyStatus[];
+const APPLICATION_STATUSES = ['PENDING', 'ACCEPTED', 'REJECTED', 'WITHDRAWN'] as const satisfies readonly ApplicationStatus[];
 
 class ValidationError extends Error {}
 
@@ -61,12 +62,12 @@ function optionalString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
 
-function optionalStatus(value: unknown, allowed: string[], fallback: string): string {
+function optionalStatus<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   if (value === undefined || value === null) return fallback;
-  if (typeof value !== 'string' || !allowed.includes(value)) {
+  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) {
     throw new ValidationError(`Invalid status: ${String(value)}`);
   }
-  return value;
+  return value as T;
 }
 
 function optionalTags(value: unknown): string[] {

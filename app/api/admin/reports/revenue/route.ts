@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
     let cursor: string | null = null;
 
     for (;;) {
-      const batch = await prisma.transaction.findMany({
+      const batch: { id: string; createdAt: Date; amount: number }[] = await prisma.transaction.findMany({
         where: {
           createdAt: {
             gte: startDate,

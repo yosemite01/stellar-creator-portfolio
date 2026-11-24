@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
-import { createTemplate, listTemplatesFor } from '@/lib/services/bounty-template-service';
+import { requireAuth, requireModifyTemplatePermission } from '@/server/services/authorization';
+import { createTemplate, listTemplatesFor, updateOwnTemplate, deleteOwnTemplate } from '@/lib/services/bounty-template-service';
+import { sanitizeRichText } from '@/lib/bounty-templates';
 
 /**
  * GET  /api/bounty-templates   system templates + the caller's own saved templates
@@ -10,6 +12,9 @@ import { createTemplate, listTemplatesFor } from '@/lib/services/bounty-template
  * See lib/services/bounty-template-service.ts (Issue #1611). Templates are
  * always scoped to the signed-in user — there is no way to create, read,
  * update or delete a template on another user's behalf.
+ *
+ * Issue #1821: user-provided rich text (description) is sanitised server-side
+ * before it is stored, so malicious markup can never be persisted or rendered.
  */
 
 const templateSchema = z.object({
@@ -23,19 +28,15 @@ const templateSchema = z.object({
 
 export async function GET() {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
-  const templates = await listTemplatesFor(session.user.id);
+  const templates = await listTemplatesFor(user.id);
   return NextResponse.json({ templates });
 }
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
   let body: unknown;
   try {
@@ -49,6 +50,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid template', details: parsed.error.flatten() }, { status: 400 });
   }
 
-  const template = await createTemplate(session.user.id, parsed.data);
+  const sanitized = {
+    ...parsed.data,
+    description: sanitizeRichText(parsed.data.description),
+  };
+
+  const template = await createTemplate(user.id, sanitized);
   return NextResponse.json({ template }, { status: 201 });
 }

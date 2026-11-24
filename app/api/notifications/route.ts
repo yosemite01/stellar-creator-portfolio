@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma';
+import { requireAuth } from '@/server/services/authorization';
 
 // Force dynamic rendering — this route always depends on the user session
 export const dynamic = 'force-dynamic';
@@ -36,9 +37,7 @@ interface NotificationsResponse {
  */
 export async function GET(request: Request) {
   const session = await getServerSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
   const { searchParams } = new URL(request.url);
   const limit = Math.min(parseInt(searchParams.get('limit') ?? '20', 10), 100);
@@ -46,7 +45,7 @@ export async function GET(request: Request) {
   const filter = searchParams.get('filter') ?? 'all';
 
   const where = {
-    userId: session.user.id,
+    userId: user.id,
     ...(filter === 'unread' ? { read: false } : filter === 'read' ? { read: true } : {}),
   };
 
@@ -59,7 +58,7 @@ export async function GET(request: Request) {
     }),
     prisma.inAppNotification.count({ where }),
     prisma.inAppNotification.count({
-      where: { userId: session.user.id, read: false },
+      where: { userId: user.id, read: false },
     }),
   ]);
 
@@ -96,9 +95,7 @@ export async function GET(request: Request) {
  */
 export async function PATCH(request: Request) {
   const session = await getServerSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
   let body: { notificationIds?: string[]; markAll?: boolean };
   try {
@@ -110,7 +107,7 @@ export async function PATCH(request: Request) {
   if (body.markAll) {
     // Mark all unread notifications as read
     const result = await prisma.inAppNotification.updateMany({
-      where: { userId: session.user.id, read: false },
+      where: { userId: user.id, read: false },
       data: { read: true },
     });
     return NextResponse.json({ updated: result.count });
@@ -125,7 +122,7 @@ export async function PATCH(request: Request) {
     const result = await prisma.inAppNotification.updateMany({
       where: {
         id: { in: body.notificationIds },
-        userId: session.user.id,
+        userId: user.id,
       },
       data: { read: true },
     });
@@ -148,9 +145,7 @@ export async function PATCH(request: Request) {
  */
 export async function DELETE(request: Request) {
   const session = await getServerSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
   let body: { notificationId?: string };
   try {
@@ -167,7 +162,7 @@ export async function DELETE(request: Request) {
   const result = await prisma.inAppNotification.deleteMany({
     where: {
       id: body.notificationId,
-      userId: session.user.id,
+      userId: user.id,
     },
   });
 

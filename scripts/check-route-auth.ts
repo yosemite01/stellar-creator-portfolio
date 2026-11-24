@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * CI guard: every `app/api/**/route.ts` must declare its auth mode.
+ * CI guard: every `route.ts` file under `app/api/` must declare its auth mode.
  *
  * Accepted declarations:
  *   - `export const auth = 'public' | 'session' | 'admin' | 'cron' | 'webhook'`

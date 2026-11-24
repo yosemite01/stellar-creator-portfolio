@@ -342,3 +342,32 @@ export async function pollTransaction(
     });
   }
 }
+
+/**
+ * Polls until the transaction reaches a terminal status. Kept as the name the
+ * SEP-24 flow component uses; see {@link pollTransaction}.
+ */
+export const pollUntilTerminal = pollTransaction;
+
+/**
+ * Opens the anchor's interactive URL in a popup. `closed` resolves once the
+ * user closes it. Throws if the browser blocked the popup.
+ */
+export function openInteractiveWindow(url: string): { closed: Promise<void> } {
+  const popup = window.open(url, 'sep24-interactive', 'width=500,height=700');
+
+  if (!popup) {
+    throw new Sep24Error('The anchor window was blocked. Allow popups and try again.');
+  }
+
+  const closed = new Promise<void>((resolve) => {
+    const timer = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, 500);
+  });
+
+  return { closed };
+}

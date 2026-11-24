@@ -9,6 +9,7 @@ const eslintConfig = [
     // React Native lint rules), plus generated and vendored output.
     ignores: [
       'mobile/**',
+      'lib/generated/**',
       'backend/**',
       'contracts/**',
       'load-tests/**',

@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma';
-import { type Prisma, type Role } from '@prisma/client';
+import { requireAuth } from '@/server/services/authorization';
+import { type Prisma, type Role } from '@/lib/generated/prisma/client';
 import { onProfileChanged } from '@/server/services/search';
 
 export async function GET() {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.user.id },
+  const userRecord = await prisma.user.findUnique({
+    where: { id: user.id },
     select: {
       onboardingStep: true,
       onboardingCompletedAt: true,
@@ -21,18 +20,16 @@ export async function GET() {
     },
   });
 
-  if (!user) {
+  if (!userRecord) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 });
   }
 
-  return NextResponse.json(user);
+  return NextResponse.json(userRecord);
 }
 
 export async function PATCH(req: NextRequest) {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
   const body = await req.json();
   const { step, data, role } = body as {
@@ -41,22 +38,22 @@ export async function PATCH(req: NextRequest) {
     role?: 'CREATOR' | 'CLIENT';
   };
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.user.id },
+  const userRecord = await prisma.user.findUnique({
+    where: { id: user.id },
   });
-  if (!user) {
+  if (!userRecord) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 });
   }
 
   const mergedData = {
-    ...((user.onboardingData as Record<string, unknown> | null) ?? {}),
+    ...((userRecord.onboardingData as Record<string, unknown> | null) ?? {}),
     ...(data ?? {}),
   };
 
   const updated = await prisma.user.update({
-    where: { id: session.user.id },
+    where: { id: user.id },
     data: {
-      onboardingStep: step ?? user.onboardingStep,
+      onboardingStep: step ?? userRecord.onboardingStep,
       onboardingData: mergedData as Prisma.InputJsonObject,
       ...(role ? { role: role as Role } : {}),
     },
@@ -73,9 +70,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const user = requireAuth({ user: session?.user });
 
   const body = await req.json();
   const { role, profile } = body as {
@@ -83,7 +78,7 @@ export async function POST(req: NextRequest) {
     profile: Record<string, unknown>;
   };
 
-  const userId = session.user.id;
+  const userId = user.id;
 
   // Populated only when role === 'CREATOR', then used to refresh the
   // creator's search embedding once the transaction below has committed
@@ -142,8 +137,9 @@ export async function POST(req: NextRequest) {
   // (and the OpenAI/HuggingFace embedding call it makes) must never be
   // able to roll back the profile write, and must never add its latency
   // to this response.
-  if (updatedCreatorProfile) {
-    const p = updatedCreatorProfile;
+  // TS can't see the assignment inside the transaction callback, so re-widen.
+  const p = updatedCreatorProfile as Prisma.CreatorProfileGetPayload<object> | null;
+  if (p) {
     onProfileChanged({
       id: p.id,
       displayName: p.displayName,

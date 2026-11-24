@@ -1,4 +1,4 @@
-import {ReleaseCondition, EscrowAccount, Milestone} from './types.js';
+import {ReleaseCondition, EscrowAccount, Milestone} from './types';
 import {Spec, AssembledTransaction, Client as ContractClient, ClientOptions as ContractClientOptions, MethodOptions} from '@stellar/stellar-sdk/contract';
 import {Address} from '@stellar/stellar-sdk';
 import { Buffer } from 'buffer';

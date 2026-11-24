@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: 'Target base URL (Next.js)'
+        description: 'Target base URL (Next.js); defaults to vars.STAGING_URL'
         required: false
-        default: 'http://localhost:3000'
+        default: ''
       rust_api_url:
         description: 'Rust API URL'
         required: false
@@ -23,50 +23,61 @@ on:
   schedule:
     - cron: '0 2 * * *'
 
+permissions:
+  contents: read
+  issues: write   # the failure step opens an issue
+
 jobs:
   load-test:
     runs-on: ubuntu-24.04  # Pinned to ensure reproducible builds (see #1270)
+    # Nothing starts the app on the runner, so only run against a real target.
+    if: github.event.inputs.base_url != '' || vars.STAGING_URL != ''
     steps:
       - uses: actions/checkout@v7
 
+      # The apt keyserver install broke (no dirmngr on the runner); use the official action.
       - name: Install k6
-        run: |
-          sudo gpg --no-default-keyring \
-            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
-            --keyserver hkp://keyserver.ubuntu.com:80 \
-            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
-          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
-            | sudo tee /etc/apt/sources.list.d/k6.list
-          sudo apt-get update && sudo apt-get install -y k6
+        uses: grafana/setup-k6-action@v1
 
       - name: Resolve test name
         id: resolve
         run: |
           # Scheduled runs default to the smoke suite against staging
           TEST="${{ github.event.inputs.test || 'smoke' }}"
-          BASE_URL="${{ github.event.inputs.base_url || vars.STAGING_URL || 'http://localhost:3000' }}"
+          BASE_URL="${{ github.event.inputs.base_url || vars.STAGING_URL }}"
           RUST_API_URL="${{ github.event.inputs.rust_api_url || vars.STAGING_RUST_URL || 'http://localhost:3001' }}"
           echo "test=$TEST" >> "$GITHUB_OUTPUT"
           echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
           echo "rust_api_url=$RUST_API_URL" >> "$GITHUB_OUTPUT"
 
       - name: Run load test
+        id: k6
         env:
           BASE_URL: ${{ steps.resolve.outputs.base_url }}
           RUST_API_URL: ${{ steps.resolve.outputs.rust_api_url }}
+        # Capture the k6 exit code so the summary is always uploaded, then
+        # re-raise the failure so the job (and nightly issue) still triggers.
         run: |
+          set +e
           k6 run \
             -e BASE_URL=$BASE_URL \
             -e RUST_API_URL=$RUST_API_URL \
+            --summary-export=load-test-summary.json \
             --out json=load-test-results.json \
             load-tests/${{ steps.resolve.outputs.test }}.test.js
+          K6_EXIT=$?
+          echo "exit_code=$K6_EXIT" >> "$GITHUB_OUTPUT"
+          exit $K6_EXIT
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: load-test-results-${{ steps.resolve.outputs.test }}-${{ github.run_id }}
-          path: load-test-results.json
+          path: |
+            load-test-results.json
+            load-test-summary.json
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Notify on failure

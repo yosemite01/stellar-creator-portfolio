@@ -12,6 +12,7 @@ members = [
     "contracts/stellar_insights",
     "contracts/insurance",
     "contracts/test-utils",
+    "contracts/ttl",
     "contracts/upgradeable",
     "services/api",
     "services/auth",
@@ -26,7 +27,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.84.0"
+rust-version = "1.91.0"
 authors = ["Stellar Team"]
 license = "MIT"
 repository = "https://github.com/stellar/stellar-platform"
@@ -50,7 +51,7 @@ diesel = { version = "2.1", features = ["postgres"] }
 # Cryptography & Blockchain
 ed25519-dalek = "3.0"
 sha2 = "0.11"
-hmac = { version = "0.12", features = ["std"] }
+hmac = "0.13"
 hex = "0.4"
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"

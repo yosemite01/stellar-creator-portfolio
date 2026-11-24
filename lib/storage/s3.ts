@@ -32,12 +32,6 @@ export interface StoredFile {
   signedUrl: string;
 }
 
-export interface UploadObjectInput {
-  key: string;
-  body: Buffer | Uint8Array | string;
-  contentType?: string;
-}
-
 let client: S3Client | undefined;
 
 function getClient(): S3Client {
@@ -75,16 +69,57 @@ export async function getDownloadUrl(key: string): Promise<string> {
   });
 }
 
+export interface UploadObjectInput {
+  key: string;
+  body: Buffer | Uint8Array | string;
+  contentType?: string;
+  metadata?: Record<string, string>;
+}
+
+/** Interface for stored object with metadata */
+export interface StoredObject {
+  key: string;
+  body: Buffer;
+  contentType?: string;
+  metadata?: Record<string, string>;
+}
+
 /** Uploads an object and returns its key with a signed URL to read it back. */
 export async function uploadObject({
   key,
   body,
   contentType,
+  metadata,
 }: UploadObjectInput): Promise<{ key: string; signedUrl: string }> {
   await getClient().send(
-    new PutObjectCommand({ Bucket: getBucket(), Key: key, Body: body, ContentType: contentType }),
+    new PutObjectCommand({
+      Bucket: getBucket(),
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ...(metadata ? { Metadata: metadata } : {}),
+    }),
   );
   return { key, signedUrl: await getDownloadUrl(key) };
+}
+
+/** Downloads an object with its metadata. */
+export async function getObject(key: string): Promise<StoredObject> {
+  const response = await getClient().send(
+    new GetObjectCommand({ Bucket: getBucket(), Key: key }),
+  );
+
+  const body = await response.Body?.transformToByteArray();
+  if (!body) {
+    throw new Error(`Failed to download object: ${key}`);
+  }
+
+  return {
+    key,
+    body: Buffer.from(body),
+    contentType: response.ContentType,
+    metadata: response.Metadata,
+  };
 }
 
 /** Lists objects under a prefix, each with a signed URL. */
@@ -108,4 +143,47 @@ export async function listFiles(prefix = ''): Promise<StoredFile[]> {
 /** Deletes an object. Succeeds if the object is already absent. */
 export async function deleteObject(key: string): Promise<void> {
   await getClient().send(new DeleteObjectCommand({ Bucket: getBucket(), Key: key }));
+}
+
+export interface DeletedObject {
+  key: string;
+  size: number;
+}
+
+/**
+ * Deletes every object under a prefix (GDPR erasure). Paginates through the
+ * listing so large prefixes are fully removed, and returns the keys/sizes that
+ * were deleted so callers can record a certificate of erasure. Succeeds if the
+ * prefix is already empty.
+ */
+export async function deletePrefix(prefix: string): Promise<DeletedObject[]> {
+  if (!prefix) {
+    throw new Error('deletePrefix requires a non-empty prefix');
+  }
+
+  const deleted: DeletedObject[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const response = await getClient().send(
+      new ListObjectsV2Command({
+        Bucket: getBucket(),
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
+
+    const objects = (response.Contents ?? []).filter(
+      (object): object is typeof object & { Key: string } => Boolean(object.Key),
+    );
+
+    for (const object of objects) {
+      await deleteObject(object.Key);
+      deleted.push({ key: object.Key, size: object.Size ?? 0 });
+    }
+
+    continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return deleted;
 }

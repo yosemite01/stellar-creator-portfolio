@@ -17,7 +17,7 @@ workflow, code style, testing, and the PR/merge process for this repo.
 - Node.js 20 (matches `.github/workflows/cli-checks.yml`'s pinned `node-version: 20` — there's
   no `.nvmrc` yet, see `docs/MAINTENANCE_NOTES.md`)
 - pnpm 10+ (pinned via `packageManager` in `package.json`)
-- Rust 1.84+ with the `wasm32v1-none` target (for backend/contract work — matches `backend/Cargo.toml`'s `rust-version`; CI and the Dockerfile pin 1.89.0)
+- Rust 1.91+ with the `wasm32v1-none` target (for backend/contract work — matches `backend/Cargo.toml`'s `rust-version`; CI and Dockerfile.contracts pin 1.94.1)
 - Git
 
 ### Setup Development Environment

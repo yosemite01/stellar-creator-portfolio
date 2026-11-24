@@ -16,7 +16,7 @@ import type { UserPreferences } from '@/server/services/notifications/notificati
 import { rateLimit } from '@/server/services/notifications/rate-limiter';
 import { logNotification, trackDelivery } from '@/server/services/notifications/notification-logger';
 import { prisma } from '@/lib/prisma';
-import { NotificationStatus } from '@prisma/client';
+import { NotificationStatus } from '@/lib/generated/prisma/client';
 
 interface SendNotificationRequest {
   userId: string;

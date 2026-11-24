@@ -167,3 +167,285 @@ fn deviation_within_bound_is_accepted() {
     client.update_price(&oracle, &price(&env, 105_000));
     assert_eq!(client.get_price().price_micro_usd, 105_000);
 }
+
+// ── #1709: no silent fallback pricing ───────────────────────────────────────
+
+extern crate std;
+
+use soroban_sdk::testutils::Ledger;
+use soroban_sdk::{contract, contractimpl, symbol_short};
+
+fn advance(env: &Env, secs: u64) {
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + secs);
+}
+
+fn ready(env: &Env, client: &OracleContractClient, admin: &Address, oracle: &Address) {
+    env.ledger().set_timestamp(10_000);
+    client.initialize(admin);
+    client.set_oracle(admin, oracle);
+}
+
+#[test]
+fn get_price_without_any_data_is_no_price() {
+    let (_env, client, admin, _oracle) = setup();
+    client.initialize(&admin);
+    assert_eq!(client.try_get_price(), Err(Ok(OracleError::NoPrice)));
+    assert!(client.get_price_unchecked().is_none());
+}
+
+#[test]
+fn stale_price_is_an_error_not_a_fallback() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.update_price(&oracle, &price(&env, 130_000));
+
+    advance(&env, MAX_PRICE_AGE_SECS + 1);
+
+    // Regression: this used to return FALLBACK_PRICE_MICRO_USD (120_000).
+    assert_eq!(client.try_get_price(), Err(Ok(OracleError::Stale)));
+    assert_eq!(
+        client.try_value_in_tokens(&1_000_000),
+        Err(Ok(OracleError::Stale))
+    );
+}
+
+#[test]
+fn price_at_exact_max_age_is_still_fresh() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.update_price(&oracle, &price(&env, 130_000));
+    advance(&env, MAX_PRICE_AGE_SECS);
+    assert_eq!(client.get_price().price_micro_usd, 130_000);
+}
+
+#[test]
+fn unchecked_price_flags_staleness() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.update_price(&oracle, &price(&env, 130_000));
+
+    let fresh = client.get_price_unchecked().unwrap();
+    assert!(!fresh.is_stale);
+    assert_eq!(fresh.price.price_micro_usd, 130_000);
+
+    advance(&env, MAX_PRICE_AGE_SECS + 1);
+    let stale = client.get_price_unchecked().unwrap();
+    assert!(stale.is_stale);
+    assert_eq!(stale.price.price_micro_usd, 130_000);
+}
+
+#[test]
+#[should_panic(expected = "Price timestamp is in the future")]
+fn future_dated_price_is_rejected() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    let mut p = price(&env, 130_000);
+    p.timestamp += 1_000_000;
+    client.update_price(&oracle, &p);
+}
+
+#[test]
+fn value_in_tokens_uses_live_price() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.update_price(&oracle, &price(&env, 100_000));
+    let v = client.value_in_tokens(&1_000_000);
+    assert_eq!(v.token_amount, 10);
+    assert_eq!(v.price_used, 100_000);
+    assert!(!v.used_fallback);
+}
+
+// ── Multi-reporter median ───────────────────────────────────────────────────
+
+fn with_reporters(env: &Env, client: &OracleContractClient, admin: &Address, n: u32) -> std::vec::Vec<Address> {
+    let mut out = std::vec::Vec::new();
+    for _ in 0..n {
+        let r = Address::generate(env);
+        client.add_reporter(admin, &r);
+        out.push(r);
+    }
+    out
+}
+
+#[test]
+fn median_of_three_ignores_outlier() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    let reps = with_reporters(&env, &client, &admin, 3);
+    client.set_quorum(&admin, &3);
+
+    client.submit_report(&reps[0], &100_000);
+    client.submit_report(&reps[1], &101_000);
+    client.submit_report(&reps[2], &9_000_000); // manipulated outlier
+
+    let p = client.get_price();
+    assert_eq!(p.price_micro_usd, 101_000);
+    assert_eq!(p.sources, 3);
+}
+
+#[test]
+fn median_of_even_count_averages_middle_pair() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    let reps = with_reporters(&env, &client, &admin, 4);
+    client.set_quorum(&admin, &2);
+    client.submit_report(&reps[0], &100);
+    client.submit_report(&reps[1], &300);
+    client.submit_report(&reps[2], &200);
+    client.submit_report(&reps[3], &1_000);
+    assert_eq!(client.get_price().price_micro_usd, 250);
+}
+
+#[test]
+fn quorum_not_met_with_fresh_reports_is_stale() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    let reps = with_reporters(&env, &client, &admin, 3);
+    client.set_quorum(&admin, &2);
+
+    client.submit_report(&reps[0], &100_000);
+    advance(&env, MAX_PRICE_AGE_SECS + 1);
+    client.submit_report(&reps[1], &100_000); // only one fresh report
+
+    assert_eq!(client.try_get_price(), Err(Ok(OracleError::Stale)));
+}
+
+#[test]
+fn quorum_falls_back_to_registered_oracle_only_if_fresh() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    let reps = with_reporters(&env, &client, &admin, 2);
+    client.set_quorum(&admin, &2);
+    client.submit_report(&reps[0], &100_000);
+    client.update_price(&oracle, &price(&env, 120_000));
+    // Quorum not met, primary oracle is fresh.
+    assert_eq!(client.get_price().price_micro_usd, 120_000);
+}
+
+#[test]
+#[should_panic(expected = "Caller is not a reporter")]
+fn non_reporter_cannot_submit_report() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.submit_report(&Address::generate(&env), &100_000);
+}
+
+#[test]
+#[should_panic(expected = "Caller is not the admin")]
+fn non_admin_cannot_add_reporter() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.add_reporter(&Address::generate(&env), &Address::generate(&env));
+}
+
+#[test]
+#[should_panic(expected = "Caller is not the admin")]
+fn non_admin_cannot_set_quorum() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.set_quorum(&Address::generate(&env), &0);
+}
+
+#[test]
+#[should_panic(expected = "Quorum exceeds reporter count")]
+fn quorum_cannot_exceed_reporters() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    with_reporters(&env, &client, &admin, 1);
+    client.set_quorum(&admin, &2);
+}
+
+#[test]
+#[should_panic(expected = "Removal would break the quorum")]
+fn removing_reporter_cannot_break_quorum() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    let reps = with_reporters(&env, &client, &admin, 2);
+    client.set_quorum(&admin, &2);
+    client.remove_reporter(&admin, &reps[0]);
+}
+
+#[test]
+#[should_panic(expected = "Caller is not a reporter")]
+fn removed_reporter_is_revoked() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    let reps = with_reporters(&env, &client, &admin, 2);
+    client.remove_reporter(&admin, &reps[0]);
+    assert_eq!(client.get_reporters().len(), 1);
+    client.submit_report(&reps[0], &1);
+}
+
+// ── Reflector secondary source ──────────────────────────────────────────────
+
+#[contract]
+pub struct MockReflector;
+
+#[contractimpl]
+impl MockReflector {
+    pub fn set(env: Env, price: i128, timestamp: u64, decimals: u32) {
+        env.storage().instance().set(&symbol_short!("p"), &price);
+        env.storage().instance().set(&symbol_short!("t"), &timestamp);
+        env.storage().instance().set(&symbol_short!("d"), &decimals);
+    }
+
+    pub fn lastprice(env: Env, _asset: Asset) -> Option<ReflectorPriceData> {
+        let price: Option<i128> = env.storage().instance().get(&symbol_short!("p"));
+        price.map(|price| ReflectorPriceData {
+            price,
+            timestamp: env.storage().instance().get(&symbol_short!("t")).unwrap(),
+        })
+    }
+
+    pub fn decimals(env: Env) -> u32 {
+        env.storage().instance().get(&symbol_short!("d")).unwrap_or(14)
+    }
+}
+
+fn reflector(env: &Env, client: &OracleContractClient, admin: &Address) -> MockReflectorClient<'static> {
+    let id = env.register(MockReflector, ());
+    client.set_reflector(admin, &id, &Asset::Other(symbol_short!("XLM")));
+    MockReflectorClient::new(env, &id)
+}
+
+#[test]
+fn reflector_is_used_when_primary_is_stale() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.update_price(&oracle, &price(&env, 100_000));
+    advance(&env, MAX_PRICE_AGE_SECS + 1);
+
+    let r = reflector(&env, &client, &admin);
+    // 0.11 USD with 14 decimals.
+    r.set(&11_000_000_000_000, &env.ledger().timestamp(), &14);
+
+    let p = client.get_price();
+    assert_eq!(p.price_micro_usd, 110_000);
+    assert!(client.value_in_tokens(&1_100_000).used_fallback);
+}
+
+#[test]
+fn stale_reflector_does_not_rescue_a_stale_primary() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    let r = reflector(&env, &client, &admin);
+    r.set(&110_000, &env.ledger().timestamp(), &6);
+    advance(&env, MAX_PRICE_AGE_SECS + 1);
+    assert_eq!(client.try_get_price(), Err(Ok(OracleError::Stale)));
+}
+
+#[test]
+#[should_panic(expected = "Caller is not the admin")]
+fn non_admin_cannot_set_reflector() {
+    let (env, client, admin, oracle) = setup();
+    ready(&env, &client, &admin, &oracle);
+    client.set_reflector(&Address::generate(&env), &Address::generate(&env), &Asset::Other(symbol_short!("XLM")));
+}
+
+#[test]
+fn to_micro_usd_scales_both_directions() {
+    assert_eq!(to_micro_usd(12_345_678, 8), 123_456);
+    assert_eq!(to_micro_usd(12, 2), 120_000);
+    assert_eq!(to_micro_usd(7, 6), 7);
+}

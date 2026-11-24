@@ -51,11 +51,11 @@ fn escrow_scenarios(out: &mut BTreeMap<&'static str, Cost>) {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(admin).address();
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     StellarAssetClient::new(&env, &token).mint(&payer, &10_000);
-    let escrow = EscrowContractClient::new(&env, &env.register(EscrowContract, ()));
+    let escrow = EscrowContractClient::new(&env, &env.register(EscrowContract, (admin.clone(),)));
 
     let mut id = 0;
     out.insert(
@@ -70,7 +70,7 @@ fn escrow_scenarios(out: &mut BTreeMap<&'static str, Cost>) {
 fn bounty_scenarios(out: &mut BTreeMap<&'static str, Cost>) {
     let env = Env::default();
     env.mock_all_auths();
-    let bounty = BountyContractClient::new(&env, &env.register(BountyContract, ()));
+    let bounty = BountyContractClient::new(&env, &env.register(BountyContract, (Address::generate(&env),)));
     let creator = Address::generate(&env);
     let freelancer = Address::generate(&env);
     let title = String::from_str(&env, "Benchmark bounty");
@@ -165,7 +165,7 @@ fn entrypoint_costs() {
         return;
     }
 
-    let mut table = String::from(
+    let mut table = std::string::String::from(
         "| Entrypoint | CPU insns | Δ CPU | Mem bytes | Δ Mem |\n|---|---:|---:|---:|---:|\n",
     );
     let mut regressions = Vec::new();

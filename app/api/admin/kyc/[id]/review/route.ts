@@ -86,12 +86,11 @@ export async function POST(
       },
     });
     await writeAuditLog({
-      actorId: adminUser.id,
+      userId: adminUser.id,
+      resource: 'KYCSubmission',
       action: 'kyc.review.reject',
-      targetType: 'KYCSubmission',
-      targetId: submission.id,
-      before: { status: submission.status },
-      after: { status: updated.status, reason },
+      resourceId: submission.id,
+      payload: { before: { status: submission.status }, after: { status: updated.status, reason } },
     });
     return NextResponse.json({ id: updated.id, status: updated.status });
   }
@@ -114,12 +113,11 @@ export async function POST(
   ]);
 
   await writeAuditLog({
-    actorId: adminUser.id,
+    userId: adminUser.id,
+    resource: 'KYCSubmission',
     action: 'kyc.review.approve',
-    targetType: 'KYCSubmission',
-    targetId: submission.id,
-    before: { status: submission.status },
-    after: { status: 'APPROVED', reason: reason ?? null },
+    resourceId: submission.id,
+    payload: { before: { status: submission.status }, after: { status: 'APPROVED', reason: reason ?? null } },
   });
 
   if (!submission.user.walletAddress) {
@@ -133,10 +131,13 @@ export async function POST(
 
   try {
     const submissionIdHash = createHash('sha256').update(submission.id).digest();
+    // #1811: retried with idempotency; null means the chain already held the
+    // attestation (an earlier attempt landed) so no new tx was sent. Throws
+    // only when the chain does not reflect it — never mark verified then.
     const txHash = await verifyKycOnChain(submission.user.walletAddress, submissionIdHash);
     await prisma.kYCSubmission.update({
       where: { id: submission.id },
-      data: { verifiedOnChain: true, txHash },
+      data: { verifiedOnChain: true, ...(txHash ? { txHash } : {}) },
     });
     return NextResponse.json({ id: submission.id, status: 'APPROVED', verifiedOnChain: true, txHash });
   } catch (error) {

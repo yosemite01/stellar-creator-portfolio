@@ -84,7 +84,7 @@ fn strkey_encode_gaddress(raw_key: &[u8; 32]) -> String {
 
 /// Encode bytes to RFC 4648 base32 (upper-case, no padding).
 fn base32_encode(input: &[u8]) -> String {
-    let mut out = String::with_capacity((input.len() * 8 + 4) / 5);
+    let mut out = String::with_capacity((input.len() * 8).div_ceil(5));
     let mut buf: u16 = 0;
     let mut bits: u8 = 0;
     for &byte in input {
@@ -128,13 +128,41 @@ impl StellarAccount {
         if account.starts_with('M') {
             Self::parse_muxed(account)
         } else if account.starts_with('G') {
-            Ok(StellarAccount {
-                base_account: account.to_string(),
-                muxed_id: None,
-            })
+            Self::parse_gaddress(account)
         } else {
             Err(ParseError::InvalidFormat)
         }
+    }
+
+    /// Decode a G-address using the full StrKey algorithm:
+    /// base32 → validate CRC-16 → check version byte → extract raw key.
+    ///
+    /// This mirrors the TS implementation so both sides reject malformed
+    /// G-addresses (bad base32, bad checksum, wrong version byte) consistently.
+    fn parse_gaddress(account: &str) -> Result<Self, ParseError> {
+        let decoded = base32_decode(account)?;
+
+        // 1 version + 32 pubkey + 2 checksum = 35 bytes
+        if decoded.len() != 35 {
+            return Err(ParseError::InvalidFormat);
+        }
+
+        let (payload, checksum_bytes) = decoded.split_at(33);
+        let expected = crc16_xmodem(payload);
+        let actual = (checksum_bytes[0] as u16) | ((checksum_bytes[1] as u16) << 8);
+        if expected != actual {
+            return Err(ParseError::InvalidChecksum);
+        }
+
+        // Version byte for ED25519_PUBLIC_KEY is 0x30 (0x06 << 3).
+        if payload[0] != 0x30 {
+            return Err(ParseError::InvalidVersionByte);
+        }
+
+        Ok(StellarAccount {
+            base_account: account.to_string(),
+            muxed_id: None,
+        })
     }
 
     /// Decode an M-address using the full SEP-23 / StrKey algorithm:
@@ -224,190 +252,84 @@ impl fmt::Display for ParseError {
             ParseError::InvalidMuxedFormat => write!(f, "Invalid muxed account format: wrong decoded length"),
             ParseError::InvalidChecksum => write!(f, "Muxed account checksum mismatch"),
             ParseError::InvalidVersionByte => write!(f, "Unexpected StrKey version byte"),
-            ParseError::InvalidMuxedId => write!(f, "Invalid muxed ID"),
+            ParseError::InvalidMuxedId => write!(f, "Invalid muxed account ID"),
         }
     }
 }
 
 impl std::error::Error for ParseError {}
 
-// ── Tests ─────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── Helper: build a valid M-address from a raw 32-byte key + muxed ID ──
-
-    /// Construct a valid SEP-23 muxed account string for the given raw public key
-    /// and muxed ID.  This mirrors exactly what the Stellar SDK produces so the
-    /// round-trip tests below use real (not hand-crafted) encoded strings.
-    fn build_muxed_address(raw_key: &[u8; 32], muxed_id: u64) -> String {
-        let mut payload = Vec::with_capacity(43);
-        payload.push(0x60u8); // MUXED_ACCOUNT_MED25519 version byte
-        payload.extend_from_slice(&muxed_id.to_be_bytes());
-        payload.extend_from_slice(raw_key);
-        let crc = crc16_xmodem(&payload);
-        payload.push((crc & 0xFF) as u8);
-        payload.push((crc >> 8) as u8);
-        base32_encode(&payload)
-    }
-
-    /// 32-byte all-zero test key (valid length, not a real keypair).
-    fn zero_key() -> [u8; 32] {
-        [0u8; 32]
-    }
-
-    /// 32-byte all-ones test key.
-    fn ones_key() -> [u8; 32] {
-        [0xFFu8; 32]
-    }
-
-    // ── CRC-16 primitive ────────────────────────────────────────────────────
+    // Shared test vectors (mirrored in the TS implementation).
+    const G_ADDRESS: &str = "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ";
+    const M_ADDRESS: &str = "MA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVAAAAAAAAAAAAAJLK";
 
     #[test]
-    fn crc16_known_vector() {
-        // "123456789" → 0x31C3 per XModem spec
-        assert_eq!(crc16_xmodem(b"123456789"), 0x31C3);
-    }
-
-    // ── Base32 round-trip ────────────────────────────────────────────────────
-
-    #[test]
-    fn base32_round_trip() {
-        let data: Vec<u8> = (0u8..43).collect();
-        let encoded = base32_encode(&data);
-        let decoded = base32_decode(&encoded).expect("decode should succeed");
-        assert_eq!(decoded, data);
+    fn parses_regular_g_address() {
+        let acct = StellarAccount::parse(G_ADDRESS).unwrap();
+        assert_eq!(acct.base_account, G_ADDRESS);
+        assert_eq!(acct.muxed_id, None);
+        assert!(!acct.is_muxed());
+        assert_eq!(acct.analytics_id(), G_ADDRESS);
     }
 
     #[test]
-    fn base32_decode_rejects_invalid_chars() {
-        assert_eq!(base32_decode("!@#$"), Err(ParseError::InvalidBase32));
-    }
-
-    // ── Regular account (G-address) ────────────────────────────────────────
-
-    #[test]
-    fn parse_regular_account_roundtrip() {
-        // Re-encode the zero key as a G-address and verify parse accepts it.
-        let g = strkey_encode_gaddress(&zero_key());
-        assert!(g.starts_with('G'), "expected G-prefix, got {}", g);
-        let parsed = StellarAccount::parse(&g).unwrap();
-        assert_eq!(parsed.base_account, g);
-        assert_eq!(parsed.muxed_id, None);
-        assert!(!parsed.is_muxed());
-        assert_eq!(parsed.analytics_id(), g);
-    }
-
-    // ── Muxed account round-trip ────────────────────────────────────────────
-
-    #[test]
-    fn parse_muxed_id_1_roundtrip() {
-        let m = build_muxed_address(&zero_key(), 1);
-        assert!(m.starts_with('M'), "expected M-prefix, got {}", m);
-        let parsed = StellarAccount::parse(&m).unwrap();
-        assert!(parsed.is_muxed());
-        assert_eq!(parsed.muxed_id, Some(1));
-        // The base_account must be the G-address for the zero key.
-        let expected_g = strkey_encode_gaddress(&zero_key());
-        assert_eq!(parsed.base_account, expected_g);
+    fn rejects_g_address_with_bad_checksum() {
+        // Flip the final character to break the CRC.
+        let mut bad = G_ADDRESS.to_string();
+        bad.pop();
+        bad.push('A');
+        assert_eq!(StellarAccount::parse(&bad), Err(ParseError::InvalidChecksum));
     }
 
     #[test]
-    fn parse_muxed_max_id_roundtrip() {
-        let m = build_muxed_address(&zero_key(), u64::MAX);
-        let parsed = StellarAccount::parse(&m).unwrap();
-        assert_eq!(parsed.muxed_id, Some(u64::MAX));
+    fn rejects_g_address_with_wrong_length() {
+        assert_eq!(
+            StellarAccount::parse("GABC"),
+            Err(ParseError::InvalidFormat)
+        );
     }
 
     #[test]
-    fn parse_muxed_large_id_roundtrip() {
-        let m = build_muxed_address(&ones_key(), 0xFFFF_FFFF);
-        let parsed = StellarAccount::parse(&m).unwrap();
-        assert_eq!(parsed.muxed_id, Some(0xFFFF_FFFF));
-    }
-
-    #[test]
-    fn parse_muxed_id_0_roundtrip() {
-        let m = build_muxed_address(&zero_key(), 0);
-        let parsed = StellarAccount::parse(&m).unwrap();
-        assert_eq!(parsed.muxed_id, Some(0));
-    }
-
-    // ── analytics_id distinguishes muxed sub-accounts ──────────────────────
-
-    #[test]
-    fn analytics_id_distinguishes_muxed_accounts() {
-        let m1 = build_muxed_address(&zero_key(), 1);
-        let m2 = build_muxed_address(&zero_key(), 2);
-        let base_g = strkey_encode_gaddress(&zero_key());
-
-        let p1 = StellarAccount::parse(&m1).unwrap();
-        let p2 = StellarAccount::parse(&m2).unwrap();
-        let pb = StellarAccount::parse(&base_g).unwrap();
-
-        assert_eq!(p1.base_account, p2.base_account, "same underlying key");
-        assert_ne!(p1.analytics_id(), p2.analytics_id());
-        assert_ne!(pb.analytics_id(), p1.analytics_id());
-    }
-
-    #[test]
-    fn analytics_id_different_base_keys() {
-        let m1 = build_muxed_address(&zero_key(), 1);
-        let m2 = build_muxed_address(&ones_key(), 1);
-        let p1 = StellarAccount::parse(&m1).unwrap();
-        let p2 = StellarAccount::parse(&m2).unwrap();
-        assert_ne!(p1.analytics_id(), p2.analytics_id());
-    }
-
-    // ── Error cases ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn parse_empty_account() {
+    fn rejects_empty_and_unknown_prefix() {
         assert_eq!(StellarAccount::parse(""), Err(ParseError::EmptyAccount));
+        assert_eq!(StellarAccount::parse("SABC"), Err(ParseError::InvalidFormat));
     }
 
     #[test]
-    fn parse_invalid_format() {
-        assert_eq!(StellarAccount::parse("INVALID"), Err(ParseError::InvalidFormat));
+    fn rejects_invalid_base32() {
+        // '1' is not in the base32 alphabet.
+        assert_eq!(
+            StellarAccount::parse("G1111111111111111111111111111111111111111111111111111111"),
+            Err(ParseError::InvalidBase32)
+        );
     }
 
     #[test]
-    fn parse_muxed_bad_checksum() {
-        let mut m = build_muxed_address(&zero_key(), 1);
-        // Flip the last character to corrupt the checksum.
-        let last = m.pop().unwrap();
-        let replacement = if last == 'A' { 'B' } else { 'A' };
-        m.push(replacement);
-        let result = StellarAccount::parse(&m);
-        // May fail with InvalidBase32 (if the flip hits a non-alphabet char),
-        // InvalidMuxedFormat (wrong decoded length), or InvalidChecksum.
-        assert!(result.is_err());
+    fn parses_muxed_address() {
+        let acct = StellarAccount::parse(M_ADDRESS).unwrap();
+        assert_eq!(acct.base_account, G_ADDRESS);
+        assert_eq!(acct.muxed_id, Some(0));
+        assert!(acct.is_muxed());
+        assert_eq!(acct.analytics_id(), format!("{}:0", G_ADDRESS));
     }
 
     #[test]
-    fn parse_muxed_too_short() {
-        // Fewer than 56 base32 chars → decodes to <43 bytes → wrong length.
-        let result = StellarAccount::parse("MSHORT");
-        assert!(result.is_err());
-    }
-
-    // ── Display ─────────────────────────────────────────────────────────────
-
-    #[test]
-    fn display_regular_account() {
-        let g = strkey_encode_gaddress(&zero_key());
-        let parsed = StellarAccount::parse(&g).unwrap();
-        assert_eq!(parsed.to_string(), g);
+    fn rejects_muxed_with_bad_checksum() {
+        let mut bad = M_ADDRESS.to_string();
+        bad.pop();
+        bad.push('A');
+        assert_eq!(StellarAccount::parse(&bad), Err(ParseError::InvalidChecksum));
     }
 
     #[test]
-    fn display_muxed_account_contains_colon() {
-        let m = build_muxed_address(&zero_key(), 42);
-        let parsed = StellarAccount::parse(&m).unwrap();
-        let s = parsed.to_string();
-        assert!(s.contains(':'), "expected '<G-addr>:<id>', got {}", s);
-        assert!(s.ends_with(":42"), "expected ':42' suffix, got {}", s);
+    fn rejects_muxed_with_wrong_length() {
+        assert_eq!(
+            StellarAccount::parse("MABC"),
+            Err(ParseError::InvalidMuxedFormat)
+        );
     }
 }

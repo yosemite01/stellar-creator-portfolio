@@ -1,3 +1,4 @@
+import { createHmac } from 'crypto';
 import { PayoutReceipt } from './types';
 
 function escapePdfText(text: string): string {
@@ -5,10 +6,59 @@ function escapePdfText(text: string): string {
 }
 
 /**
+ * Compute an HMAC-SHA256 over the canonical receipt fields.
+ * The key is `RECEIPT_SIGNING_SECRET` from the environment (required in
+ * production; falls back to a dev-only placeholder so local builds work).
+ *
+ * The canonical string is deterministic: fields are sorted and joined with
+ * `|` so serialisation differences cannot produce different signatures.
+ */
+export function signReceipt(receipt: PayoutReceipt): string {
+  const secret = process.env.RECEIPT_SIGNING_SECRET ?? 'dev-only-insecure-secret';
+  const canonical = [
+    receipt.receiptNumber,
+    receipt.payoutId,
+    receipt.issuedAt,
+    receipt.freelancer.userId,
+    receipt.client.userId,
+    receipt.bounty.id,
+    receipt.feeBreakdown.grossAmount.toFixed(2),
+    receipt.feeBreakdown.platformFeeAmount.toFixed(2),
+    receipt.feeBreakdown.netPayoutAmount.toFixed(2),
+    receipt.currency,
+    receipt.status,
+    receipt.stellarTxHash ?? '',
+  ].join('|');
+  return createHmac('sha256', secret).update(canonical).digest('hex');
+}
+
+/**
+ * Verify a receipt signature previously produced by {@link signReceipt}.
+ * Returns `true` when valid; `false` when the receipt has been tampered with
+ * or the secret is wrong.  Constant-time comparison prevents timing attacks.
+ */
+export function verifyReceiptSignature(receipt: PayoutReceipt, signature: string): boolean {
+  const expected = signReceipt(receipt);
+  // Constant-time comparison (Node >=16 timingSafeEqual requires Buffers).
+  if (expected.length !== signature.length) return false;
+  const a = Buffer.from(expected, 'hex');
+  const b = Buffer.from(signature.padEnd(expected.length, '0'), 'hex');
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/**
  * Generates a valid standard PDF-1.4 binary document for a payout receipt.
  * Contains platform fee breakdown, freelancer/client metadata, and Stellar tx link.
+ *
+ * (#1738) The HMAC-SHA256 signature of the receipt's canonical fields is
+ * embedded in the PDF's `/Keywords` metadata entry and printed in the footer,
+ * so the document is tamper-evident.  Pass the same `receipt` object back to
+ * {@link verifyReceiptSignature} to verify offline.
  */
 export function generateReceiptPdf(receipt: PayoutReceipt): Uint8Array {
+  const signature = signReceipt(receipt);
   const lines: string[] = [];
 
   // Helper to draw text in stream
@@ -100,7 +150,9 @@ export function generateReceiptPdf(receipt: PayoutReceipt): Uint8Array {
   contentOps.push('0.5 0.5 0.5 rg');
   contentOps.push('50 120 Td (LEGAL & TAX NOTICE:) Tj');
   contentOps.push(`0 -12 Td (${escapePdfText(receipt.notes)}) Tj`);
-  contentOps.push('0 -12 Td (Tamgora Decentralized Freelance Platform • Built on Stellar Network) Tj');
+  contentOps.push('0 -12 Td (Tamgora Decentralized Freelance Platform \u2022 Built on Stellar Network) Tj');
+  // (#1738) Print the tamper-evident HMAC-SHA256 signature in the footer.
+  contentOps.push(`0 -14 Td (Integrity Signature (HMAC-SHA256): ${escapePdfText(signature)}) Tj`);
   contentOps.push('ET');
 
   const streamContent = contentOps.join('\n');
@@ -131,6 +183,12 @@ export function generateReceiptPdf(receipt: PayoutReceipt): Uint8Array {
   // Object 6: Standard Font Helvetica-Bold
   objects.push('6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n');
 
+  // Object 7: Document Info dictionary (#1738) — the HMAC-SHA256 signature is
+  // stored in /Keywords so it survives re-saves and is machine-readable.
+  objects.push(
+    `7 0 obj\n<< /Title (${escapePdfText(`Payout Receipt ${receipt.receiptNumber}`)}) /Author (Tamgora Platform) /Keywords (hmac-sha256:${signature}) >>\nendobj\n`
+  );
+
   // Calculate offsets for xref table
   let pdf = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
   const offsets: number[] = [];
@@ -150,7 +208,7 @@ export function generateReceiptPdf(receipt: PayoutReceipt): Uint8Array {
   }
 
   pdf += 'trailer\n';
-  pdf += `<< /Size ${objects.length + 1} /Root 1 0 R >>\n`;
+  pdf += `<< /Size ${objects.length + 1} /Root 1 0 R /Info 7 0 R >>\n`;
   pdf += 'startxref\n';
   pdf += `${xrefOffset}\n`;
   pdf += '%%EOF\n';

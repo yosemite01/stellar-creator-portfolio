@@ -63,6 +63,12 @@ Deployer account: set the `TESTNET_DEPLOYER_SECRET` repository secret to
 deploy from a fixed account. Without it, the workflow generates a throwaway
 Friendbot-funded identity.
 
+Contract admin: bounty and escrow take their admin as a constructor argument
+at deploy (issue #1708), so there is no follow-up `set_admin` transaction to
+front-run. Set the `TESTNET_CONTRACT_ADMIN` / `MAINNET_CONTRACT_ADMIN`
+repository variables to the governance address (a `G...` key). On testnet
+the workflow falls back to the throwaway deployer's address.
+
 If `main` is branch-protected against bot pushes, allow `github-actions[bot]`
 to bypass, or the commit step will fail. The deployment itself and the
 uploaded artifact are unaffected.
@@ -82,5 +88,6 @@ STELLAR_NETWORK=testnet \
 STELLAR_RPC_URL=https://soroban-testnet.stellar.org \
 STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015" \
 STELLAR_ADMIN_SECRET=<secret or stellar-cli identity> \
+STELLAR_CONTRACT_ADMIN=<G... admin for bounty/escrow constructors> \
 node scripts/deploy.cjs --manifest deployments/testnet.json
 ```

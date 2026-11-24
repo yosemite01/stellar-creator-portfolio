@@ -9,7 +9,6 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
-  mockTransactions,
   computeSummary,
   type EarningTransaction,
 } from '@/lib/earnings-data'
@@ -110,19 +109,19 @@ const STATUS_VARIANT: Record<EarningTransaction['status'], 'default' | 'secondar
  *
  * @returns The rendered earnings dashboard view.
  */
-export function EarningsDashboard() {
+export function EarningsDashboard({ transactions = [] }: { transactions?: EarningTransaction[] }) {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [page, setPage] = useState(1)
 
   const filtered = useMemo(() => {
-    return mockTransactions.filter((tx) => {
+    return transactions.filter((tx) => {
       const t = new Date(tx.date).getTime()
       if (dateFrom && t < new Date(dateFrom).getTime()) return false
       if (dateTo && t > new Date(dateTo + 'T23:59:59').getTime()) return false
       return true
     })
-  }, [dateFrom, dateTo])
+  }, [transactions, dateFrom, dateTo])
 
   const summary = useMemo(() => computeSummary(filtered), [filtered])
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)

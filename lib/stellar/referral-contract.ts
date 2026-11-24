@@ -105,3 +105,24 @@ export async function getReferralCountOnChain(
     return null;
   }
 }
+
+/**
+ * Reads `ReferralContract::get_pool()` — `(available, reserved)` reward
+ * token balances of the funded pool (Issue #1716). `available` is unreserved
+ * funding; `reserved` backs unclaimed rewards. Returns `null` on any failure.
+ * `sourceAddress` is any valid G... address used only for simulation.
+ */
+export async function getReferralPoolOnChain(
+  sourceAddress: string,
+): Promise<{ available: bigint; reserved: bigint } | null> {
+  const contractId = process.env.REFERRAL_CONTRACT_ID;
+  if (!contractId) return null;
+
+  try {
+    const result = await simulateReadonlyCall(contractId, 'get_pool', [], sourceAddress);
+    if (!Array.isArray(result) || result.length !== 2) return null;
+    return { available: BigInt(result[0]), reserved: BigInt(result[1]) };
+  } catch {
+    return null;
+  }
+}

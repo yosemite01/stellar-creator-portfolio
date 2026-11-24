@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma';
-import { NotificationStatus } from '@prisma/client';
-import { logger } from '@/lib/logger';
+import { NotificationStatus } from '@/lib/generated/prisma/client';
+import { logger as appLogger } from '@/lib/logger';
 
 interface NotificationLog {
   userId: string;
@@ -54,9 +54,9 @@ export class NotificationLogger {
         },
       });
 
-      logger.info('NotificationLogger', { messageId: log.messageId, status: log.status });
+      appLogger.info('NotificationLogger', { messageId: log.messageId, status: log.status });
     } catch (error) {
-      logger.error('Failed to log notification', { err: String(error) });
+      appLogger.error('Failed to log notification', { err: String(error) });
     }
   }
 
@@ -79,9 +79,9 @@ export class NotificationLogger {
         },
       });
 
-      logger.info('DeliveryTracker', { messageId, status });
+      appLogger.info('DeliveryTracker', { messageId, status });
     } catch (error) {
-      logger.error('Failed to track delivery', { err: String(error) });
+      appLogger.error('Failed to track delivery', { err: String(error) });
     }
   }
 
@@ -133,9 +133,9 @@ export class NotificationLogger {
   ): Promise<void> {
     try {
       // Audit logging could also go to a separate AuditLog model
-      logger.info('AuditLog', { action, userId, details: JSON.stringify(details) });
+      appLogger.info('AuditLog', { action, userId, details: JSON.stringify(details) });
     } catch (error) {
-      logger.error('Failed to audit log', { err: String(error) });
+      appLogger.error('Failed to audit log', { err: String(error) });
     }
   }
 }

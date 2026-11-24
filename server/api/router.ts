@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { protectedProcedure, publicProcedure, rateLimit, router } from './trpc';
 import { emitEvent } from '@/server/services/events';
 import { writeAuditLog } from '@/server/services/audit';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/generated/prisma/client';
 import { prisma } from '@/lib/prisma';
 import { creatorCardSelect, toCreator } from './creator-mapper';
 import { getJwtSecret } from './jwt-secret';
@@ -207,6 +207,17 @@ export const appRouter = router({
           orderBy: [{ rating: 'desc' }, { completedProjects: 'desc' }],
         });
         return profiles.map(toCreator);
+      }),
+
+    /** Headline counts for the landing page. */
+    stats: publicProcedure
+      .use(rateLimit({ windowMs: 60_000, max: 60 }))
+      .query(async () => {
+        const [creatorCount, projectCount] = await Promise.all([
+          prisma.creatorProfile.count(),
+          prisma.project.count(),
+        ]);
+        return { creatorCount, projectCount };
       }),
 
     list: publicProcedure
@@ -519,8 +530,8 @@ export const appRouter = router({
     verifyZk: publicProcedure
       .input(
         z.object({
-          proof: z.record(z.unknown()),
-          publicInputs: z.record(z.unknown()),
+          proof: z.record(z.string(), z.unknown()),
+          publicInputs: z.record(z.string(), z.unknown()),
           nullifier: z.string(),
         })
       )

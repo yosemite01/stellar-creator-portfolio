@@ -125,6 +125,21 @@ users. The admin role also couldn't be rotated safely. It was either fixed
 forever or set once through `set_admin`, with nothing to stop a typo from
 handing it to an address no one controls.
 
+### Constructor-based admin (escrow, bounty — issue #1708)
+
+Escrow and Bounty no longer expose `set_admin` (or Bounty's `initialize`).
+Both define `__constructor(admin: Address)` (protocol 22+), so the admin is
+written in the same transaction as the deploy and cannot be front-run by
+whoever calls first. `scripts/deploy.cjs` passes it as
+`stellar contract deploy ... -- --admin $STELLAR_CONTRACT_ADMIN`. All later
+changes go through `propose_admin` / `accept_admin`.
+
+Bounty keeps a single admin key, `bounty_admin`. Contracts deployed before
+this change that still hold an admin under the legacy `admin` key should
+call `migrate_admin_key()` once (signed by that admin) after upgrading; it
+moves the value into `bounty_admin`, deletes the legacy key and emits
+`(bounty, admin_mig)`.
+
 ### Entrypoints (same on every contract)
 
 | Entrypoint | Who signs | Effect |
@@ -140,6 +155,27 @@ handing it to an address no one controls.
 
 The instant `upgrade` entrypoint has been **removed**. The timelock is the
 constant `UPGRADE_TIMELOCK_SECS` (48 hours) on every network.
+
+### Uniform semantics and enforcement (Issue #1719)
+
+`stellar_insights` used to expose its own `upgrade` / `cancel_upgrade` pair
+that did not go through the library. It now exposes exactly the same
+entrypoints as every other contract, so there is no weakest-link contract.
+Two things keep it that way:
+
+* **CI check** — `scripts/check-contract-upgrades.sh` (run in the Rust job)
+  fails if `update_current_contract_wasm` appears anywhere outside
+  `backend/contracts/upgradeable`, if a deployable contract does not depend
+  on `stellar-upgradeable`, or if it does not invoke the conformance macro.
+* **Shared conformance tests** — `stellar_upgradeable::upgrade_timelock_tests!`
+  generates the same tests in every contract crate: the delay returned by
+  `propose_upgrade` is the 48h minimum, `execute_upgrade` fails with `902`
+  immediately and one second before `executable_at`, fails with `901` when
+  nothing is pending or after a cancel, and non-admins get `900`.
+
+Off-chain, the indexer should alert on every `(upgrade, proposed)` event
+(see Events below); `get_pending_upgrade()` on each contract is the poll-based
+fallback.
 
 ```mermaid
 sequenceDiagram
@@ -194,13 +230,13 @@ overlap a contract's own error enum.
    optimize`) so the deployed bytecode matches what was reviewed.
 2. Upload it to get its hash:
    `stellar contract upload --wasm <path> --source <admin-identity> --network <network>`.
-3. Simulate the `upgrade` call first (`stellar contract invoke --is-view`
-   where supported, or a Testnet dry run) to confirm the new wasm hash and
-   admin signature are both accepted before touching Mainnet.
-4. Call `upgrade(admin, new_wasm_hash)` from the platform admin key. Because
-   this requires `admin.require_auth()`, only the holder of the stored
-   `platform_admin` address can do this — treat that key with the same care
-   as `MAINNET_DEPLOYER_SECRET`.
+3. Simulate the `propose_upgrade` call first (a Testnet dry run) to confirm
+   the new wasm hash and admin signature are both accepted before touching
+   Mainnet.
+4. Call `propose_upgrade(admin, new_wasm_hash)` from the admin key, announce
+   the returned `executable_at`, wait at least 48h, then call
+   `execute_upgrade(admin)`. Only the stored admin can do either — treat that
+   key with the same care as `MAINNET_DEPLOYER_SECRET`.
 5. Watch for the `(contract, upgraded)` event to confirm the swap landed,
    and smoke-test a read and a write entrypoint against the live contract ID
    immediately after.
@@ -212,9 +248,9 @@ overlap a contract's own error enum.
 Never deploy a *new* contract ID as a stand-in for "upgrading" unless you
 specifically want a breaking migration (new ID, old integrators silently
 pointed at dead code) — that's a distinct, much more disruptive operation
-than calling `upgrade`, and isn't what CI's Mainnet pipeline does on a normal
+than `propose_upgrade` + `execute_upgrade`, and isn't what CI's Mainnet pipeline does on a normal
 release (a normal release only redeploys code behind IDs that didn't already
-exist; it doesn't call `upgrade` on existing ones — that's a deliberate,
+exist; it doesn't upgrade existing ones — that's a deliberate,
 separate, manual step per the procedure above).
 
 ## Error codes
@@ -238,8 +274,8 @@ should match on the code instead.
 | Code | Variant | Meaning |
 |---|---|---|
 | 1 | `EscrowNotFound` | No escrow with that id |
-| 2 | `AdminNotSet` | Admin-gated call before `set_admin` |
-| 3 | `AdminAlreadySet` | `set_admin` called twice |
+| 2 | `AdminNotSet` | Admin-gated call with no stored admin |
+| 3 | `AdminAlreadySet` | Constructor found an admin already stored |
 | 4 | `Unauthorized` | Caller is not the payer/payee/admin this call requires |
 | 5 | `EscrowNotActive` | Escrow is not `Active` |
 | 6 | `ReleaseConditionNotMet` | Timelock has not elapsed |
@@ -262,6 +298,40 @@ should match on the code instead.
 | 23 | `InsufficientLiquidity` | Withdrawal would breach the liquidity floor |
 | 24 | `InvalidFeeConfig` | Fee bps outside 0–1 000 or negative cap |
 | 25 | `InvalidStaleness` | Staleness outside 60–86 400 s |
+| 26 | `TokenNotAllowed` | `deposit` with a token that is not on the admin allowlist (#1715) |
+| 27 | `TokenTransferMismatch` | Token moved a different amount than requested (fee-on-transfer, rebasing or no-op `transfer`) (#1715) |
+| 28 | `BountyContractNotSet` | Bounty-driven call before `set_bounty_contract` (#1714) |
+| 29 | `NotBountyContract` | Caller is not the registered bounty contract (#1714) |
+| 30 | `ManagedByBounty` | Escrow is bound to a bounty; drive it through the bounty contract (#1714) |
+| 31 | `EscrowAlreadyBound` | Escrow or bounty is already bound (#1714) |
+| 32 | `BountyMismatch` | Escrow belongs to another bounty or payer (#1714) |
+| 33 | `FeeExceedsMax` | Effective platform fee exceeds the caller-supplied `max_fee` (#1724) |
+| 34 | `NoPendingFeeUpdate` | No fee change is scheduled, or it already took effect |
+| 35 | `FeeTimelockActive` | `apply_fee_update` called before `FEE_CHANGE_DELAY_SECS` elapsed |
+| 36 | `ArbitrationNotConfigured` | Arbitration call before arbitration is configured (#1713) |
+| 37 | `ArbitrationAlreadyConfigured` | Arbitration is already configured |
+| 38 | `InsufficientStake` | Arbiter stake is below the configured minimum |
+| 39 | `ArbiterNotFound` | No arbiter registered for that address |
+| 40 | `ArbiterBusy` | Arbiter is on an open case and can't leave the pool |
+| 41 | `NotEnoughArbiters` | Pool is too small to draw a panel |
+| 42 | `CaseNotFound` | No arbitration case for that escrow |
+| 43 | `NotOnPanel` | Caller is not on this case's panel |
+| 44 | `WrongPhase` | Call not allowed in the case's current phase |
+| 45 | `AlreadyCommitted` | Arbiter already committed a vote |
+| 46 | `CommitmentNotFound` | Reveal without a prior commit |
+| 47 | `CommitmentMismatch` | Revealed vote doesn't match the commitment |
+| 48 | `AlreadyRevealed` | Arbiter already revealed |
+| 49 | `AppealNotAllowed` | Case is not appealable, was already appealed, or the appeal window closed |
+| 50 | `TooMuchEvidence` | Evidence limit for the case reached |
+| 51 | `CaseAlreadyOpen` | An arbitration case is already open for this escrow |
+| 52 | `ArbiterPoolFull` | Arbiter pool is at capacity |
+| 53 | `TooManyIds` | Batch call with more ids than allowed (#1720) |
+| 54 | `MilestoneSumMismatch` | Milestone amounts do not sum to the escrow amount (#1712) |
+| 55 | `TooManyMilestones` | More than `MAX_MILESTONES` milestones on one escrow |
+| 56 | `MilestoneAmendLocked` | Milestone plan can't be amended after a milestone was released |
+| 57 | `Insolvent` | Outflow would leave less than the tracked principal liabilities for that token (#1706) |
+| 58 | `YieldWithdrawDisabled` | `withdraw_yield` is behind a disabled feature flag (#1706) |
+| 59 | `Overflow` | Arithmetic overflow while accruing yield (#1707) |
 
 ### Bounty (`BountyError`)
 
@@ -272,8 +342,8 @@ should match on the code instead.
 | 3 | `InsufficientBalance` | Reserved |
 | 4 | `MultisigNotConfigured` | High-value bounty but no signer set |
 | 5 | `InsufficientSigners` | Fewer approvers than `required` |
-| 6 | `AlreadyInitialized` | `initialize` / `set_admin` called twice |
-| 7 | `AdminNotSet` | Admin-gated call before `initialize` |
+| 6 | `AlreadyInitialized` | Constructor found an admin already stored |
+| 7 | `AdminNotSet` | Admin-gated call with no stored admin (run `migrate_admin_key` on legacy deploys) |
 | 8 | `Unauthorized` | Caller is not the admin |
 | 9 | `EscrowContractNotSet` | `create_and_fund_bounty` before `set_escrow_contract` |
 | 10 | `BountyNotFound` | No bounty with that id |
@@ -306,6 +376,18 @@ should match on the code instead.
 | 4 | `MonthlyLimitReached` | Referrer hit 50 referrals this month |
 | 5 | `ReferralNotFound` | No referral for that address |
 | 6 | `NoUnclaimedRewards` | Nothing to claim |
+| 7 | `SelfReferral` | `register_referral` with `referrer == referred` |
+| 8 | `ReferralLoop` | `referrer` was referred by `referred` |
+| 9 | `RefereeIsReferrer` | `referred` has already referred someone |
+| 10 | `RiskAttestationRequired` | Risk attestor configured but no attestation passed |
+| 11 | `RiskAttestationExpired` | Attestation `expires_at` is in the past |
+| 12 | `BountyContractNotSet` | `award_referral_reward` before `set_bounty_contract` |
+| 13 | `NotQualifyingActivity` | Referred account has not completed that funded bounty |
+| 14 | `BountyAlreadyRewarded` | That bounty already paid a referral reward |
+| 15 | `RewardCapReached` | Referrer hit the per-period reward cap |
+| 16 | `PoolEmpty` | Funded pool cannot cover the award / claim |
+| 17 | `InvalidAmount` | Amount, fee or cap ≤ 0 |
+| 18 | `Unauthorized` | Caller is not the admin |
 
 ### Insurance (`InsuranceError`)
 

@@ -7,7 +7,7 @@
  * rate while still exposing the original currency totals.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@/lib/generated/prisma/client';
 
 export type EarningCurrency = 'XLM' | 'USDC' | 'USD';
 
@@ -52,6 +52,28 @@ export interface EarningsReport {
   displayCurrency: EarningCurrency;
   /** Monthly totals grouped by month and original currency */
   monthly: MonthlyCurrencyTotal[];
+}
+
+/** A single ledger-derived earning line, used for tax-year exports. */
+export interface EarningLedgerEntry {
+  id: string;
+  /** ISO date the payment was released */
+  date: string;
+  currency: EarningCurrency;
+  /** Amount in the original currency */
+  amount: number;
+  /** USD value at the time of payment */
+  usdAtPayment: number;
+  txHash: string;
+}
+
+/** Tax-year export of earnings, grouped by original currency. */
+export interface TaxYearExport {
+  year: number;
+  displayCurrency: EarningCurrency;
+  entries: EarningLedgerEntry[];
+  totalsByCurrency: MonthlyCurrencyTotal[];
+  totalUSD: number;
 }
 
 // ── FX rates (USD per unit) ─────────────────────────────────────────────────
@@ -104,13 +126,12 @@ export async function getEarningsReport(
   const rates = getFxRates();
   const displayRate = rates[displayCurrency] ?? 1;
 
-  // Aggregate released payments grouped by month and currency.
-  const grouped = await prisma.payment.groupBy({
-    by: ['currency'],
-    where: { userId, status: 'RELEASED' },
+  // Released escrows paid to this creator. Escrow amounts are USDC.
+  const released = await prisma.escrow.aggregate({
+    where: { creatorId: userId, status: 'released' },
     _sum: { amount: true },
-    _count: { _all: true },
   });
+  const grouped = [{ currency: 'USDC', _sum: { amount: released._sum.amount } }];
 
   const monthlyMap = new Map<string, MonthlyCurrencyTotal>();
   let totalThisYear = 0;
@@ -145,8 +166,8 @@ export async function getEarningsReport(
   }
 
   // Pending escrow (not yet released) in USD.
-  const pending = await prisma.payment.aggregate({
-    where: { userId, status: 'PENDING' },
+  const pending = await prisma.escrow.aggregate({
+    where: { creatorId: userId, status: 'active' },
     _sum: { amount: true },
   });
   const pendingEscrow = parseFloat(Number(pending._sum.amount ?? 0).toFixed(2));
@@ -190,5 +211,108 @@ export function computeSummary(txs: EarningTransaction[]): EarningsSummary {
     totalThisMonth: parseFloat(totalThisMonth.toFixed(2)),
     pendingEscrow: parseFloat(pendingEscrow.toFixed(2)),
     currency: 'USD',
+  };
+}
+
+/**
+ * A creator's escrows as dashboard transactions: released escrows count as
+ * completed earnings, active ones as pending, refunded ones as failed.
+ */
+export async function getEarningTransactions(
+  userId: string,
+  prisma: PrismaClient,
+): Promise<EarningTransaction[]> {
+  const escrows = await prisma.escrow.findMany({
+    where: { creatorId: userId },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+  });
+
+  return escrows.map((e) => {
+    const status: EarningTransaction['status'] =
+      e.status === 'released' ? 'completed' : e.status === 'refunded' ? 'failed' : 'pending';
+    return {
+      id: e.id,
+      bountyId: e.id,
+      bountyTitle: `Escrow ${e.id.slice(0, 8)}`,
+      clientName: e.clientId,
+      amount: e.amount,
+      currency: 'USDC',
+      usdEquivalent: toUSD(e.amount, 'USDC'),
+      date: (e.releasedAt ?? e.createdAt).toISOString(),
+      status,
+      txHash: '',
+    };
+  });
+}
+
+/**
+ * Build a tax-year export from the released escrow ledger. Only escrows
+ * released within the given calendar year (UTC) are included. Amounts are
+ * reported in their original currency with the USD value at time of payment.
+ */
+export async function getTaxYearExport(
+  userId: string,
+  year: number,
+  prisma: PrismaClient,
+  displayCurrency: EarningCurrency = 'USD',
+): Promise<TaxYearExport> {
+  const start = new Date(Date.UTC(year, 0, 1));
+  const end = new Date(Date.UTC(year + 1, 0, 1));
+
+  const escrows = await prisma.escrow.findMany({
+    where: {
+      creatorId: userId,
+      status: 'released',
+      releasedAt: { gte: start, lt: end },
+    },
+    orderBy: { releasedAt: 'asc' },
+  });
+
+  const rates = getFxRates();
+  const displayRate = rates[displayCurrency] ?? 1;
+
+  const entries: EarningLedgerEntry[] = [];
+  const totalsMap = new Map<EarningCurrency, MonthlyCurrencyTotal>();
+  let totalUSD = 0;
+
+  for (const e of escrows) {
+    const currency: EarningCurrency = 'USDC';
+    const amount = Number(e.amount ?? 0);
+    const usdAtPayment = toUSD(amount, currency);
+    const releasedAt = e.releasedAt ?? e.createdAt;
+
+    entries.push({
+      id: e.id,
+      date: releasedAt.toISOString(),
+      currency,
+      amount: parseFloat(amount.toFixed(2)),
+      usdAtPayment,
+      txHash: '',
+    });
+
+    totalUSD += usdAtPayment;
+
+    const existing = totalsMap.get(currency);
+    const displayAmount = parseFloat((usdAtPayment / displayRate).toFixed(2));
+    if (existing) {
+      existing.amount = parseFloat((existing.amount + amount).toFixed(2));
+      existing.displayAmount = parseFloat((existing.displayAmount + displayAmount).toFixed(2));
+    } else {
+      totalsMap.set(currency, {
+        month: `${year}`,
+        currency,
+        amount: parseFloat(amount.toFixed(2)),
+        displayAmount,
+      });
+    }
+  }
+
+  return {
+    year,
+    displayCurrency,
+    entries,
+    totalsByCurrency: Array.from(totalsMap.values()),
+    totalUSD: parseFloat(totalUSD.toFixed(2)),
   };
 }

@@ -51,11 +51,11 @@ function shouldSample(stackKey: string): boolean {
 export async function POST(req: NextRequest) {
   const ip = clientIp(req);
   const rateKey = `error-report:${ip}`;
-  const rate = checkRate(rateKey, RATE_LIMIT, RATE_WINDOW_MS);
+  const rate = checkRate(rateKey, RATE_LIMIT, RATE_WINDOW_MS / 1000);
   if (!rate.allowed) {
     return NextResponse.json(
       { error: 'Too many requests' },
-      { status: 429, headers: { 'Retry-After': String(Math.ceil(rate.retryAfterMs / 1000)) } },
+      { status: 429, headers: { 'Retry-After': String(rate.retryAfter) } },
     );
   }
 
