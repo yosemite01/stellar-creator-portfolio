@@ -944,6 +944,8 @@ model BountyTemplate {
   /// null = system template; userId = user-saved custom template
   createdByUserId   String?
   createdBy         User?    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  /// Revision counter, bumped on every edit (Issue #1821)
+  version           Int      @default(1)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

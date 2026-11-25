@@ -40,6 +40,7 @@ async function ensureSystemTemplatesSeeded(): Promise<void> {
         suggestedTimeline: t.suggestedTimeline,
         requiredSkills: t.requiredSkills,
         createdByUserId: null,
+        version: 1,
       })),
       skipDuplicates: true,
     });
@@ -71,7 +72,7 @@ export async function createTemplate(
   input: BountyTemplateInput,
 ): Promise<PrismaBountyTemplate> {
   return prisma.bountyTemplate.create({
-    data: { ...input, createdByUserId: userId },
+    data: { ...input, createdByUserId: userId, version: 1 },
   });
 }
 
@@ -89,7 +90,9 @@ export async function updateOwnTemplate(
   const owned = await prisma.bountyTemplate.findFirst({ where: { id, createdByUserId: userId } });
   if (!owned) return null;
 
-  return prisma.bountyTemplate.update({ where: { id }, data: input });
+  // Every edit is a new revision: bounties pin the version they were created
+  // from (Issue #1821), so the counter must move on each update.
+  return prisma.bountyTemplate.update({ where: { id }, data: { ...input, version: owned.version + 1 } });
 }
 
 /** Deletes a template owned by `userId`. Returns whether it was deleted. */
