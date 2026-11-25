@@ -69,7 +69,13 @@ export async function POST(req: NextRequest) {
     parsedExpiresAt = date;
   }
 
-  const { rawKey, keyHash, prefix } = generateApiKey();
+  // generateApiKey applies the default TTL when no expiry was requested, so
+  // every key is forced through rotation (#1541) — never store a null expiry.
+  const generated = generateApiKey({
+    scopes: parsedScopes,
+    expiresAt: parsedExpiresAt ?? undefined,
+  });
+  const { rawKey, keyHash, prefix } = generated;
 
   const key = await prisma.apiKey.create({
     data: {
@@ -77,8 +83,8 @@ export async function POST(req: NextRequest) {
       keyHash,
       prefix,
       name: name.trim(),
-      scopes: parsedScopes,
-      expiresAt: parsedExpiresAt,
+      scopes: generated.scopes,
+      expiresAt: generated.expiresAt,
     },
     select: {
       id: true,
