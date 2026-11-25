@@ -1464,6 +1464,17 @@ async fn main() -> std::io::Result<()> {
 
     let business_metrics = web::Data::new(business_metrics);
 
+    // `webhooks::payment_webhook` extracts `web::Data<deadpool_redis::Pool>`
+    // for idempotency; without it registered actix rejected every webhook
+    // with a 500 before the handler ran. Pool creation is lazy, so a Redis
+    // outage only degrades idempotency (the handler tolerates it).
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+    let redis_pool = deadpool_redis::Config::from_url(redis_url)
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+        .map_err(|e| std::io::Error::other(format!("Invalid REDIS_URL: {e}")))?;
+    let redis_pool = web::Data::new(redis_pool);
+
     HttpServer::new(move || {
         let alert_store = web::Data::new(alerts::AlertStore::new());
         App::new()
@@ -1473,6 +1484,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(ml_state.clone())
             .app_data(web::Data::new(ws_limiter.clone()))
             .app_data(business_metrics.clone())
+            .app_data(redis_pool.clone())
             .wrap(prometheus_middleware.clone())
             .wrap(cors_middleware())
             .wrap(middleware::Logger::default())
