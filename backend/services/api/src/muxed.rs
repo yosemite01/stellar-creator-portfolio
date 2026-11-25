@@ -5,8 +5,8 @@
 ///
 /// Wire format (before base32 encoding):
 ///   version_byte (1)  = 0x60
-///   muxed_id     (8)  = big-endian u64
 ///   raw_pub_key  (32) = 32-byte ed25519 public key
+///   muxed_id     (8)  = big-endian u64
 ///   checksum     (2)  = CRC-16/XModem of the preceding 41 bytes, little-endian
 ///
 /// The 43-byte payload is encoded with RFC 4648 base32 (no padding) and prefixed
@@ -192,11 +192,14 @@ impl StellarAccount {
             return Err(ParseError::InvalidVersionByte);
         }
 
-        // Bytes 1–8: big-endian muxed ID.
-        let muxed_id = u64::from_be_bytes(payload[1..9].try_into().unwrap());
+        // SEP-23 / MuxedAccountMed25519 XDR order: the ed25519 key comes
+        // first and the ID last. Reading the ID from bytes 1–8 returned a
+        // garbage ID and a G-address built from the wrong 32 bytes.
+        // Bytes 1–32: 32-byte raw ed25519 public key → re-encode as G-address.
+        let raw_key: &[u8; 32] = payload[1..33].try_into().unwrap();
 
-        // Bytes 9–40: 32-byte raw ed25519 public key → re-encode as G-address.
-        let raw_key: &[u8; 32] = payload[9..41].try_into().unwrap();
+        // Bytes 33–40: big-endian muxed ID.
+        let muxed_id = u64::from_be_bytes(payload[33..41].try_into().unwrap());
         let base_account = strkey_encode_gaddress(raw_key);
 
         Ok(StellarAccount {
@@ -310,11 +313,21 @@ mod tests {
 
     #[test]
     fn parses_muxed_address() {
+        // SEP-23 test vector: this M-address carries ID 2^63.
         let acct = StellarAccount::parse(M_ADDRESS).unwrap();
         assert_eq!(acct.base_account, G_ADDRESS);
-        assert_eq!(acct.muxed_id, Some(0));
+        assert_eq!(acct.muxed_id, Some(9_223_372_036_854_775_808));
         assert!(acct.is_muxed());
-        assert_eq!(acct.analytics_id(), format!("{}:0", G_ADDRESS));
+        assert_eq!(acct.analytics_id(), format!("{}:9223372036854775808", G_ADDRESS));
+    }
+
+    #[test]
+    fn parses_muxed_address_with_id_zero() {
+        // SEP-23 test vector for the same key with ID 0.
+        let m0 = "MA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUAAAAAAAAAAAACJUQ";
+        let acct = StellarAccount::parse(m0).unwrap();
+        assert_eq!(acct.base_account, G_ADDRESS);
+        assert_eq!(acct.muxed_id, Some(0));
     }
 
     #[test]
