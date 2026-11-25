@@ -81,7 +81,7 @@ export async function verifyKycOnChain(
       contractService.invokeContractMethod(
         identityContractId(),
         'verify_kyc',
-        [adminPublicKey, userAddress, kycSubmissionIdHash],
+        [adminPublicKey, userAddress, commitment, kycSubmissionIdHash],
         signer,
       ),
     async () => (await readKycAttestation(userAddress, adminPublicKey)) !== null,
