@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
 import { deleteOwnTemplate, updateOwnTemplate } from '@/lib/services/bounty-template-service';
+import { sanitizeRichText } from '@/lib/bounty-templates';
 
 /**
  * PATCH  /api/bounty-templates/[id]   update a template the caller owns
@@ -45,8 +46,13 @@ export async function PATCH(
     return NextResponse.json({ error: 'Invalid template', details: parsed.error.flatten() }, { status: 400 });
   }
 
+  const input =
+    parsed.data.description !== undefined
+      ? { ...parsed.data, description: sanitizeRichText(parsed.data.description) }
+      : parsed.data;
+
   const { id } = await params;
-  const template = await updateOwnTemplate(session.user.id, id, parsed.data);
+  const template = await updateOwnTemplate(session.user.id, id, input);
   if (!template) {
     return NextResponse.json({ error: 'Template not found' }, { status: 404 });
   }
