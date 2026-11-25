@@ -1227,23 +1227,23 @@ model Sep24Transaction {
   externalTransactionId String?
   
   /// Timing
-  startedAt            DateTime      @default(now())
-  completedAt          DateTime?
+  startedAt            DateTime      @default(now()) @db.Timestamptz(6)
+  completedAt          DateTime?     @db.Timestamptz(6)
   /// Last time we polled the anchor
-  lastPolledAt         DateTime?
+  lastPolledAt         DateTime?     @db.Timestamptz(6)
   
   /// Polling metadata
   pollCount            Int           @default(0)
   /// When to mark as stale (startedAt + 72h)
-  staleAt              DateTime?
+  staleAt              DateTime?     @db.Timestamptz(6)
   
   /// Full status history for timeline display
   statusHistory        Sep24StatusEntry[]
   
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
+  createdAt            DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime      @default(now()) @updatedAt @db.Timestamptz(6)
   
-  @@index([userId, createdAt])
+  @@index([userId, createdAt(sort: Desc)])
   @@index([anchorId])
   @@index([status])
   @@index([status, lastPolledAt])
@@ -1254,16 +1254,16 @@ model Sep24Transaction {
 model Sep24StatusEntry {
   id           String        @id @default(cuid())
   transaction  Sep24Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  transactionId String       @map("transaction_id")
+  transactionId String
   
   status       Sep24Status
   message      String?       @db.Text
   /// JSON metadata for debugging (e.g. raw anchor response)
   metadata     Json?
   
-  createdAt    DateTime      @default(now())
+  createdAt    DateTime      @default(now()) @db.Timestamptz(6)
   
-  @@index([transactionId, createdAt])
+  @@index([transactionId, createdAt(sort: Desc)])
 }
 
 enum Sep24Kind {
