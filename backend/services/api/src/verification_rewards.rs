@@ -15,7 +15,7 @@ pub const MAX_CLAIMS_PER_USER: usize = 10;
 /// Minimum account age (in seconds) before a user is eligible for rewards.
 pub const MIN_ACCOUNT_AGE_SECS: i64 = 60 * 60 * 24;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerificationReward {
     pub id: String,
     pub user_id: String,
