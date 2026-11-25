@@ -518,6 +518,149 @@ export interface MutationContext {
 
 /**
  * Higher-order wrapper that:
- 
+ *  1. Executes the provided mutation function.
+ *  2. Extracts telemetry metadata from the optional request.
+ *  3. Writes an audit log entry reflecting success or failure.
+ *  4. Re-throws the original error so the caller still handles it.
+ *
+ * @example
+ * ```ts
+ * const bounty = await withAuditLog(
+ *   { userId: session.user.id, resource: 'bounty', action: 'create', request: req },
+ *   () => prisma.bounty.create({ data: { ...input } }),
+ * );
+ * ```
+ */
+export async function withAuditLog<T>(
+  context: MutationContext,
+  mutation: () => Promise<T>,
+  /** Optional payload snapshot to record (before the mutation). */
+  payloadSnapshot?: Record<string, unknown> | null,
+): Promise<T> {
+  const meta = context.request
+    ? extractTelemetryMeta(context.request)
+    : undefined;
 
-/* … truncated 4158 chars — edit only what you need near the top … */
+  try {
+    const result = await mutation();
+
+    // Best-effort — do not await to keep the hot path fast.
+    void writeAuditLog({
+      userId: context.userId,
+      resource: context.resource,
+      action: context.action,
+      resourceId: context.resourceId,
+      payload: payloadSnapshot,
+      status: 'SUCCESS',
+      meta,
+    });
+
+    return result;
+  } catch (err) {
+    const errorMessage =
+      err instanceof Error ? err.message : String(err);
+
+    void writeAuditLog({
+      userId: context.userId,
+      resource: context.resource,
+      action: context.action,
+      resourceId: context.resourceId,
+      payload: payloadSnapshot,
+      status: 'FAILURE',
+      errorMessage,
+      meta,
+    });
+
+    throw err;
+  }
+}
+
+// ── Next.js route-level interceptor ─────────────────────────────────────────
+
+export type MutationHandler<T = unknown> = (
+  request: Request,
+  context?: unknown,
+) => Promise<Response>;
+
+/**
+ * createAuditInterceptor wraps a Next.js App Router route handler (POST / PUT /
+ * PATCH / DELETE) to automatically emit an audit log for every invocation.
+ *
+ * Usage in route.ts:
+ * ```ts
+ * import { createAuditInterceptor } from '@/server/services/audit';
+ *
+ * async function handler(req: Request) { ... }
+ *
+ * export const POST = createAuditInterceptor('bounty', 'create', handler);
+ * ```
+ *
+ * The interceptor:
+ *  - Extracts telemetry headers (IP hash, trace-id, user-agent, country).
+ *  - Reads userId from the `x-user-id` header set by upstream auth middleware.
+ *  - Logs the resource, action, HTTP method, path, and outcome.
+ *  - Never swallows or alters the handler's response.
+ */
+export function createAuditInterceptor(
+  resource: string,
+  action: string,
+  handler: MutationHandler,
+): MutationHandler {
+  return async (request: Request, context?: unknown): Promise<Response> => {
+    const meta = extractTelemetryMeta(request);
+    // Prefer an explicit user-id header injected by the auth middleware;
+    // callers may also set it via the x-user-id convenience header.
+    const userId =
+      (request.headers as Headers).get('x-user-id') ?? null;
+
+    let status: AuditStatus = 'SUCCESS';
+    let errorMessage: string | null = null;
+    let resourceId: string | null = null;
+
+    try {
+      const response = await handler(request, context);
+
+      // Attempt to read resourceId from the JSON response body (best-effort).
+      // We clone to avoid consuming the body stream.
+      try {
+        const clone = response.clone();
+        const contentType = response.headers.get('content-type') ?? '';
+        if (contentType.includes('application/json')) {
+          const body = await clone.json();
+          if (body?.id) resourceId = String(body.id);
+          else if (body?.data?.id) resourceId = String(body.data.id);
+        }
+      } catch {
+        // Non-JSON or body already consumed — skip.
+      }
+
+      if (!response.ok) {
+        status = 'FAILURE';
+      }
+
+      void writeAuditLog({
+        userId,
+        resource,
+        action,
+        resourceId,
+        status,
+        meta,
+      });
+
+      return response;
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : String(err);
+
+      void writeAuditLog({
+        userId,
+        resource,
+        action,
+        status: 'FAILURE',
+        errorMessage,
+        meta,
+      });
+
+      throw err;
+    }
+  };
+}
