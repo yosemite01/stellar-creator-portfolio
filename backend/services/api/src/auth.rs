@@ -1,8 +1,10 @@
 //! JWT authentication middleware for Actix-web.
 //!
 //! Protected routes must carry a `Bearer <token>` header.
-//! The secret is read from the `JWT_SECRET` environment variable
-//! (falls back to `"stellar-dev-secret"` in development).
+//! The secret is read from the `JWT_SECRET` environment variable. Debug and
+//! test builds fall back to `"stellar-dev-secret"`; release builds reject every
+//! token when it is unset, so a misconfigured deploy never accepts tokens
+//! signed with the public dev secret.
 
 use actix_web::{
     body::{BoxBody, MessageBody},
@@ -31,14 +33,21 @@ pub struct Claims {
 
 // ── Validation helper ─────────────────────────────────────────────────────────
 
-fn jwt_secret() -> String {
-    std::env::var("JWT_SECRET").unwrap_or_else(|_| "stellar-dev-secret".to_string())
+const DEV_JWT_SECRET: &str = "stellar-dev-secret";
+
+fn jwt_secret() -> Option<String> {
+    match std::env::var("JWT_SECRET") {
+        Ok(secret) if !secret.is_empty() => Some(secret),
+        _ if cfg!(debug_assertions) => Some(DEV_JWT_SECRET.to_string()),
+        _ => None,
+    }
 }
 
 /// Decode and validate a raw JWT string.
 /// Returns `Claims` on success or an error message on failure.
 pub fn validate_token(token: &str) -> Result<Claims, String> {
-    let key = DecodingKey::from_secret(jwt_secret().as_bytes());
+    let secret = jwt_secret().ok_or_else(|| "JWT_SECRET is not configured".to_string())?;
+    let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
     validation.leeway = 0;
