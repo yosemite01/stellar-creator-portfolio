@@ -2,14 +2,17 @@ import {Address} from '@stellar/stellar-sdk';
 import { Buffer } from 'buffer';
 
     /**
- * Union: DataKey
+ * Typed errors for the KYC issuer registry (#1717). Surface on-chain as
+ * `Error(Contract, #n)`; never renumber, only append.
  */
- export type DataKey =
-  { tag: "Proof"; values: readonly [string, Buffer] } |
-  { tag: "ProofCount"; values: readonly [string] } |
-  { tag: "KycAttestation"; values: readonly [string] } |
-  { tag: "Admin"; values: void } |
-  { tag: "Tier"; values: readonly [string] };
+export const KycError = {
+  101 : { message: "NotInitialized" },
+  102 : { message: "Unauthorized" },
+  103 : { message: "IssuerNotFound" },
+  104 : { message: "IssuerRevoked" },
+  105 : { message: "InvalidTtl" },
+  106 : { message: "AttestationNotFound" }
+}
 
 /**
  * Enum: KycLevel
@@ -30,6 +33,21 @@ export enum KycLevel {
 }
 
 /**
+ * A registered KYC issuer. `signer` is the issuer's current key; rotating
+ * it bumps `key_version`. Attestations signed by a key older than
+ * `min_key_version` are invalid, and a `revoked` issuer invalidates every
+ * attestation it ever wrote.
+ */
+export interface KycIssuer {
+  id: number;
+  key_version: number;
+  min_key_version: number;
+  registered_at: bigint;
+  revoked: boolean;
+  signer: string;
+}
+
+/**
  * Struct: SocialProof
  */
 export interface SocialProof {
@@ -41,34 +59,32 @@ export interface SocialProof {
 }
 
 /**
- * Error types for identity verification operations (Issue #1341)
+ * Commitment view of a user's attestation (#1718). Reveals no level.
  */
-export const IdentityError = {
-  1 : { message: "Unauthorized" },
-  2 : { message: "InvalidSignature" },
-  3 : { message: "InvalidDomainHash" },
-  4 : { message: "AlreadyVerified" },
-  5 : { message: "ProofNotFound" }
+export interface KycCommitment {
+  attested_at: bigint;
+  commitment: Buffer;
+  expires_at: bigint;
 }
 
 /**
- * Struct: KycAttestation
+ * KYC attestation (schema v3). Each attestation names the issuer that
+ * wrote it and the issuer key version that signed it, so an issuer (or one
+ * of its compromised keys) can be cut off in O(1) without touching
+ * individual attestations (#1717). Contract storage is public, so only a
+ * salted commitment to the level is stored, never the level itself (#1718).
  */
 export interface KycAttestation {
-  attested_at: bigint;
+  /**
+   * `sha256([level as u8] || salt)`; see [`kyc_commitment`].
+   */
+  commitment: Buffer;
   expires_at: bigint;
-  level: KycLevel;
+  issued_at: bigint;
+  issuer_id: number;
+  key_version: number;
+  schema_version: number;
   user: string;
-}
-
-/**
- * Tier attestation stored for each creator address
- */
-export interface TierAttestation {
-  attested_at: bigint;
-  attested_by: string;
-  owner: string;
-  tier: VerificationTier;
 }
 
 /**
@@ -83,13 +99,48 @@ export interface TierAttestation {
   { tag: "Elite"; values: void };
 
 /**
- * Decentralized authenticity record linking an address to verified social domains (Issue #1341)
+ * Errors raised by the shared upgrade/admin helpers.
+ *
+ * Codes start at 900 so they don't overlap any contract's own error enum;
+ * they surface on-chain as `Error(Contract, #9xx)`.
  */
-export interface DomainAttestation {
-  address: string;
-  attested_at: bigint;
-  domain_hash: Buffer;
-  verified: boolean;
+export const UpgradeError = {
+  /**
+   * Caller is not the stored admin.
+   */
+  900 : { message: "Unauthorized" },
+  /**
+   * `execute_upgrade` / `cancel_upgrade` called with nothing pending.
+   */
+  901 : { message: "NoPendingUpgrade" },
+  /**
+   * `execute_upgrade` called before `executable_at`.
+   */
+  902 : { message: "TimelockNotElapsed" },
+  /**
+   * `accept_admin` / `cancel_admin_transfer` called with nothing pending.
+   */
+  903 : { message: "NoPendingAdmin" },
+  /**
+   * `accept_admin` signed by an address other than the nominee.
+   */
+  904 : { message: "NotPendingAdmin" },
+  /**
+   * `propose_admin` nominated the current admin.
+   */
+  905 : { message: "SameAdmin" }
+}
+
+/**
+ * A proposed code upgrade waiting out its timelock.
+ */
+export interface PendingUpgrade {
+  executable_at: bigint;
+  proposed_at: bigint;
+  wasm_hash: Buffer;
 }
     
     
+export type KycError = (typeof KycError)[keyof typeof KycError];
+
+export type UpgradeError = (typeof UpgradeError)[keyof typeof UpgradeError];

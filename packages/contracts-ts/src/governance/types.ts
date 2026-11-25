@@ -1,4 +1,5 @@
 import {Address} from '@stellar/stellar-sdk';
+import { Buffer } from 'buffer';
 
     /**
  * Proposal
@@ -18,9 +19,9 @@ export interface Proposal {
 /**
  * Weighted vote cast by a token holder.
  *
- * `weight` is the voter's token balance at vote time, expressed in the
- * token's smallest denomination.  Callers supply this value; a production
- * deployment would read it from an on-chain token contract.
+ * `weight` is the voter's checkpointed voting power at the proposal's
+ * snapshot ledger (Issue #1565), in the voting token's smallest
+ * denomination. It is read on-chain, never supplied by the caller.
  */
 export interface TokenVote {
   proposal_id: bigint;
@@ -74,5 +75,48 @@ export interface ExecutionTimelock {
   proposal_id: bigint;
   unlock_at: bigint;
 }
+
+/**
+ * Errors raised by the shared upgrade/admin helpers.
+ *
+ * Codes start at 900 so they don't overlap any contract's own error enum;
+ * they surface on-chain as `Error(Contract, #9xx)`.
+ */
+export const UpgradeError = {
+  /**
+   * Caller is not the stored admin.
+   */
+  900 : { message: "Unauthorized" },
+  /**
+   * `execute_upgrade` / `cancel_upgrade` called with nothing pending.
+   */
+  901 : { message: "NoPendingUpgrade" },
+  /**
+   * `execute_upgrade` called before `executable_at`.
+   */
+  902 : { message: "TimelockNotElapsed" },
+  /**
+   * `accept_admin` / `cancel_admin_transfer` called with nothing pending.
+   */
+  903 : { message: "NoPendingAdmin" },
+  /**
+   * `accept_admin` signed by an address other than the nominee.
+   */
+  904 : { message: "NotPendingAdmin" },
+  /**
+   * `propose_admin` nominated the current admin.
+   */
+  905 : { message: "SameAdmin" }
+}
+
+/**
+ * A proposed code upgrade waiting out its timelock.
+ */
+export interface PendingUpgrade {
+  executable_at: bigint;
+  proposed_at: bigint;
+  wasm_hash: Buffer;
+}
     
     
+export type UpgradeError = (typeof UpgradeError)[keyof typeof UpgradeError];
