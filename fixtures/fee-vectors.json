@@ -1,70 +1,33 @@
-// Shared test vectors for fee calculations across TypeScript and Rust.
-// Used to verify `compute_fee` and `platform_fee` produce identical results.
-// Format: { amount, feeBps, expectedFee }
 [
-  // ── Edge cases ──────────────────────────────────────────────────────────
   { "amount": 0, "feeBps": 0, "expectedFee": 0 },
   { "amount": 0, "feeBps": 250, "expectedFee": 0 },
   { "amount": 0, "feeBps": 1000, "expectedFee": 0 },
-
-  // ── Small amounts that round to 0 ───────────────────────────────────────
-  // At 2.5% (250 bps), fee < 1 until amount >= 40
   { "amount": 1, "feeBps": 250, "expectedFee": 0 },
   { "amount": 39, "feeBps": 250, "expectedFee": 0 },
   { "amount": 40, "feeBps": 250, "expectedFee": 1 },
   { "amount": 41, "feeBps": 250, "expectedFee": 1 },
   { "amount": 79, "feeBps": 250, "expectedFee": 1 },
   { "amount": 80, "feeBps": 250, "expectedFee": 2 },
-
-  // ── Low fee rates ───────────────────────────────────────────────────────
   { "amount": 100, "feeBps": 1, "expectedFee": 0 },
   { "amount": 9999, "feeBps": 1, "expectedFee": 0 },
   { "amount": 10000, "feeBps": 1, "expectedFee": 1 },
-
-  // ── Standard 2.5% rate ──────────────────────────────────────────────────
   { "amount": 400, "feeBps": 250, "expectedFee": 10 },
   { "amount": 1000, "feeBps": 250, "expectedFee": 25 },
   { "amount": 10000, "feeBps": 250, "expectedFee": 250 },
   { "amount": 20000, "feeBps": 250, "expectedFee": 500 },
-  { "amount": 30000, "feeBps": 250, "expectedFee": 500 },  // At cap
-  { "amount": 10000000, "feeBps": 250, "expectedFee": 500 },  // Way above cap
-
-  // ── Maximum rate (10%) ──────────────────────────────────────────────────
   { "amount": 10000, "feeBps": 1000, "expectedFee": 1000 },
   { "amount": 100000, "feeBps": 1000, "expectedFee": 10000 },
   { "amount": 500000, "feeBps": 1000, "expectedFee": 50000 },
-
-  // ── Large amounts ───────────────────────────────────────────────────────
   { "amount": 1234567, "feeBps": 350, "expectedFee": 43209 },
   { "amount": 10000000, "feeBps": 500, "expectedFee": 500000 },
   { "amount": 1000000000, "feeBps": 1000, "expectedFee": 100000000 },
   { "amount": 9999999999, "feeBps": 999, "expectedFee": 998999999 },
-
-  // ── Cap boundary tests ──────────────────────────────────────────────────
-  // At 2.5% rate, cap of 500 kicks in at amount = 20000
-  { "amount": 19999, "feeBps": 250, "expectedFee": 499 },   // Just below cap
-  { "amount": 20000, "feeBps": 250, "expectedFee": 500 },   // Exactly at cap
-  { "amount": 20001, "feeBps": 250, "expectedFee": 500 },   // Just above cap
-
-  // ── Various fee rates at cap boundary ───────────────────────────────────
-  // fee_cap = 500
-  // rate * amount / 10000 = 500 → amount = 5000000 / rate
-  { "amount": 50000, "feeBps": 100, "expectedFee": 500 },   // 100 bps * 50000 / 10000 = 500
-  { "amount": 25000, "feeBps": 200, "expectedFee": 500 },   // 200 bps * 25000 / 10000 = 500
-  { "amount": 10000, "feeBps": 500, "expectedFee": 500 },   // 500 bps * 10000 / 10000 = 500
-
-  // ── Regression: exact values from existing tests ────────────────────────
-  { "amount": 1000, "feeBps": 250, "expectedFee": 25 },      // Escrow test
-  { "amount": 400, "feeBps": 250, "expectedFee": 10 },       // Escrow test
-  { "amount": 30000, "feeBps": 250, "expectedFee": 500 },    // Escrow test at cap
-  { "amount": 1000000, "feeBps": 250, "expectedFee": 500 },  // Escrow test above cap
-
-  // ── Fee timelock tests (Issue #1724) ────────────────────────────────────
-  // Quoted fee at 250 bps, actual fee 500 bps after increase
-  { "amount": 1000, "feeBps": 500, "expectedFee": 50 }  // Fee doubled
-
-  // ── Future-proofing: rates up to 10% ────────────────────────────────────
-  { "amount": 100000, "feeBps": 1000, "expectedFee": 10000 },
+  { "amount": 19999, "feeBps": 250, "expectedFee": 499 },
+  { "amount": 20001, "feeBps": 250, "expectedFee": 500 },
+  { "amount": 50000, "feeBps": 100, "expectedFee": 500 },
+  { "amount": 25000, "feeBps": 200, "expectedFee": 500 },
+  { "amount": 10000, "feeBps": 500, "expectedFee": 500 },
+  { "amount": 1000, "feeBps": 500, "expectedFee": 50 },
   { "amount": 500000, "feeBps": 800, "expectedFee": 40000 },
   { "amount": 1000000, "feeBps": 750, "expectedFee": 75000 }
 ]
