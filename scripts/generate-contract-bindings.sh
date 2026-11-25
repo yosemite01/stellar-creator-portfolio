@@ -8,15 +8,17 @@
 # Usage:
 #   ./scripts/generate-contract-bindings.sh
 #
-# Requires: cargo with the wasm32v1-none target, and `pnpm install` run at the
-# repo root (provides the `stellar-js` binary). Set STELLAR_JS to override the
-# generator command.
+# Requires: the Stellar CLI (`stellar`), cargo with the wasm32v1-none target,
+# and `pnpm install` run at the repo root (provides the `stellar-js` binary).
+# Set STELLAR_JS to override the generator command.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$REPO_ROOT/packages/contracts-ts/src"
-WASM_DIR="$REPO_ROOT/backend/target/wasm32v1-none/release"
+# Built wasm goes to a scratch dir: `stellar contract build --out-dir` copies
+# it there regardless of CARGO_TARGET_DIR.
+WASM_DIR="$(mktemp -d)"
 STELLAR_JS="${STELLAR_JS:-pnpm --dir $REPO_ROOT exec stellar-js}"
 # name:cargo-package:wasm-file (cargo names the wasm after the package)
 CONTRACTS=(
@@ -28,13 +30,23 @@ CONTRACTS=(
   oracle:oracle:oracle.wasm
 )
 
-echo "🔨 Building contracts…"
-PKGS=()
-for entry in "${CONTRACTS[@]}"; do PKGS+=(-p "$(cut -d: -f2 <<<"$entry")"); done
-(cd "$REPO_ROOT/backend" && cargo build --release --target wasm32v1-none "${PKGS[@]}")
+command -v stellar >/dev/null || { echo "❌ stellar CLI not found (https://developers.stellar.org/docs/tools/cli)"; exit 1; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP" "$WASM_DIR"' EXIT
+
+# `stellar contract build` (not plain `cargo build`) is the supported way to
+# build Soroban contracts: it uses the release contract profile and embeds
+# the contract metadata (contractmeta/env meta) the binding generator and
+# deploy tooling read. It builds one package at a time.
+echo "🔨 Building contracts…"
+for entry in "${CONTRACTS[@]}"; do
+  pkg="$(cut -d: -f2 <<<"$entry")"
+  stellar contract build \
+    --manifest-path "$REPO_ROOT/backend/Cargo.toml" \
+    --package "$pkg" \
+    --out-dir "$WASM_DIR"
+done
 
 for entry in "${CONTRACTS[@]}"; do
   IFS=: read -r c _ wasm <<<"$entry"
