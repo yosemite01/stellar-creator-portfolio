@@ -84,6 +84,14 @@ vi.mock('@opentelemetry/core', () => ({
   W3CTraceContextPropagator: class {
     extract(ctx: unknown) { return ctx; }
   },
+  W3CBaggagePropagator: class {
+    extract(ctx: unknown) { return ctx; }
+  },
+  CompositePropagator: class {
+    extract(ctx: unknown) { return ctx; }
+    inject() {}
+    fields() { return []; }
+  },
 }));
 
 vi.mock('@opentelemetry/sdk-trace-node', () => ({
