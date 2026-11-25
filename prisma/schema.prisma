@@ -1361,25 +1361,32 @@ enum SwapPhase {
 /// Revoked token registry for token invalidation across services.
 /// When a token is revoked, its JTI is added here and both NextAuth and
 /// Rust auth services check this list before accepting tokens.
+/// Stored in the `revoked_tokens` table created by migration
+/// 20260325130000_create_revoked_tokens (shared with the Rust auth service,
+/// whose JWT ids are UUIDs).
 model RevokedToken {
-  jti       String   @id
-  exp       DateTime
-  createdAt DateTime @default(now())
+  jti       String   @id @db.Uuid
+  exp       DateTime @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  @@index([exp])
+  @@index([exp], map: "idx_revoked_tokens_exp")
+  @@map("revoked_tokens")
 }
 // ── KYC Key Rotation History ───────────────────────────────────────────────
 
 /// Tracks key rotation history for KYC encrypted fields.
 /// Enables tracking which key version was used for each encryption.
+/// Stored in `kyc_key_rotation_history`, created by migration
+/// 20260723090001_kyc_envelope_encryption.
 model KycKeyRotationHistory {
-  id             String   @id @default(cuid())
-  previousKeyId  String
-  newKeyId       String
-  rotatedAt      DateTime @default(now())
-  rotatedBy      String?
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  previousKeyId  String   @map("previous_key_id")
+  newKeyId       String   @map("new_key_id")
+  rotatedAt      DateTime @default(now()) @map("rotated_at") @db.Timestamptz(6)
+  rotatedBy      String?  @map("rotated_by")
 
-  @@index([rotatedAt])
+  @@index([rotatedAt], map: "idx_kyc_key_rotation_history_rotated_at")
+  @@map("kyc_key_rotation_history")
 }
 
 /// CSP violation reports, stored only when CSP_ENFORCE=true (app/api/csp-report).
