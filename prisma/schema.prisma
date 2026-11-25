@@ -26,6 +26,8 @@ model Account {
   scope             String?
   id_token          String? @db.Text
   session_state     String?
+  /// Returned by the GitHub provider; the NextAuth Prisma adapter persists it.
+  refresh_token_expires_in Int?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
