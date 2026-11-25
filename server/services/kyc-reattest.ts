@@ -20,10 +20,11 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 import { getNetworkConfig } from '@/lib/config/network';
+import { KycLevel } from '@/lib/kyc-commitment';
 
 export interface OnChainKycAttestation {
   expiresAt: number; // unix seconds
-  valid: boolean; // result of check_kyc(user, Basic)
+  valid: boolean; // result of check_kyc(user, Basic, level, salt)
 }
 
 export interface KycReattestCandidate {
@@ -33,7 +34,10 @@ export interface KycReattestCandidate {
 
 export interface KycReattestDeps {
   listCandidates: () => Promise<KycReattestCandidate[]>;
-  readAttestation: (walletAddress: string) => Promise<OnChainKycAttestation | null>;
+  readAttestation: (
+    walletAddress: string,
+    submissionIdHash: Uint8Array,
+  ) => Promise<OnChainKycAttestation | null>;
   reattest: (walletAddress: string, submissionIdHash: Uint8Array) => Promise<string | null>;
   now?: () => Date;
 }
@@ -74,12 +78,12 @@ export async function reattestExpiringKyc(
   for (const c of candidates) {
     result.checked += 1;
     try {
-      const attestation = await deps.readAttestation(c.walletAddress);
+      const hash = createHash('sha256').update(c.id).digest();
+      const attestation = await deps.readAttestation(c.walletAddress, hash);
       if (!needsReattest(attestation, nowSecs, windowDays)) {
         result.skipped += 1;
         continue;
       }
-      const hash = createHash('sha256').update(c.id).digest();
       await deps.reattest(c.walletAddress, hash);
       result.reattested += 1;
     } catch {
@@ -102,9 +106,15 @@ async function simulate(contractId: string, method: string, args: xdr.ScVal[], s
   return scValToNative(sim.result.retval);
 }
 
-/** Reads `get_kyc_attestation` + `check_kyc(user, Basic)` via simulation. */
+/**
+ * Reads `get_kyc_attestation` + `check_kyc(user, required_level, level, salt)`
+ * via simulation. The contract only stores a salted commitment (#1718), so
+ * validity can only be checked by presenting the opening re-derived from the
+ * submission id hash.
+ */
 export async function readKycAttestationOnChain(
   walletAddress: string,
+  submissionIdHash: Uint8Array,
 ): Promise<OnChainKycAttestation | null> {
   const contractId = process.env.IDENTITY_CONTRACT_ID;
   if (!contractId) throw new Error('IDENTITY_CONTRACT_ID is not configured');
@@ -114,7 +124,17 @@ export async function readKycAttestationOnChain(
     | null
     | undefined;
   if (!att) return null;
-  const basic = xdr.ScVal.scvVec([xdr.ScVal.scvSymbol('Basic')]);
-  const valid = (await simulate(contractId, 'check_kyc', [user, basic], walletAddress)) === true;
+  // Lazy import keeps the pure scheduling logic above free of KMS/Prisma deps.
+  const { kycOpeningForSubmission } = await import('@/server/services/identity-contract');
+  const { level, salt } = await kycOpeningForSubmission(submissionIdHash);
+  // KycLevel is an integer-valued #[contracttype] enum, encoded as u32.
+  const requiredLevel = nativeToScVal(KycLevel.Basic, { type: 'u32' });
+  const valid =
+    (await simulate(
+      contractId,
+      'check_kyc',
+      [user, requiredLevel, nativeToScVal(level, { type: 'u32' }), nativeToScVal(salt, { type: 'bytes' })],
+      walletAddress,
+    )) === true;
   return { expiresAt: Number(att.expires_at), valid };
 }
