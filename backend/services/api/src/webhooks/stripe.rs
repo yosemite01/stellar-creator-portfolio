@@ -7,7 +7,7 @@
 /// in the `X-Webhook-Signature` header.  The secret is read from the
 /// `WEBHOOK_SECRET` environment variable.
 use actix_web::{web, HttpRequest, HttpResponse};
-use deadpool_redis::{redis::AsyncCommands, Pool};
+use deadpool_redis::Pool;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use serde::{Deserialize, Serialize};
@@ -75,26 +75,28 @@ pub fn verify_signature(secret: &str, body: &[u8], signature_header: &str) -> Re
 const PROCESSED_EVENTS_PREFIX: &str = "webhook:processed:";
 const PROCESSED_EVENTS_TTL: u64 = 86400; // 24 hours
 
-/// Check if an event has already been processed (idempotency check).
-/// Returns `Ok(false)` if new, `Ok(true)` if duplicate, `Err` on Redis error.
-async fn is_event_duplicate(redis: &Pool, event_id: &str) -> Result<bool, String> {
+/// Atomically claim an event for processing (idempotency check).
+/// Returns `Ok(true)` if this call claimed it (new event), `Ok(false)` if it
+/// was already claimed (duplicate), `Err` on Redis error.
+///
+/// A single `SET key 1 NX EX ttl` replaces the former EXISTS-then-SETEX pair,
+/// which let two concurrent deliveries of the same event both pass the check
+/// and both be processed, and which reported a failed EXISTS as "new".
+async fn claim_event(redis: &Pool, event_id: &str) -> Result<bool, String> {
     let Ok(mut conn) = redis.get().await else {
         return Err("Redis connection failed".to_string());
     };
     let key = format!("{}{}", PROCESSED_EVENTS_PREFIX, event_id);
-    let exists: bool = conn.exists(&key).await.unwrap_or(false);
-    Ok(exists)
-}
-
-/// Mark an event as processed with a TTL.
-async fn mark_event_processed(redis: &Pool, event_id: &str) -> Result<(), String> {
-    let Ok(mut conn) = redis.get().await else {
-        return Err("Redis connection failed".to_string());
-    };
-    let key = format!("{}{}", PROCESSED_EVENTS_PREFIX, event_id);
-    let _: () = conn.set_ex(&key, "1", PROCESSED_EVENTS_TTL).await
-        .map_err(|e| format!("Failed to mark event processed: {}", e))?;
-    Ok(())
+    let claimed: Option<String> = deadpool_redis::redis::cmd("SET")
+        .arg(&key)
+        .arg("1")
+        .arg("NX")
+        .arg("EX")
+        .arg(PROCESSED_EVENTS_TTL)
+        .query_async(&mut *conn)
+        .await
+        .map_err(|e| format!("Failed to claim event: {}", e))?;
+    Ok(claimed.is_some())
 }
 
 // ── Action mapping ────────────────────────────────────────────────────────────
@@ -163,8 +165,8 @@ pub async fn payment_webhook(
     };
 
     // 3. Check idempotency (avoid reprocessing)
-    match is_event_duplicate(&redis, &payload.provider_event_id).await {
-        Ok(true) => {
+    match claim_event(&redis, &payload.provider_event_id).await {
+        Ok(false) => {
             info!(
                 "Duplicate webhook received: {:?} for escrow {} (provider_event_id={})",
                 payload.event_type, payload.escrow_id, payload.provider_event_id
@@ -176,11 +178,7 @@ pub async fn payment_webhook(
             };
             return HttpResponse::Ok().json(ApiResponse::ok(ack, None));
         }
-        Ok(false) => {
-            if let Err(e) = mark_event_processed(&redis, &payload.provider_event_id).await {
-                warn!("Failed to mark event as processed: {}", e);
-            }
-        }
+        Ok(true) => {}
         Err(e) => {
             warn!("Idempotency check failed: {}", e);
             // Continue processing — don't fail on Redis errors
