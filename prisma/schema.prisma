@@ -1482,3 +1482,54 @@ model MediaAsset {
   @@index([status])
   @@index([externalJobId])
 }
+
+// ── Tables created by raw-SQL migrations ─────────────────────────────────────
+// These are queried with raw SQL (or by the Rust services) rather than via
+// the Prisma client, but they must be declared here so `prisma migrate diff`
+// against schema.prisma does not try to drop them.
+
+/// Skills taxonomy (#828), migration 20260624100000_add_skill_taxonomy.
+/// The GIN index on to_tsvector('english', name) is an expression index
+/// Prisma cannot express; it lives in the migration only.
+model SkillTaxonomy {
+  id       String          @id
+  name     String
+  aliases  String[]        @default([])
+  category String
+  parentId String?         @map("parent_id")
+  parent   SkillTaxonomy?  @relation("SkillTaxonomyHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children SkillTaxonomy[] @relation("SkillTaxonomyHierarchy")
+
+  @@index([category], map: "idx_skill_taxonomy_category")
+  @@map("skill_taxonomy")
+}
+
+/// Durable Soroban event-indexer cursor, shared with the Rust indexer
+/// (backend/services/indexer) and read/written by lib/soroban/indexer-cursor.ts.
+model IndexerCursor {
+  key       String @id
+  ledgerSeq BigInt @default(0) @map("ledger_seq")
+
+  @@map("indexer_cursors")
+}
+
+/// Legacy testimonials table from migration 20260624110000_add_testimonials,
+/// superseded by the `Testimonial` model. Kept (read-only) so existing rows
+/// are not dropped; the rating/status CHECK constraints live in the migration.
+model LegacyTestimonial {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId  String   @map("client_id")
+  creatorId String   @map("creator_id")
+  bountyId  String?  @map("bounty_id")
+  quote     String
+  rating    Int      @db.SmallInt
+  featured  Boolean  @default(false)
+  status    String   @default("PENDING")
+  videoUrl  String?  @map("video_url")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([clientId], map: "idx_testimonials_client")
+  @@index([creatorId], map: "idx_testimonials_creator")
+  @@index([featured, status], map: "idx_testimonials_featured")
+  @@map("testimonials")
+}
