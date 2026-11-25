@@ -28,6 +28,8 @@ vi.mock('@/lib/prisma', () => ({
   prisma: {
     auditLog: {
       create: vi.fn(),
+      // writeAuditLog reads the chain head to link prevHash (#1751).
+      findFirst: vi.fn(),
     },
   },
 }));
@@ -39,6 +41,7 @@ const mockCreate = prisma.auditLog.create as ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.clearAllMocks();
   mockCreate.mockResolvedValue({ id: 'audit_123' });
+  (prisma.auditLog.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 });
 
 // ── hashIp ───────────────────────────────────────────────────────────────────
