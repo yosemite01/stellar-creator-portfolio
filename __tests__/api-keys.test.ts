@@ -6,13 +6,29 @@ import {
   verifyApiKey,
   isApiKeyExpired,
   API_KEY_SCOPES,
+  DEFAULT_API_KEY_TTL_MS,
+  parseApiKey,
 } from '@/lib/api-keys';
 
 describe('API key utilities', () => {
-  it('generates keys with sk_ prefix', () => {
-    const { rawKey, keyHash } = generateApiKey();
-    expect(rawKey).toMatch(/^sk_[a-f0-9]{48}$/);
+  it('generates keys in the sk_live_<prefix>_<secret> shape', () => {
+    const { rawKey, keyHash, prefix } = generateApiKey();
+    expect(rawKey).toMatch(/^sk_live_[a-f0-9]{16}_[a-f0-9]{48}$/);
+    expect(rawKey.startsWith(`sk_live_${prefix}_`)).toBe(true);
     expect(keyHash).toHaveLength(64);
+  });
+
+  it('parses a generated key and rejects malformed ones', () => {
+    const { rawKey, prefix } = generateApiKey();
+    expect(parseApiKey(rawKey)).toEqual({ prefix, secret: rawKey.split('_').pop() });
+    expect(parseApiKey('sk_deadbeef')).toBeNull();
+    expect(parseApiKey('sk_live_zz_11')).toBeNull();
+  });
+
+  it('defaults new keys to a 90-day expiry', () => {
+    const before = Date.now();
+    const { expiresAt } = generateApiKey();
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + DEFAULT_API_KEY_TTL_MS);
   });
 
   it('hashes keys consistently', () => {
@@ -31,16 +47,16 @@ describe('API key utilities', () => {
     expect(parseScopes(['admin'])).toEqual([]);
   });
 
-  it('never stores plaintext: generated key hash differs from raw key', () => {
+  it('never stores plaintext: stored hash is the hash of the secret part', () => {
     const { rawKey, keyHash } = generateApiKey();
     expect(keyHash).not.toBe(rawKey);
-    expect(keyHash).toBe(hashApiKey(rawKey));
+    expect(keyHash).toBe(hashApiKey(parseApiKey(rawKey)!.secret));
   });
 
-  it('verifies a matching key and rejects a mismatched one', () => {
+  it('verifies a matching secret and rejects a mismatched one', () => {
     const { rawKey, keyHash } = generateApiKey();
-    expect(verifyApiKey(rawKey, keyHash)).toBe(true);
-    expect(verifyApiKey('sk_deadbeef', keyHash)).toBe(false);
+    expect(verifyApiKey(parseApiKey(rawKey)!.secret, keyHash)).toBe(true);
+    expect(verifyApiKey('deadbeef', keyHash)).toBe(false);
   });
 
   it('rejects verification against a malformed stored hash', () => {
@@ -48,8 +64,9 @@ describe('API key utilities', () => {
     expect(verifyApiKey(rawKey, 'not-a-hash')).toBe(false);
   });
 
-  it('treats keys without expiry as non-expiring', () => {
-    expect(isApiKeyExpired(null)).toBe(false);
+  it('treats keys without expiry as expired (deny by default, forces rotation)', () => {
+    expect(isApiKeyExpired(null)).toBe(true);
+    expect(isApiKeyExpired(undefined)).toBe(true);
   });
 
   it('detects expired keys', () => {
