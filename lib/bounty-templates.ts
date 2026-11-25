@@ -77,9 +77,11 @@ export function sanitizeRichText(input: string): string {
     .replace(/<(script|style|iframe|object|embed|svg|math)[^>]*\/?>/gi, '');
 
   // Walk tags, keeping only allow-listed ones with allow-listed attributes.
-  html = html.replace(/<\/?([a-zA-Z0-9]+)((?:\s+[^<>]*?)?)\/?>/g, (match, rawTag, rawAttrs) => {
+  html = html.replace(/<(\/?)([a-zA-Z0-9]+)((?:\s+[^<>]*?)?)\/?>/g, (_match, closing, rawTag, rawAttrs) => {
     const tag = String(rawTag).toLowerCase();
     if (!ALLOWED_TAGS.has(tag)) return '';
+    // Closing tags never carry attributes; keep them closing so markup stays balanced.
+    if (closing) return `</${tag}>`;
 
     const allowed = ALLOWED_ATTRS[tag];
     if (!allowed) return `<${tag}>`;
