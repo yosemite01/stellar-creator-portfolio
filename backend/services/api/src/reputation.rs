@@ -791,7 +791,9 @@ pub struct PaginatedReviews {
 
 pub fn paginate_reviews(reviews: Vec<Review>, page: u32, limit: u32) -> PaginatedReviews {
     let total_count = reviews.len() as u32;
-    let start = ((page.max(1) - 1) * limit) as usize;
+    // u64 so a huge `page` query parameter can't overflow (panic in debug,
+    // wrap to an arbitrary page in release).
+    let start = usize::try_from((u64::from(page.max(1)) - 1) * u64::from(limit)).unwrap_or(usize::MAX);
     let page_reviews = reviews.into_iter().skip(start).take(limit as usize).collect();
     PaginatedReviews {
         reviews: page_reviews,
@@ -855,6 +857,15 @@ pub async fn get_filtered_creator_reviews_from_db(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paginate_reviews_huge_page_does_not_overflow() {
+        let reviews = REVIEW_CACHE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let total = reviews.len() as u32;
+        let page = paginate_reviews(reviews, u32::MAX, 100);
+        assert!(page.reviews.is_empty());
+        assert_eq!(page.total_count, total);
+    }
 
     #[tokio::test]
     async fn test_review_aggregation() {
