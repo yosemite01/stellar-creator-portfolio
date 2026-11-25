@@ -1451,6 +1451,10 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("Server starting on {}:{}", host_ip, port);
     let ws_limiter = websocket::WsConnectionLimiter::from_env();
+    // `/ws` and `/api/v1/ws/metrics` extract `web::Data<WsHub>`; it was never
+    // registered, so both endpoints failed with 500 on every request. One hub
+    // is shared by all workers so a broadcast reaches every connection.
+    let ws_hub = web::Data::new(websocket::WsHub::from_env());
 
     let (prometheus_middleware, business_metrics) = metrics::setup_metrics()
         .unwrap_or_else(|e| {
@@ -1487,6 +1491,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(stellar_rpc_url.clone()))
             .app_data(ml_state.clone())
             .app_data(web::Data::new(ws_limiter.clone()))
+            .app_data(ws_hub.clone())
             .app_data(business_metrics.clone())
             .app_data(redis_pool.clone())
             .wrap(prometheus_middleware.clone())
