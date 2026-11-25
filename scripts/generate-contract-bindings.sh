@@ -62,6 +62,15 @@ for entry in "${CONTRACTS[@]}"; do
   # The app bundles these with Turbopack, which can't map './x.js' back to
   # x.ts, so drop the .js suffix from relative imports.
   sed -i -E "s#(from ['\"]\\./[^'\"]+)\\.js(['\"])#\\1\\2#" "$OUT_DIR/$c"/*.ts
+  # The generator emits contract error enums as `export const XError = {...}`
+  # but then uses `XError` as a type in `Result<T, XError>`, which fails
+  # `tsc` (TS2749). Add a same-named type alias: the union of the message
+  # objects, which satisfies the SDK's `ErrorMessage` constraint.
+  if [ -f "$OUT_DIR/$c/types.ts" ]; then
+    for err in $(grep -oE '^export const [A-Za-z0-9_]+Error = \{' "$OUT_DIR/$c/types.ts" | awk '{print $3}'); do
+      printf '\nexport type %s = (typeof %s)[keyof typeof %s];\n' "$err" "$err" "$err" >> "$OUT_DIR/$c/types.ts"
+    done
+  fi
 done
 
 echo "✅ Bindings written to packages/contracts-ts/src/"
