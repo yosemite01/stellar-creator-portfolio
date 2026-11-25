@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '@/server/api/jwt-secret';
-import { hashApiKey } from '@/lib/api-keys';
+import { hashApiKey, isApiKeyExpired, parseApiKey } from '@/lib/api-keys';
 import { checkRateLimit, RateLimitResult } from '@/server/api/rate-limit';
 
 export interface GraphQLContext {
@@ -42,16 +42,21 @@ export async function createGraphQLContext(req: NextRequest): Promise<GraphQLCon
   const apiKeyHeader = headers.get('x-api-key');
   if (!userId && apiKeyHeader) {
     try {
-      // Hash the incoming key for comparison against stored keyHash
-      const keyHash = hashApiKey(apiKeyHeader);
+      // Keys are `sk_live_<prefix>_<secret>` and only the secret's hash is
+      // stored (lib/api-keys.ts), so hashing the whole header never matched.
+      const parsed = parseApiKey(apiKeyHeader);
+      if (!parsed) {
+        throw new Error('Malformed API key');
+      }
+      const keyHash = hashApiKey(parsed.secret);
 
       // Find the API key by its hash
       const apiKey = await prisma.apiKey.findUnique({
         where: { keyHash },
-        select: {id: true, userId: true, revokedAt: true, expiresAt: true},
+        select: { id: true, userId: true, prefix: true, revokedAt: true, expiresAt: true },
       });
 
-      if (!apiKey) {
+      if (!apiKey || (apiKey.prefix && apiKey.prefix !== parsed.prefix)) {
         throw new Error('API key not found');
       }
 
@@ -59,8 +64,7 @@ export async function createGraphQLContext(req: NextRequest): Promise<GraphQLCon
         throw new Error('API key has been revoked');
       }
 
-      // Check expiration
-      if (apiKey.expiresAt && new Date(apiKey.expiresAt) < new Date()) {
+      if (isApiKeyExpired(apiKey.expiresAt)) {
         throw new Error('API key expired');
       }
 
