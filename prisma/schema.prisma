@@ -619,6 +619,18 @@ model Escrow {
   disputeReason   String?
   version         Int      @default(1)
 
+  // On-chain event projection (#1736), written by lib/escrow/event-projection.ts.
+  // The partial unique index on chainEscrowId / partial index on ledger live
+  // in the migration (Prisma cannot express partial indexes).
+  /// Escrow id emitted by the Soroban contract (upsert conflict target).
+  chainEscrowId   BigInt?
+  /// Last Soroban event id that wrote this row.
+  eventId         String?
+  /// Ledger sequence of the last event (reorg rollback cursor).
+  ledger          BigInt?
+  /// SAC contract address of the escrowed token.
+  token           String?
+
   @@index([creatorId])
   @@index([clientId])
   @@index([status])
