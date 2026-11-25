@@ -314,9 +314,12 @@ pub async fn ws_handler(
     tracing::info!("WebSocket connected: client_ip={}", client_ip);
 
     // Read timeout configuration from environment, falling back to defaults.
+    // Zero is rejected: `tokio::time::interval` panics on a zero period and
+    // a zero idle timeout would close every connection immediately.
     let heartbeat_secs = std::env::var("WS_HEARTBEAT_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_WS_HEARTBEAT_SECS);
 
     let pong_deadline_secs = std::env::var("WS_PONG_DEADLINE_SECS")
@@ -327,6 +330,7 @@ pub async fn ws_handler(
     let idle_timeout_secs = std::env::var("WS_IDLE_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_WS_IDLE_TIMEOUT_SECS);
 
     let hub = hub.into_inner();
