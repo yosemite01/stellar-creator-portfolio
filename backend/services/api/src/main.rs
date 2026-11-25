@@ -210,7 +210,13 @@ pub struct PaginationMeta {
 
 impl PaginationMeta {
     pub fn new(page: u32, limit: u32, total: u64) -> Self {
-        let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
+        // Integer ceil-div: the f64 version returned u32::MAX for limit 0
+        // (inf saturates) and loses precision for totals above 2^53.
+        let total_pages = if limit == 0 {
+            0
+        } else {
+            u32::try_from(total.div_ceil(u64::from(limit))).unwrap_or(u32::MAX)
+        };
         PaginationMeta {
             page,
             limit,
@@ -1609,6 +1615,13 @@ mod tests {
         assert!(response.success);
         assert_eq!(response.data, Some("test".to_string()));
         assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_pagination_meta_partial_and_zero_limit() {
+        assert_eq!(PaginationMeta::new(1, 10, 31).total_pages, 4);
+        assert_eq!(PaginationMeta::new(1, 10, 0).total_pages, 0);
+        assert_eq!(PaginationMeta::new(1, 0, 5).total_pages, 0);
     }
 
     #[test]
