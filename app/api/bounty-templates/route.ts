@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSession } from '@/lib/auth/auth';
-import { requireAuth, requireModifyTemplatePermission } from '@/server/services/authorization';
-import { createTemplate, listTemplatesFor, updateOwnTemplate, deleteOwnTemplate } from '@/lib/services/bounty-template-service';
+import { createTemplate, listTemplatesFor } from '@/lib/services/bounty-template-service';
 import { sanitizeRichText } from '@/lib/bounty-templates';
 
 /**
@@ -28,15 +27,21 @@ const templateSchema = z.object({
 
 export async function GET() {
   const session = await getServerSession();
-  const user = requireAuth({ user: session?.user });
+  const userId = session?.user?.id;
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
-  const templates = await listTemplatesFor(user.id);
+  const templates = await listTemplatesFor(userId);
   return NextResponse.json({ templates });
 }
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession();
-  const user = requireAuth({ user: session?.user });
+  const userId = session?.user?.id;
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
   let body: unknown;
   try {
@@ -55,6 +60,6 @@ export async function POST(req: NextRequest) {
     description: sanitizeRichText(parsed.data.description),
   };
 
-  const template = await createTemplate(user.id, sanitized);
+  const template = await createTemplate(userId, sanitized);
   return NextResponse.json({ template }, { status: 201 });
 }
