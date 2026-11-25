@@ -1475,11 +1475,15 @@ async fn main() -> std::io::Result<()> {
         .map_err(|e| std::io::Error::other(format!("Invalid REDIS_URL: {e}")))?;
     let redis_pool = web::Data::new(redis_pool);
 
+    // One store shared by every worker: creating it inside the factory gave
+    // each worker thread its own map, so an alert created on one worker was
+    // invisible (404) to requests served by the others.
+    let alert_store = web::Data::new(alerts::AlertStore::new());
+
     HttpServer::new(move || {
-        let alert_store = web::Data::new(alerts::AlertStore::new());
         App::new()
             .app_data(web::Data::new(pool.clone()))
-            .app_data(alert_store)
+            .app_data(alert_store.clone())
             .app_data(web::Data::new(stellar_rpc_url.clone()))
             .app_data(ml_state.clone())
             .app_data(web::Data::new(ws_limiter.clone()))
