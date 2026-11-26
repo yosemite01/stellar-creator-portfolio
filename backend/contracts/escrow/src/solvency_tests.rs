@@ -30,6 +30,7 @@ impl Ctx {
         StellarAssetClient::new(&env, &token).mint(&payer, &mint);
         let admin = Address::generate(&env);
         let cid = env.register(EscrowContract, (admin.clone(),));
+        EscrowContractClient::new(&env, &cid).allow_token(&admin, &token);
         Ctx { env, cid, admin, token, payer, payee }
     }
 

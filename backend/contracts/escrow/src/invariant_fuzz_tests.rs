@@ -73,6 +73,7 @@ impl World {
         let admin = Address::generate(&env);
         let escrow_id = env.register(EscrowContract, (admin.clone(),));
         let escrow = EscrowContractClient::new(&env, &escrow_id);
+        escrow.allow_token(&admin, &token);
         let insurance_id = env.register(InsuranceContract, ());
         let insurance = InsuranceContractClient::new(&env, &insurance_id);
         insurance.initialize(&admin);

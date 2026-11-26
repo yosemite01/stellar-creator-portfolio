@@ -17,8 +17,11 @@ fn setup(env: &Env, mint: i128) -> (EscrowContractClient<'static>, Address, Addr
     let payee = Address::generate(env);
     StellarAssetClient::new(env, &token).mint(&payer, &mint);
     // The token admin doubles as the escrow's constructor admin.
-    let cid = env.register(EscrowContract, (admin,));
-    (EscrowContractClient::new(env, &cid), cid, token, payer, payee)
+    let cid = env.register(EscrowContract, (admin.clone(),));
+    let client = EscrowContractClient::new(env, &cid);
+    // #1715: deposits only accept admin-allowlisted tokens.
+    client.allow_token(&admin, &token);
+    (client, cid, token, payer, payee)
 }
 
 fn sym(env: &Env) -> Symbol {
